@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "gui/scripting/scripteditor.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QAction>
@@ -41,8 +42,8 @@ ScriptLineEdit::ScriptLineEdit(const QString& script, QWidget* parent)
 ScriptLineEdit::ScriptLineEdit(const QString& script, const Track& track, QWidget* parent)
     : QLineEdit{script, parent}
 {
-    auto* openEditor
-        = new QAction(Utils::iconFromTheme(Constants::Icons::ScriptEditor), tr("Open in script editor"), this);
+    auto* openEditor = new QAction(tr("Open in script editor"), this);
+    Gui::setThemeIcon(openEditor, Constants::Icons::ScriptEditor);
     QObject::connect(openEditor, &QAction::triggered, this, [this, track]() {
         ScriptEditor::openEditor(
             text(),
@@ -51,7 +52,7 @@ ScriptLineEdit::ScriptLineEdit(const QString& script, const Track& track, QWidge
                     setText(editedScript);
                 }
             },
-            track);
+            track, this);
     });
     addAction(openEditor, TrailingPosition);
 }
@@ -66,8 +67,9 @@ ScriptTextEdit::ScriptTextEdit(const QString& script, QWidget* parent)
 
 ScriptTextEdit::ScriptTextEdit(const QString& script, const Track& track, QWidget* parent)
     : QPlainTextEdit{script, parent}
-    , m_openEditor{new QAction(Utils::iconFromTheme(Constants::Icons::ScriptEditor), tr("Open in script editor"), this)}
+    , m_openEditor{new QAction(tr("Open in script editor"), this)}
 {
+    Gui::setThemeIcon(m_openEditor, Constants::Icons::ScriptEditor);
     QObject::connect(m_openEditor, &QAction::triggered, this, [this, track]() {
         ScriptEditor::openEditor(
             text(),
@@ -76,7 +78,7 @@ ScriptTextEdit::ScriptTextEdit(const QString& script, const Track& track, QWidge
                     setText(editedScript);
                 }
             },
-            track);
+            track, this);
     });
 }
 
@@ -101,6 +103,21 @@ void ScriptTextEdit::contextMenuEvent(QContextMenuEvent* event)
     menu->addAction(m_openEditor);
 
     menu->popup(event->globalPos());
+}
+
+ScriptComboBox::ScriptComboBox(QWidget* parent)
+    : ScriptComboBox{{}, {}, parent}
+{ }
+
+ScriptComboBox::ScriptComboBox(const QString& script, QWidget* parent)
+    : ScriptComboBox{script, {}, parent}
+{ }
+
+ScriptComboBox::ScriptComboBox(const QString& script, const Track& track, QWidget* parent)
+    : QComboBox{parent}
+{
+    setLineEdit(new ScriptLineEdit(script, track, this));
+    setEditable(true);
 }
 } // namespace Fooyin
 

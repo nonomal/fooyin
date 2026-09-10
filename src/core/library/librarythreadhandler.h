@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,8 @@
 #pragma once
 
 #include <core/library/libraryinfo.h>
+#include <core/library/musiclibrary.h>
+#include <core/library/pendingtrackcoverprovider.h>
 #include <core/track.h>
 #include <utils/database/dbconnectionpool.h>
 
@@ -30,6 +32,8 @@ class AudioLoader;
 class LibraryThreadHandlerPrivate;
 class MusicLibrary;
 class PlaylistLoader;
+class RemoteIoService;
+class TrackMetadataStore;
 struct ScanProgress;
 struct ScanResult;
 struct ScanRequest;
@@ -37,48 +41,61 @@ class SettingsManager;
 struct TrackCoverData;
 struct WriteRequest;
 
-class LibraryThreadHandler : public QObject
+class LibraryThreadHandler : public QObject,
+                             public PendingTrackCoverProvider
 {
     Q_OBJECT
 
 public:
     explicit LibraryThreadHandler(DbConnectionPoolPtr dbPool, MusicLibrary* library,
                                   std::shared_ptr<PlaylistLoader> playlistLoader,
-                                  std::shared_ptr<AudioLoader> audioLoader, SettingsManager* settings,
-                                  QObject* parent = nullptr);
+                                  std::shared_ptr<TrackMetadataStore> metadataStore,
+                                  std::shared_ptr<AudioLoader> audioLoader, std::shared_ptr<RemoteIoService> remoteIo,
+                                  SettingsManager* settings, QObject* parent = nullptr);
     ~LibraryThreadHandler() override;
 
     void getAllTracks();
 
-    void setupWatchers(const LibraryInfoMap& libraries, bool enabled);
+    void setupWatchers(const LibraryInfoMap& libraries, bool monitorDirectories, bool monitorTrackFiles);
+    [[nodiscard]] bool hasPendingLibraryScan(int libraryId) const;
 
     ScanRequest refreshLibrary(const LibraryInfo& library);
     ScanRequest scanLibrary(const LibraryInfo& library);
+    void cancelScan(int id);
     ScanRequest scanTracks(const TrackList& tracks, bool onlyModified);
     ScanRequest scanFiles(const QList<QUrl>& files);
     ScanRequest loadPlaylist(const QList<QUrl>& files);
+    void acknowledgeScanResultApplied(int id);
+    void acknowledgeTracksScanned(int id);
 
     void saveUpdatedTracks(const TrackList& tracks);
     WriteRequest writeUpdatedTracks(const TrackList& tracks);
     WriteRequest writeTrackCovers(const TrackCoverData& tracks);
-    void saveUpdatedTrackStats(const TrackList& tracks);
-    void saveUpdatedTrackPlaycounts(const TrackList& tracks);
+    [[nodiscard]] std::optional<PendingTrackCover> pendingTrackCover(const Track& track,
+                                                                     Track::Cover type) const override;
+    void setActivePlaybackTrack(const Track& track);
+    void flushPendingWrites();
+    void saveUpdatedTrackStats(const TrackList& tracks, Track::Stats stats);
+    void checkTrackAvailability(const TrackList& tracks);
 
     WriteRequest removeUnavailbleTracks(const TrackList& tracks);
+    WriteRequest deleteTracks(const TrackList& tracks);
     void cleanupTracks();
     void libraryRemoved(int id);
 
-signals:
+Q_SIGNALS:
     void progressChanged(const Fooyin::ScanProgress& progress);
     void scannedTracks(int id, const Fooyin::TrackList& tracks);
     void playlistLoaded(int id, const Fooyin::TrackList& tracks);
+    void scanFinished(int id, Fooyin::ScanRequest::Type type, bool cancelled);
     void statusChanged(const Fooyin::LibraryInfo& library);
-    void scanUpdate(const Fooyin::ScanResult& result);
+    void scanUpdate(int id, Fooyin::ScanRequest::Type type, const Fooyin::ScanResult& result);
     void tracksUpdated(const Fooyin::TrackList& tracks);
-    void tracksStatsUpdated(const Fooyin::TrackList& tracks);
+    void tracksAvailabilityUpdated(const Fooyin::TrackList& tracks);
+    void tracksStatsUpdated(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
     void tracksRemoved(const Fooyin::TrackList& tracks);
 
-    void gotTracks(const Fooyin::TrackList& result);
+    void gotTracks(Fooyin::TrackList result);
 
 protected:
     void timerEvent(QTimerEvent* event) override;

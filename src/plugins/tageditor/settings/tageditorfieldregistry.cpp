@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,7 +29,7 @@ TagEditorFieldRegistry::TagEditorFieldRegistry(SettingsManager* settings, QObjec
 {
     QObject::connect(this, &RegistryBase::itemChanged, this, [this](int id) {
         if(const auto field = itemById(id)) {
-            emit fieldChanged(field.value());
+            Q_EMIT fieldChanged(field.value());
         }
     });
 
@@ -55,6 +55,7 @@ void TagEditorFieldRegistry::loadDefaultFields()
     addDefaultItem({.name = tr("Disc Number"), .scriptField = u"disc"_s}, true);
     addDefaultItem({.name = tr("Total Discs"), .scriptField = u"disctotal"_s}, true);
     addDefaultItem({.name = tr("Comment"), .scriptField = u"comment"_s}, true);
+    addDefaultItem({.name = tr("Love"), .scriptField = u"love_editor"_s}, true);
     addDefaultItem({.name = tr("Rating"), .scriptField = u"rating_editor"_s}, true);
 }
 } // namespace Fooyin::TagEditor

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,9 @@
 
 #include <QBasicTimer>
 #include <QFileSystemWatcher>
+#include <QLoggingCategory>
+
+Q_DECLARE_LOGGING_CATEGORY(LIB_WATCHER)
 
 #include <set>
 
@@ -32,8 +35,9 @@ class LibraryWatcher : public QFileSystemWatcher
 public:
     explicit LibraryWatcher(QObject* parent = nullptr);
 
-signals:
+Q_SIGNALS:
     void libraryDirsChanged(const QStringList& paths);
+    void libraryTrackFilesChanged(const QStringList& paths);
 
 protected:
     void timerEvent(QTimerEvent* event) override;
@@ -41,5 +45,6 @@ protected:
 private:
     QBasicTimer m_timer;
     std::set<QString> m_dirs;
+    std::set<QString> m_files;
 };
 } // namespace Fooyin

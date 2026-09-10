@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,11 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 SortingRegistry::SortingRegistry(SettingsManager* settings, QObject* parent)
-    : ItemRegistry{u"Library/LibrarySorting"_s, settings, parent}
+    : ItemRegistry{u"Library/LibrarySorting"_s, settings, u"Library/LibrarySortingOverrides"_s, parent}
 {
     QObject::connect(this, &RegistryBase::itemChanged, this, [this](int id) {
         if(const auto sort = itemById(id)) {
-            emit sortChanged(sort.value());
+            Q_EMIT sortChanged(sort.value());
         }
     });
 
@@ -36,10 +36,11 @@ SortingRegistry::SortingRegistry(SettingsManager* settings, QObject* parent)
 
 void SortingRegistry::loadDefaults()
 {
-    addDefaultItem({.name = tr("Album"), .script = u"%album% - $num(%disc%,2) - $num(%track%,2)"_s});
-    addDefaultItem({.name = tr("Artist"), .script = u"%artist% - %date% - $num(%disc%,2) - $num(%track%,2)"_s});
-    addDefaultItem({.name = tr("Title"), .script = u"%title%"_s});
-    addDefaultItem({.name = tr("Track Number"), .script = u"$num(%disc%,2) - $num(%track%,2)"_s});
+    addDefaultItem({.id = 0, .name = tr("Album"), .script = u"%album% - $num(%disc%,2) - $num(%track%,2)"_s});
+    addDefaultItem(
+        {.id = 1, .name = tr("Artist"), .script = u"%artist% - %date% - $num(%disc%,2) - $num(%track%,2)"_s});
+    addDefaultItem({.id = 2, .name = tr("Title"), .script = u"%title%"_s});
+    addDefaultItem({.id = 3, .name = tr("Track Number"), .script = u"$num(%disc%,2) - $num(%track%,2)"_s});
 }
 } // namespace Fooyin
 

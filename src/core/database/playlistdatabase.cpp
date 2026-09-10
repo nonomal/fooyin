@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 
 #include "playlistdatabase.h"
 
+#include "databasehelpers.h"
+
 #include <utils/database/dbquery.h>
 #include <utils/database/dbtransaction.h>
 
@@ -27,8 +29,9 @@ using namespace Qt::StringLiterals;
 namespace Fooyin {
 std::vector<PlaylistInfo> PlaylistDatabase::getAllPlaylists()
 {
-    const QString query
-        = u"SELECT PlaylistID, Name, PlaylistIndex, IsAutoPlaylist, Query FROM Playlists ORDER BY PlaylistIndex;"_s;
+    static const QString query
+        = u"SELECT PlaylistID, Name, PlaylistIndex, IsAutoPlaylist, Query, SortQuery, ForceSorted, ExtraProperties "
+          "FROM Playlists ORDER BY PlaylistIndex;"_s;
 
     DbQuery q{db(), query};
 
@@ -41,11 +44,14 @@ std::vector<PlaylistInfo> PlaylistDatabase::getAllPlaylists()
     while(q.next()) {
         PlaylistInfo playlist;
 
-        playlist.dbId           = q.value(0).toInt();
-        playlist.name           = q.value(1).toString();
-        playlist.index          = q.value(2).toInt();
-        playlist.isAutoPlaylist = q.value(3).toBool();
-        playlist.query          = q.value(4).toString();
+        playlist.dbId            = q.value(0).toInt();
+        playlist.name            = q.value(1).toString();
+        playlist.index           = q.value(2).toInt();
+        playlist.isAutoPlaylist  = q.value(3).toBool();
+        playlist.query           = q.value(4).toString();
+        playlist.sortQuery       = q.value(5).toString();
+        playlist.forceSorted     = q.value(6).toBool();
+        playlist.extraProperties = q.value(7).toByteArray();
 
         playlists.emplace_back(playlist);
     }
@@ -58,20 +64,26 @@ TrackList PlaylistDatabase::getPlaylistTracks(const Playlist& playlist, const st
     return populatePlaylistTracks(playlist, tracks);
 }
 
-int PlaylistDatabase::insertPlaylist(const QString& name, int index, bool isAutoPlaylist, const QString& autoQuery)
+int PlaylistDatabase::insertPlaylist(const QString& name, int index, bool isAutoPlaylist, const QString& autoQuery,
+                                     const QString& autoSortQuery, bool forceSorted, const QByteArray& extraProperties)
 {
     if(name.isEmpty() || index < 0) {
         return -1;
     }
 
-    const QString statement = u"INSERT INTO Playlists (Name, PlaylistIndex, IsAutoPlaylist, Query) "
-                              "VALUES (:name, :index, :isAutoPlaylist, :query);"_s;
+    static const QString statement
+        = u"INSERT INTO Playlists (Name, PlaylistIndex, IsAutoPlaylist, Query, SortQuery, ForceSorted, "
+          u"ExtraProperties) "
+          "VALUES (:name, :index, :isAutoPlaylist, :query, :sortQuery, :forceSorted, :extraProperties);"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":name"_s, name);
     query.bindValue(u":index"_s, index);
     query.bindValue(u":isAutoPlaylist"_s, isAutoPlaylist);
     query.bindValue(u":query"_s, autoQuery);
+    query.bindValue(u":sortQuery"_s, autoSortQuery);
+    query.bindValue(u":forceSorted"_s, forceSorted);
+    query.bindValue(u":extraProperties"_s, extraProperties);
 
     if(!query.exec()) {
         return -1;
@@ -85,8 +97,10 @@ bool PlaylistDatabase::savePlaylist(Playlist& playlist)
     bool updated{false};
 
     if(playlist.modified()) {
-        const auto statement = u"UPDATE Playlists SET Name = :name, PlaylistIndex = :index, IsAutoPlaylist = "
-                               ":isAutoPlaylist, Query = :query WHERE PlaylistID = :id;"_s;
+        static const QString statement = u"UPDATE Playlists SET Name = :name, PlaylistIndex = :index, IsAutoPlaylist = "
+                                         ":isAutoPlaylist, Query = :query, SortQuery = :sortQuery, "
+                                         "ForceSorted = :forceSorted, ExtraProperties = :extraProperties "
+                                         "WHERE PlaylistID = :id;"_s;
 
         DbQuery query{db(), statement};
 
@@ -94,12 +108,15 @@ bool PlaylistDatabase::savePlaylist(Playlist& playlist)
         query.bindValue(u":index"_s, playlist.index());
         query.bindValue(u":isAutoPlaylist"_s, playlist.isAutoPlaylist());
         query.bindValue(u":query"_s, playlist.query());
+        query.bindValue(u":sortQuery"_s, playlist.sortQuery());
+        query.bindValue(u":forceSorted"_s, playlist.forceSorted());
+        query.bindValue(u":extraProperties"_s, playlist.serialiseExtraProperties());
         query.bindValue(u":id"_s, playlist.dbId());
 
         updated = query.exec();
     }
 
-    if(!playlist.isAutoPlaylist() && playlist.tracksModified()) {
+    if(playlist.tracksModified()) {
         updated = insertPlaylistTracks(playlist.dbId(), playlist.tracks());
     }
 
@@ -124,7 +141,7 @@ bool PlaylistDatabase::saveModifiedPlaylists(const PlaylistList& playlists)
 
 bool PlaylistDatabase::removePlaylist(int id)
 {
-    const auto statement = u"DELETE FROM Playlists WHERE PlaylistID = :id;"_s;
+    static const QString statement = u"DELETE FROM Playlists WHERE PlaylistID = :id;"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":id"_s, id);
@@ -138,7 +155,7 @@ bool PlaylistDatabase::renamePlaylist(int id, const QString& name)
         return false;
     }
 
-    const auto statement = u"UPDATE Playlists SET Name = :name WHERE PlaylistID = :id;"_s;
+    static const QString statement = u"UPDATE Playlists SET Name = :name WHERE PlaylistID = :id;"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":name"_s, name);
@@ -147,14 +164,135 @@ bool PlaylistDatabase::renamePlaylist(int id, const QString& name)
     return query.exec();
 }
 
-bool PlaylistDatabase::insertPlaylistTrack(int playlistId, const Track& track, int index)
+Track PlaylistDatabase::ensureTrack(Track track) const
 {
-    const QString statement
+    if(!track.isValid() || track.id() >= 0) {
+        return track;
+    }
+
+    track.generateHash();
+
+    static const QString insertStatement = u"INSERT OR IGNORE INTO Tracks ("
+                                           "FilePath,"
+                                           "Subsong,"
+                                           "Title,"
+                                           "TrackNumber,"
+                                           "TrackTotal,"
+                                           "Artists,"
+                                           "AlbumArtist,"
+                                           "Album,"
+                                           "DiscNumber,"
+                                           "DiscTotal,"
+                                           "Date,"
+                                           "Composer,"
+                                           "Performer,"
+                                           "Genres,"
+                                           "Comment,"
+                                           "CuePath,"
+                                           "Offset,"
+                                           "Duration,"
+                                           "FileSize,"
+                                           "BitRate,"
+                                           "SampleRate,"
+                                           "Channels,"
+                                           "BitDepth,"
+                                           "Codec,"
+                                           "CodecProfile,"
+                                           "Tool,"
+                                           "TagTypes,"
+                                           "Encoding,"
+                                           "ExtraTags,"
+                                           "ExtraProperties,"
+                                           "ModifiedDate,"
+                                           "TrackHash,"
+                                           "LibraryID,"
+                                           "RGTrackGain,"
+                                           "RGAlbumGain,"
+                                           "RGTrackPeak,"
+                                           "RGAlbumPeak,"
+                                           "CreatedDate"
+                                           ") "
+                                           "VALUES ("
+                                           ":filePath,"
+                                           ":subsong,"
+                                           ":title,"
+                                           ":trackNumber,"
+                                           ":trackTotal,"
+                                           ":artists,"
+                                           ":albumArtist,"
+                                           ":album,"
+                                           ":discNumber,"
+                                           ":discTotal,"
+                                           ":date,"
+                                           ":composer,"
+                                           ":performer,"
+                                           ":genres,"
+                                           ":comment,"
+                                           ":cuePath,"
+                                           ":offset,"
+                                           ":duration,"
+                                           ":fileSize,"
+                                           ":bitRate,"
+                                           ":sampleRate,"
+                                           ":channels,"
+                                           ":bitDepth,"
+                                           ":codec,"
+                                           ":codecProfile,"
+                                           ":tool,"
+                                           ":tagTypes,"
+                                           ":encoding,"
+                                           ":extraTags,"
+                                           ":extraProperties,"
+                                           ":modifiedDate,"
+                                           ":trackHash,"
+                                           ":libraryID,"
+                                           ":rgTrackGain,"
+                                           ":rgAlbumGain,"
+                                           ":rgTrackPeak,"
+                                           ":rgAlbumPeak,"
+                                           ":createdDate"
+                                           ");"_s;
+
+    DbQuery insertQuery{db(), insertStatement};
+
+    const auto bindings = Database::trackBindings(track);
+    for(const auto& [name, value] : bindings) {
+        insertQuery.bindValue(name, value);
+    }
+
+    if(!insertQuery.exec()) {
+        return track;
+    }
+
+    if(insertQuery.numRowsAffected() > 0) {
+        track.setId(insertQuery.lastInsertId().toInt());
+        return track;
+    }
+
+    static const QString idStatement
+        = u"SELECT TrackID FROM Tracks WHERE FilePath = :path AND Offset = :offset AND Subsong = :subsong;"_s;
+
+    DbQuery idQuery{db(), idStatement};
+    idQuery.bindValue(u":path"_s, track.filepath());
+    idQuery.bindValue(u":offset"_s, static_cast<quint64>(track.offset()));
+    idQuery.bindValue(u":subsong"_s, track.subsong());
+
+    if(!idQuery.exec() || !idQuery.next()) {
+        return track;
+    }
+
+    track.setId(idQuery.value(0).toInt());
+    return track;
+}
+
+bool PlaylistDatabase::insertPlaylistTrack(int playlistId, int trackId, int index)
+{
+    static const QString statement
         = u"INSERT INTO PlaylistTracks (PlaylistID, TrackID, TrackIndex) VALUES (:playlistId, :trackId, :index);"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":playlistId"_s, playlistId);
-    query.bindValue(u":trackId"_s, track.id());
+    query.bindValue(u":trackId"_s, trackId);
     query.bindValue(u":index"_s, index);
 
     return query.exec();
@@ -167,7 +305,7 @@ bool PlaylistDatabase::insertPlaylistTracks(int playlistId, const TrackList& tra
     }
 
     // Remove current playlist tracks
-    const auto statement = u"DELETE FROM PlaylistTracks WHERE PlaylistID = :id;"_s;
+    static const QString statement = u"DELETE FROM PlaylistTracks WHERE PlaylistID = :id;"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":id"_s, playlistId);
@@ -177,8 +315,9 @@ bool PlaylistDatabase::insertPlaylistTracks(int playlistId, const TrackList& tra
     }
 
     for(int i{0}; const auto& track : tracks) {
-        if(track.isValid() && track.isInDatabase()) {
-            if(!insertPlaylistTrack(playlistId, track, i++)) {
+        const Track storedTrack = ensureTrack(track);
+        if(storedTrack.isValid() && storedTrack.isInDatabase()) {
+            if(!insertPlaylistTrack(playlistId, storedTrack.id(), i++)) {
                 return false;
             }
         }
@@ -190,7 +329,8 @@ bool PlaylistDatabase::insertPlaylistTracks(int playlistId, const TrackList& tra
 TrackList PlaylistDatabase::populatePlaylistTracks(const Playlist& playlist,
                                                    const std::unordered_map<int, Track>& tracks)
 {
-    const auto statement = u"SELECT TrackID FROM PlaylistTracks WHERE PlaylistID=:playlistId ORDER BY TrackIndex;"_s;
+    static const QString statement
+        = u"SELECT TrackID FROM PlaylistTracks WHERE PlaylistID=:playlistId ORDER BY TrackIndex;"_s;
 
     DbQuery query{db(), statement};
     query.bindValue(u":playlistId"_s, playlist.dbId());

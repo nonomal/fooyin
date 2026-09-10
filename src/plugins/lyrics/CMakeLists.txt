@@ -1,22 +1,48 @@
 create_fooyin_plugin_internal(
     lyrics
     DEPENDS Fooyin::Gui
+            ZLIB::ZLIB
     SOURCES lyrics.h
-            lyricsarea.cpp
-            lyricsarea.h
+            lyricscolours.h
             lyricsconstants.h
+            lyricsdelegate.cpp
+            lyricsdelegate.h
             lyricseditor.cpp
             lyricseditor.h
+            lyricseditordialog.cpp
+            lyricseditordialog.h
             lyricsfinder.cpp
             lyricsfinder.h
+            lyricsmodel.cpp
+            lyricsmodel.h
             lyricsparser.cpp
             lyricsparser.h
             lyricsplugin.cpp
             lyricsplugin.h
+            lyricspropertiestab.cpp
+            lyricspropertiestab.h
+            lyricssearchdialog.cpp
+            lyricssearchdialog.h
+            lyricssearchmodel.cpp
+            lyricssearchmodel.h
             lyricssaver.cpp
             lyricssaver.h
+            lyricsview.cpp
+            lyricsview.h
             lyricswidget.cpp
             lyricswidget.h
+            lyricsconfigwidget.cpp
+            lyricsconfigwidget.h
+            settings/lyricssavingpage.cpp
+            settings/lyricssavingpage.h
+            settings/lyricssearchingpage.cpp
+            settings/lyricssearchingpage.h
+            settings/lyricssettings.cpp
+            settings/lyricssettings.h
+            settings/lyricssourcesmodel.cpp
+            settings/lyricssourcesmodel.h
+            settings/lyricssourcespage.cpp
+            settings/lyricssourcespage.h
             sources/darklyrics.cpp
             sources/darklyrics.h
             sources/locallyrics.cpp
@@ -29,20 +55,8 @@ create_fooyin_plugin_internal(
             sources/neteaselyrics.h
             sources/qqlyrics.cpp
             sources/qqlyrics.h
+            sources/kugoulyrics.cpp
+            sources/kugoulyrics.h
             sources/taglyrics.cpp
             sources/taglyrics.h
-            settings/lyricssettings.cpp
-            settings/lyricssettings.h
-            settings/lyricsgeneralpage.cpp
-            settings/lyricsgeneralpage.h
-            settings/lyricsguipage.cpp
-            settings/lyricsguipage.h
-            settings/lyricssearchingpage.cpp
-            settings/lyricssearchingpage.h
-            settings/lyricssavingpage.cpp
-            settings/lyricssavingpage.h
-            settings/lyricssourcesmodel.cpp
-            settings/lyricssourcesmodel.h
-            settings/lyricssourcespage.cpp
-            settings/lyricssourcespage.h
 )

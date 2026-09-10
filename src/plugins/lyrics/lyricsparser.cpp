@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,16 +56,17 @@ struct LineContext
 {
     const QChar* start{nullptr};
     const QChar* current{nullptr};
+    const QChar* end{nullptr};
 
     [[nodiscard]] bool isAtEnd() const
     {
-        return *current == nullptr;
+        return current == end;
     }
 
     [[nodiscard]] bool isSpace() const
     {
         const QChar* ptr{start};
-        while(ptr && *ptr != '\0'_L1) {
+        while(ptr && ptr != end) {
             if(!ptr->isSpace()) {
                 return false;
             }
@@ -76,11 +77,17 @@ struct LineContext
 
     [[nodiscard]] QChar peek() const
     {
+        if(isAtEnd()) {
+            return u'\0';
+        }
         return *current;
     }
 
     QChar advance()
     {
+        if(isAtEnd()) {
+            return u'\0';
+        }
         std::advance(current, 1);
         return *std::prev(current);
     }
@@ -148,7 +155,14 @@ bool parseTag(Fooyin::Lyrics::Lyrics& lyrics, LineContext& context)
         if(value.size() > 1 && value.startsWith("+"_L1)) {
             offsetStr = offsetStr.sliced(1);
         }
-        lyrics.offset = offsetStr.toUInt();
+        bool ok                = false;
+        const qlonglong parsed = offsetStr.toLongLong(&ok);
+        if(ok) {
+            lyrics.offset = static_cast<int64_t>(parsed);
+        }
+        else {
+            lyrics.offset = 0;
+        }
     }
     else if(field == "re"_L1 || field == "tool"_L1) {
         lyrics.metadata.tool = value;
@@ -203,8 +217,11 @@ Token timestamp(Fooyin::Lyrics::Lyrics& lyrics, LineContext& context)
         milliseconds *= 10;
     }
 
-    uint64_t time = ((minutes * 60 + seconds) * 1000) + milliseconds;
-    time += lyrics.offset;
+    uint64_t time = (((minutes * 60) + seconds) * 1000) + milliseconds;
+    // LRC offset is a playback correction: positive values make lyrics appear earlier
+    int64_t adjusted = static_cast<int64_t>(time) - lyrics.offset;
+    adjusted         = std::max<int64_t>(adjusted, 0);
+    time             = static_cast<uint64_t>(adjusted);
 
     Token token;
     token.type      = isWord ? TokWordTimestamp : TokTimestamp;
@@ -280,23 +297,45 @@ void finaliseLines(Fooyin::Lyrics::Lyrics& lyrics)
     sortLinesByTimestamp(lyrics);
 
     auto& lines = lyrics.lines;
-    if(lines.size() < 2) {
+    if(lines.size() >= 2) {
+        auto it   = lines.begin();
+        auto next = std::next(it);
+
+        while(next != lines.end()) {
+            if(next->timestamp > it->timestamp) {
+                it->duration = next->timestamp - it->timestamp;
+            }
+            ++it;
+            ++next;
+        }
+
+        if(lyrics.type != Fooyin::Lyrics::Lyrics::Type::Unsynced) {
+            it->duration = 0;
+        }
+    }
+
+    if(lyrics.type != Fooyin::Lyrics::Lyrics::Type::SyncedWords) {
         return;
     }
 
-    auto it   = lines.begin();
-    auto next = std::next(it);
-
-    while(next != lines.end()) {
-        if(next->timestamp > it->timestamp) {
-            it->duration = next->timestamp - it->timestamp;
+    for(auto& line : lines) {
+        if(line.words.empty()) {
+            continue;
         }
-        ++it;
-        ++next;
-    }
 
-    if(lyrics.type != Fooyin::Lyrics::Lyrics::Type::Unsynced) {
-        it->duration = 0;
+        auto wordIt   = line.words.begin();
+        auto nextWord = std::next(wordIt);
+        while(nextWord != line.words.end()) {
+            if(wordIt->duration == 0 && nextWord->timestamp > wordIt->timestamp) {
+                wordIt->duration = nextWord->timestamp - wordIt->timestamp;
+            }
+            ++wordIt;
+            ++nextWord;
+        }
+
+        if(line.duration > 0 && wordIt->duration == 0 && line.endTimestamp() > wordIt->timestamp) {
+            wordIt->duration = line.endTimestamp() - wordIt->timestamp;
+        }
     }
 }
 
@@ -335,7 +374,7 @@ Fooyin::Lyrics::ParsedLine splitLine(Fooyin::Lyrics::ParsedLine& parsedLine, Foo
 
 void parseLine(Fooyin::Lyrics::Lyrics& lyrics, const QString& line)
 {
-    LineContext context{.start = line.cbegin(), .current = line.cbegin()};
+    LineContext context{.start = line.cbegin(), .current = line.cbegin(), .end = line.cend()};
 
     std::vector<Token> tokens;
 

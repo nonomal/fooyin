@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -81,8 +81,7 @@ RGScannerPageWidget::RGScannerPageWidget(SettingsManager* settings)
 
     auto* albumGroupLabel = new QLabel(tr("Album grouping pattern") + ":"_L1, this);
 
-    const auto albumGroupToolTip
-        = tr("Used with the %1 action").arg("'"_L1 + tr("Calculate as albums (by tags)") + "'"_L1);
+    const auto albumGroupToolTip = tr("Used with the \"Calculate as albums (by tags)\" action");
     albumGroupLabel->setToolTip(albumGroupToolTip);
     m_albumGroupScript->setToolTip(albumGroupToolTip);
 
@@ -134,6 +133,8 @@ void RGScannerPageWidget::reset()
     m_settings->fileRemove(ScannerOption);
     m_settings->fileRemove(TruePeakSetting);
     m_settings->fileRemove(AlbumGroupScriptSetting);
+    m_settings->fileRemove(OpusHeaderTargetVolumeSetting);
+    m_settings->fileRemove(OpusHeaderLouderOnlySetting);
 }
 
 RGScannerPage::RGScannerPage(SettingsManager* settings, QObject* parent)

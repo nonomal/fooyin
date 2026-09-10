@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -44,6 +44,9 @@ public:
     void resetSections();
     void resetSectionPositions();
 
+    [[nodiscard]] bool isCollapsed() const;
+    void setCollapsed(bool collapsed);
+
     void hideHeaderSection(int logical);
     void showHeaderSection(int logical);
     void setHeaderSectionHidden(int logical, bool hidden);
@@ -51,6 +54,8 @@ public:
     void setHeaderSectionWidth(int logical, double width);
     void setHeaderSectionWidths(const std::map<int, double>& widths);
     void setHeaderSectionAlignment(int logical, Qt::Alignment alignment);
+
+    void resizeColumnToContents(int logical);
 
     [[nodiscard]] bool isStretchEnabled() const;
     void setStretchEnabled(bool enabled);
@@ -60,8 +65,9 @@ public:
 
     [[nodiscard]] QByteArray saveHeaderState() const;
     void restoreHeaderState(const QByteArray& data);
+    void restoreHeaderState(const QByteArray& data, bool restoreSort);
 
-signals:
+Q_SIGNALS:
     void stretchChanged(bool enabled);
     void stateRestored();
     void leftClicked(int section, const QPoint& pos);

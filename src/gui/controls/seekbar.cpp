@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,7 +56,9 @@ public:
     [[nodiscard]] bool isSeeking() const;
     void stopSeeking();
 
-signals:
+    void setMouseFocusEnabled(bool enabled);
+
+Q_SIGNALS:
     void sliderDropped(uint64_t pos);
     void seekForward();
     void seekBackward();
@@ -81,7 +83,14 @@ private:
 
 TrackSlider::TrackSlider(QWidget* parent)
     : QSlider{Qt::Horizontal, parent}
-{ }
+{
+    setFocusPolicy(Qt::TabFocus);
+}
+
+void TrackSlider::setMouseFocusEnabled(bool enabled)
+{
+    setFocusPolicy(enabled ? Qt::StrongFocus : Qt::TabFocus);
+}
 
 uint64_t TrackSlider::valueFromPosition(int pos)
 {
@@ -133,22 +142,26 @@ void TrackSlider::stopSeeking()
 
 void TrackSlider::mousePressEvent(QMouseEvent* event)
 {
-    if(m_max == 0) {
+    if(!isEnabled() || m_max == 0) {
+        event->ignore();
         return;
     }
 
     Qt::MouseButton button = event->button();
-    if(button == Qt::LeftButton) {
-        const int absolute = style()->styleHint(QStyle::SH_Slider_AbsoluteSetButtons);
-        if(Qt::LeftButton & absolute) {
-            button = Qt::LeftButton;
-        }
-        else if(Qt::MiddleButton & absolute) {
-            button = Qt::MiddleButton;
-        }
-        else if(Qt::RightButton & absolute) {
-            button = Qt::RightButton;
-        }
+    if(button != Qt::LeftButton) {
+        event->ignore();
+        return;
+    }
+
+    const int absolute = style()->styleHint(QStyle::SH_Slider_AbsoluteSetButtons);
+    if(Qt::LeftButton & absolute) {
+        button = Qt::LeftButton;
+    }
+    else if(Qt::MiddleButton & absolute) {
+        button = Qt::MiddleButton;
+    }
+    else if(Qt::RightButton & absolute) {
+        button = Qt::RightButton;
     }
 
     QMouseEvent modifiedEvent{event->type(), event->position(), event->globalPosition(), button,
@@ -163,7 +176,8 @@ void TrackSlider::mousePressEvent(QMouseEvent* event)
 
 void TrackSlider::mouseReleaseEvent(QMouseEvent* event)
 {
-    if(m_max == 0) {
+    if(!isEnabled() || m_max == 0) {
+        event->ignore();
         return;
     }
 
@@ -177,12 +191,13 @@ void TrackSlider::mouseReleaseEvent(QMouseEvent* event)
     m_pressPos = {};
 
     const auto pos = valueFromPosition(static_cast<int>(event->position().x()));
-    emit sliderDropped(pos);
+    Q_EMIT sliderDropped(pos);
 }
 
 void TrackSlider::mouseMoveEvent(QMouseEvent* event)
 {
-    if(m_max == 0) {
+    if(!isEnabled() || m_max == 0) {
+        event->ignore();
         return;
     }
 
@@ -198,14 +213,19 @@ void TrackSlider::mouseMoveEvent(QMouseEvent* event)
 
 void TrackSlider::keyPressEvent(QKeyEvent* event)
 {
+    if(!isEnabled()) {
+        event->ignore();
+        return;
+    }
+
     const auto key = event->key();
 
     if(key == Qt::Key_Right || key == Qt::Key_Up) {
-        emit seekForward();
+        Q_EMIT seekForward();
         event->accept();
     }
     else if(key == Qt::Key_Left || key == Qt::Key_Down) {
-        emit seekBackward();
+        Q_EMIT seekBackward();
         event->accept();
     }
     else {
@@ -215,11 +235,16 @@ void TrackSlider::keyPressEvent(QKeyEvent* event)
 
 void TrackSlider::wheelEvent(QWheelEvent* event)
 {
+    if(!isEnabled()) {
+        event->ignore();
+        return;
+    }
+
     if(event->angleDelta().y() < 0) {
-        emit seekBackward();
+        Q_EMIT seekBackward();
     }
     else {
-        emit seekForward();
+        Q_EMIT seekForward();
     }
 
     event->accept();
@@ -291,8 +316,9 @@ SeekBar::SeekBar(PlayerController* playerController, SettingsManager* settings, 
     layout->addWidget(m_container);
     m_container->insertWidget(1, m_slider);
 
-    m_slider->setEnabled(playerController->currentTrack().isValid());
     trackChanged(playerController->currentTrack());
+    updateSeekEnabled();
+    m_slider->setMouseFocusEnabled(m_settings->value<Settings::Gui::SeekBarMouseFocus>());
 
     QObject::connect(m_slider, &TrackSlider::sliderDropped, playerController, &PlayerController::seek);
     QObject::connect(m_slider, &TrackSlider::seekForward, this,
@@ -302,8 +328,11 @@ SeekBar::SeekBar(PlayerController* playerController, SettingsManager* settings, 
 
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this, &SeekBar::stateChanged);
     QObject::connect(m_playerController, &PlayerController::currentTrackChanged, this, &SeekBar::trackChanged);
+    QObject::connect(m_playerController, &PlayerController::currentTrackSeekableChanged, this,
+                     &SeekBar::updateSeekEnabled);
     QObject::connect(m_playerController, &PlayerController::positionChanged, this, &SeekBar::setCurrentPosition);
     QObject::connect(m_playerController, &PlayerController::positionMoved, this, &SeekBar::setCurrentPosition);
+    m_settings->subscribe<Settings::Gui::SeekBarMouseFocus>(m_slider, &TrackSlider::setMouseFocusEnabled);
 }
 
 QString SeekBar::name() const
@@ -318,8 +347,8 @@ QString SeekBar::layoutName() const
 
 void SeekBar::saveLayoutData(QJsonObject& layout)
 {
-    layout["ShowLabels"_L1]   = m_container->labelsEnabled();
-    layout["ElapsedTotal"_L1] = m_container->elapsedTotal();
+    layout["ShowLabels"_L1]        = m_container->labelsEnabled();
+    layout["ShowRemainingTime"_L1] = m_container->showRemainingTime();
 }
 
 void SeekBar::loadLayoutData(const QJsonObject& layout)
@@ -328,9 +357,10 @@ void SeekBar::loadLayoutData(const QJsonObject& layout)
         const bool showLabels = layout.value("ShowLabels"_L1).toBool();
         m_container->setLabelsEnabled(showLabels);
     }
-    if(layout.contains("ElapsedTotal"_L1)) {
-        const bool elapsedTotal = layout.value("ElapsedTotal"_L1).toBool();
-        m_container->setElapsedTotal(elapsedTotal);
+    if(layout.contains("ShowRemainingTime"_L1) || layout.contains("ElapsedTotal"_L1)) {
+        const auto key = layout.contains("ShowRemainingTime"_L1) ? "ShowRemainingTime"_L1 : "ElapsedTotal"_L1;
+        const bool showRemainingTime = layout.value(key).toBool();
+        m_container->setShowRemainingTime(showRemainingTime);
     }
 }
 
@@ -351,12 +381,12 @@ void SeekBar::contextMenuEvent(QContextMenuEvent* event)
                      [this](bool checked) { m_container->setLabelsEnabled(checked); });
     menu->addAction(showLabels);
 
-    auto* showElapsed = new QAction(tr("Show elapsed total"), menu);
-    showElapsed->setCheckable(true);
-    showElapsed->setChecked(m_container->elapsedTotal());
-    QObject::connect(showElapsed, &QAction::triggered, this,
-                     [this](bool checked) { m_container->setElapsedTotal(checked); });
-    menu->addAction(showElapsed);
+    auto* showRemainingTime = new QAction(tr("Show remaining time"), menu);
+    showRemainingTime->setCheckable(true);
+    showRemainingTime->setChecked(m_container->showRemainingTime());
+    QObject::connect(showRemainingTime, &QAction::triggered, this,
+                     [this](bool checked) { m_container->setShowRemainingTime(checked); });
+    menu->addAction(showRemainingTime);
 
     menu->popup(event->globalPos());
 }
@@ -364,8 +394,20 @@ void SeekBar::contextMenuEvent(QContextMenuEvent* event)
 void SeekBar::reset()
 {
     m_max = 0;
+    m_slider->stopSeeking();
     m_slider->setValue(0);
     m_slider->updateMaximum(m_max);
+}
+
+void SeekBar::updateSeekEnabled() const
+{
+    const bool enabled = m_playerController->playState() != Player::PlayState::Stopped
+                      && m_playerController->currentTrack().isValid() && m_playerController->currentTrackSeekable()
+                      && m_max > 0;
+    if(!enabled) {
+        m_slider->stopSeeking();
+    }
+    m_slider->setEnabled(enabled);
 }
 
 void SeekBar::trackChanged(const Track& track)
@@ -375,6 +417,10 @@ void SeekBar::trackChanged(const Track& track)
         m_slider->setValue(0);
         m_slider->updateMaximum(m_max);
     }
+    else {
+        reset();
+    }
+    updateSeekEnabled();
 }
 
 void SeekBar::setCurrentPosition(uint64_t pos) const
@@ -385,20 +431,20 @@ void SeekBar::setCurrentPosition(uint64_t pos) const
 void SeekBar::stateChanged(Player::PlayState state)
 {
     switch(state) {
-        case(Player::PlayState::Paused):
+        case Player::PlayState::Paused:
             break;
-        case(Player::PlayState::Stopped):
+        case Player::PlayState::Stopped:
             reset();
-            m_slider->setEnabled(false);
             break;
-        case(Player::PlayState::Playing): {
+        case Player::PlayState::Playing: {
             if(m_max == 0) {
                 trackChanged(m_playerController->currentTrack());
             }
-            m_slider->setEnabled(true);
             break;
         }
     }
+
+    updateSeekEnabled();
 }
 } // namespace Fooyin
 

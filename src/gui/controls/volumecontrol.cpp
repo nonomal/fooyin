@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 #include <core/coresettings.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/toolbutton.h>
 #include <gui/widgets/tooltip.h>
 #include <utils/actions/actionmanager.h>
@@ -57,7 +58,6 @@ public:
 
     void changeDisplay(VolumeControl::Options options, bool init = false);
 
-    void updateButtonStyle() const;
     void showVolumeMenu() const;
     void volumeChanged(double volume) const;
     void updateDisplay(double volume) const;
@@ -105,6 +105,8 @@ void VolumeControlPrivate::changeDisplay(VolumeControl::Options options, bool in
     }
 
     if(m_volumeIcon) {
+        // Exclude the old icon from the layout's size hint while it awaits deletion
+        m_volumeIcon->hide();
         m_volumeIcon->deleteLater();
     }
     if(m_volumeMenu) {
@@ -121,7 +123,7 @@ void VolumeControlPrivate::changeDisplay(VolumeControl::Options options, bool in
     }
 
     if(options & VolumeControl::IconMode) {
-        m_volumeIcon = new ToolButton(m_self);
+        m_volumeIcon = new ToolButton(m_settings, m_self);
         if(auto* muteCmd = m_actionManager->command(Constants::Actions::Mute)) {
             m_volumeIcon->setDefaultAction(muteCmd->action());
         }
@@ -142,7 +144,6 @@ void VolumeControlPrivate::changeDisplay(VolumeControl::Options options, bool in
 
         m_layout->addWidget(m_volumeIcon);
         updateDisplay(m_settings->value<Settings::Core::OutputVolume>());
-        updateButtonStyle();
     }
 
     if(options & VolumeControl::Tooltip) {
@@ -154,19 +155,6 @@ void VolumeControlPrivate::changeDisplay(VolumeControl::Options options, bool in
             }
         });
     }
-}
-
-void VolumeControlPrivate::updateButtonStyle() const
-{
-    if(!m_volumeIcon) {
-        return;
-    }
-
-    const auto options
-        = static_cast<Settings::Gui::ToolButtonOptions>(m_settings->value<Settings::Gui::ToolButtonStyle>());
-
-    m_volumeIcon->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_volumeIcon->setAutoRaise(!(options & Settings::Gui::Raise));
 }
 
 void VolumeControlPrivate::showVolumeMenu() const
@@ -209,16 +197,16 @@ void VolumeControlPrivate::updateDisplay(double volume) const
     }
 
     if(volume <= 1.0 && volume >= 0.40) {
-        m_volumeIcon->setIcon(Utils::iconFromTheme(Constants::Icons::VolumeHigh));
+        m_volumeIcon->setIcon(Gui::iconFromTheme(Constants::Icons::VolumeHigh));
     }
     else if(volume < 0.40 && volume >= 0.20) {
-        m_volumeIcon->setIcon(Utils::iconFromTheme(Constants::Icons::VolumeMed));
+        m_volumeIcon->setIcon(Gui::iconFromTheme(Constants::Icons::VolumeMed));
     }
     else if(volume < 0.20 && volume >= MinVolume) {
-        m_volumeIcon->setIcon(Utils::iconFromTheme(Constants::Icons::VolumeLow));
+        m_volumeIcon->setIcon(Gui::iconFromTheme(Constants::Icons::VolumeLow));
     }
     else {
-        m_volumeIcon->setIcon(Utils::iconFromTheme(Constants::Icons::VolumeMute));
+        m_volumeIcon->setIcon(Gui::iconFromTheme(Constants::Icons::VolumeMute));
     }
 }
 
@@ -282,7 +270,6 @@ VolumeControl::VolumeControl(ActionManager* actionManager, SettingsManager* sett
     settings->subscribe<Settings::Core::OutputVolume>(this, [this](double volume) { p->updateDisplay(volume); });
     settings->subscribe<Settings::Gui::IconTheme>(
         this, [this]() { p->updateDisplay(p->m_settings->value<Settings::Core::OutputVolume>()); });
-    settings->subscribe<Settings::Gui::ToolButtonStyle>(this, [this]() { p->updateButtonStyle(); });
 }
 
 VolumeControl::~VolumeControl() = default;

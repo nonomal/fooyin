@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,7 +49,7 @@ public:
     void sort();
     void reset();
 
-signals:
+Q_SIGNALS:
     void coverFound(const Fooyin::SearchResult& result);
     void coverLoaded(const QUrl& url, const Fooyin::ArtworkResult& result);
     void coverLoadProgress(const QUrl& url, int progress);

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,31 @@
 #include <core/library/tracksort.h>
 
 namespace {
+Fooyin::RichText plainTextToRichText(const QString& text)
+{
+    Fooyin::RichText richText;
+    if(text.isEmpty()) {
+        return richText;
+    }
+
+    richText.blocks.push_back({.text = text, .format = {}});
+    return richText;
+}
+
+void removeCoverMarker(Fooyin::RichText& richText, const char* cover)
+{
+    for(auto blockIt = richText.blocks.begin(); blockIt != richText.blocks.end();) {
+        blockIt->text.remove(QLatin1String{cover});
+
+        if(blockIt->text.isEmpty()) {
+            blockIt = richText.blocks.erase(blockIt);
+        }
+        else {
+            ++blockIt;
+        }
+    }
+}
+
 QStyleOptionViewItem::Position getCoverPosition(const QString& text, const char* cover)
 {
     if(text.indexOf(QLatin1String{cover}) == 0) {
@@ -30,6 +55,26 @@ QStyleOptionViewItem::Position getCoverPosition(const QString& text, const char*
     }
 
     return QStyleOptionViewItem::Right;
+}
+
+QString normaliseTitle(QString text)
+{
+    text.remove(QLatin1String{Fooyin::Constants::FrontCover});
+    text.remove(QLatin1String{Fooyin::Constants::BackCover});
+    text.remove(QLatin1String{Fooyin::Constants::ArtistPicture});
+    return text;
+}
+
+Fooyin::RichText richTextForAlignment(const Fooyin::RichText& richText, Fooyin::RichAlignment alignment)
+{
+    Fooyin::RichText alignedText;
+    for(auto block : richText.blocks) {
+        if(block.format.alignment == alignment) {
+            block.format.alignment = Fooyin::RichAlignment::Left;
+            alignedText.blocks.push_back(std::move(block));
+        }
+    }
+    return alignedText;
 }
 } // namespace
 
@@ -43,23 +88,32 @@ LibraryTreeItem::LibraryTreeItem(QString title, LibraryTreeItem* parent, int lev
     , m_pending{false}
     , m_level{level}
     , m_title{std::move(title)}
+    , m_sortTitle{m_title}
+    , m_titleSource{m_title}
+    , m_richTitle{plainTextToRichText(m_title)}
     , m_coverPosition{QStyleOptionViewItem::Left}
+    , m_scriptChildCount{-1}
 {
     if(m_title.contains(QLatin1String{Constants::FrontCover})) {
         m_coverType     = Track::Cover::Front;
         m_coverPosition = getCoverPosition(m_title, Constants::FrontCover);
         m_title.remove(QLatin1String{Constants::FrontCover});
+        removeCoverMarker(m_richTitle, Constants::FrontCover);
     }
     else if(m_title.contains(QLatin1String{Constants::BackCover})) {
         m_coverType     = Track::Cover::Back;
         m_coverPosition = getCoverPosition(m_title, Constants::BackCover);
         m_title.remove(QLatin1String{Constants::BackCover});
+        removeCoverMarker(m_richTitle, Constants::BackCover);
     }
     else if(m_title.contains(QLatin1String{Constants::ArtistPicture})) {
         m_coverType     = Track::Cover::Artist;
         m_coverPosition = getCoverPosition(m_title, Constants::ArtistPicture);
         m_title.remove(QLatin1String{Constants::ArtistPicture});
+        removeCoverMarker(m_richTitle, Constants::ArtistPicture);
     }
+
+    m_sortTitle = normaliseTitle(std::move(m_sortTitle));
 }
 
 bool LibraryTreeItem::pending() const
@@ -72,12 +126,32 @@ int LibraryTreeItem::level() const
     return m_level;
 }
 
-QString LibraryTreeItem::title() const
+const QString& LibraryTreeItem::title() const
 {
     return m_title;
 }
 
-TrackList LibraryTreeItem::tracks() const
+const QString& LibraryTreeItem::sortTitle() const
+{
+    return m_sortTitle;
+}
+
+const QString& LibraryTreeItem::titleSource() const
+{
+    return m_titleSource;
+}
+
+const RichText& LibraryTreeItem::richTitle() const
+{
+    return m_richTitle;
+}
+
+const RichText& LibraryTreeItem::rightRichTitle() const
+{
+    return m_rightRichTitle;
+}
+
+const TrackList& LibraryTreeItem::tracks() const
 {
     return m_tracks;
 }
@@ -87,7 +161,12 @@ int LibraryTreeItem::trackCount() const
     return static_cast<int>(m_tracks.size());
 }
 
-Md5Hash LibraryTreeItem::key() const
+int LibraryTreeItem::scriptChildCount() const
+{
+    return m_scriptChildCount >= 0 ? m_scriptChildCount : childCount();
+}
+
+const Md5Hash& LibraryTreeItem::key() const
 {
     return m_key;
 }
@@ -109,7 +188,49 @@ void LibraryTreeItem::setPending(bool pending)
 
 void LibraryTreeItem::setTitle(const QString& title)
 {
-    m_title = title;
+    m_title       = title;
+    m_sortTitle   = normaliseTitle(title);
+    m_titleSource = m_title;
+    setRichTitle(plainTextToRichText(m_title));
+}
+
+void LibraryTreeItem::setSortTitle(const QString& title)
+{
+    m_sortTitle = normaliseTitle(title);
+}
+
+void LibraryTreeItem::setTitleSource(const QString& title)
+{
+    m_titleSource = title;
+}
+
+void LibraryTreeItem::setRichTitle(const RichText& title)
+{
+    setRichTitles(richTextForAlignment(title, RichAlignment::Left), richTextForAlignment(title, RichAlignment::Right));
+}
+
+void LibraryTreeItem::setRichTitles(const RichText& leftTitle, const RichText& rightTitle)
+{
+    m_richTitle      = leftTitle;
+    m_rightRichTitle = rightTitle;
+
+    if(m_coverType == Track::Cover::Front) {
+        removeCoverMarker(m_richTitle, Constants::FrontCover);
+        removeCoverMarker(m_rightRichTitle, Constants::FrontCover);
+    }
+    else if(m_coverType == Track::Cover::Back) {
+        removeCoverMarker(m_richTitle, Constants::BackCover);
+        removeCoverMarker(m_rightRichTitle, Constants::BackCover);
+    }
+    else if(m_coverType == Track::Cover::Artist) {
+        removeCoverMarker(m_richTitle, Constants::ArtistPicture);
+        removeCoverMarker(m_rightRichTitle, Constants::ArtistPicture);
+    }
+}
+
+void LibraryTreeItem::setScriptChildCount(int count)
+{
+    m_scriptChildCount = count;
 }
 
 void LibraryTreeItem::setKey(const Md5Hash& key)
@@ -124,6 +245,7 @@ void LibraryTreeItem::addTrack(const Track& track)
 
 void LibraryTreeItem::addTracks(const TrackList& tracks)
 {
+    m_tracks.reserve(m_tracks.size() + tracks.size());
     std::ranges::copy(tracks, std::back_inserter(m_tracks));
 }
 
@@ -143,8 +265,12 @@ void LibraryTreeItem::replaceTrack(const Track& track)
     std::ranges::replace_if(m_tracks, [track](const Track& child) { return child.id() == track.id(); }, track);
 }
 
-void LibraryTreeItem::sortTracks()
+void LibraryTreeItem::sortTracks(TrackSorter& sorter, const QString& script)
 {
-    m_tracks = TrackSorter::sortTracks(m_tracks);
+    if(m_tracks.empty() || script.isEmpty()) {
+        return;
+    }
+
+    m_tracks = sorter.calcSortTracks(script, m_tracks);
 }
 } // namespace Fooyin

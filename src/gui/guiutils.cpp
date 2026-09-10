@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,16 +17,147 @@
  *
  */
 
-#include "guiutils.h"
+#include <gui/guiutils.h>
 
+#include <core/coresettings.h>
 #include <core/library/musiclibrary.h>
+#include <core/library/tracksort.h>
+#include <gui/guisettings.h>
 #include <utils/datastream.h>
+#include <utils/settings/settingsmanager.h>
 
+#include <gui/widgets/expandedtreeview.h>
+
+#include <QAbstractItemView>
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QHeaderView>
 #include <QIODevice>
+#include <QLabel>
+#include <QMimeData>
+#include <QPainter>
+#include <QPainterPath>
+#include <QSet>
 #include <QStyle>
+#include <QTreeView>
+#include <QUrl>
+
+#include <algorithm>
+
+using namespace Qt::StringLiterals;
 
 namespace Fooyin::Gui {
+namespace {
+QHeaderView* itemViewHeader(QAbstractItemView* view)
+{
+    if(auto* expandedView = qobject_cast<ExpandedTreeView*>(view)) {
+        return expandedView->header();
+    }
+    if(auto* treeView = qobject_cast<QTreeView*>(view)) {
+        return treeView->header();
+    }
+    return nullptr;
+}
+} // namespace
+
+bool styleSupportsCustomPalette(const QString& styleName)
+{
+#ifdef Q_OS_WIN
+    return styleName.compare("windows11"_L1, Qt::CaseInsensitive) != 0
+        && styleName.compare("windowsvista"_L1, Qt::CaseInsensitive) != 0
+        && styleName.compare("windows"_L1, Qt::CaseInsensitive) != 0;
+#else
+    Q_UNUSED(styleName)
+    return true;
+#endif
+}
+
+bool styleSupportsDarkMode(const QString& styleName)
+{
+#ifdef Q_OS_WIN
+    return styleName.compare("windows11"_L1, Qt::CaseInsensitive) == 0
+        || styleName.compare("windows"_L1, Qt::CaseInsensitive) == 0;
+#else
+    Q_UNUSED(styleName)
+    return false;
+#endif
+}
+
+bool styleUsesNormalItemViewSelectionText(const QString& styleName, bool alternatingRows)
+{
+    if(styleName.compare("windows11"_L1, Qt::CaseInsensitive) == 0) {
+        // Windows 11 uses an accent selection with contrasting text for alternating rows
+        return !alternatingRows;
+    }
+    return styleName.compare("windowsvista"_L1, Qt::CaseInsensitive) == 0;
+}
+
+QPalette::ColorRole itemViewSelectionTextRole(const QStyleOptionViewItem& option)
+{
+    const QStyle* style = option.widget ? option.widget->style() : QApplication::style();
+    const auto* view    = qobject_cast<const QAbstractItemView*>(option.widget);
+    const bool normalSelectionText
+        = style && styleUsesNormalItemViewSelectionText(style->name(), view && view->alternatingRowColors());
+
+    return normalSelectionText ? QPalette::Text : QPalette::HighlightedText;
+}
+
+QIcon::Mode itemViewIconMode(const QStyleOptionViewItem& option)
+{
+    if(!(option.state & QStyle::State_Enabled)) {
+        return QIcon::Disabled;
+    }
+    if(option.state & QStyle::State_Selected) {
+        return QIcon::Selected;
+    }
+    return QIcon::Normal;
+}
+
+QRect itemViewTextRect(const QStyleOptionViewItem& option)
+{
+    const QStyle* style     = option.widget ? option.widget->style() : QApplication::style();
+    QRect textRect          = style->subElementRect(QStyle::SE_ItemViewItemText, &option, option.widget);
+    const int textMargin    = style->pixelMetric(QStyle::PM_FocusFrameHMargin, &option, option.widget) + 1;
+    const int frameWidth    = style->pixelMetric(QStyle::PM_DefaultFrameWidth, &option, option.widget);
+    const int leadingInset  = textMargin + frameWidth + 1;
+    const bool leadingCell  = option.viewItemPosition == QStyleOptionViewItem::Beginning
+                           || option.viewItemPosition == QStyleOptionViewItem::OnlyOne
+                           || option.viewItemPosition == QStyleOptionViewItem::Invalid;
+    const int leadingMargin = leadingCell ? leadingInset : textMargin;
+
+    if(option.direction == Qt::RightToLeft) {
+        textRect.adjust(textMargin, 0, -leadingMargin, 0);
+    }
+    else {
+        textRect.adjust(leadingMargin, 0, -textMargin, 0);
+    }
+
+    return textRect;
+}
+
+void drawRoundedPixmap(QPainter& painter, const QRect& rect, Qt::Alignment alignment, const QPixmap& pixmap,
+                       int radiusPercent)
+{
+    if(pixmap.isNull() || rect.isEmpty()) {
+        return;
+    }
+
+    const QSize pixmapSize = pixmap.deviceIndependentSize().toSize();
+    const QRect pixmapRect = QStyle::alignedRect(Qt::LeftToRight, alignment, pixmapSize, rect);
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    const qreal radius = std::min(pixmapRect.width(), pixmapRect.height()) * std::clamp(radiusPercent, 0, 100) / 200.0;
+    QPainterPath clipPath;
+    clipPath.addRoundedRect(pixmapRect, radius, radius);
+    painter.setClipPath(clipPath, Qt::IntersectClip);
+    painter.drawPixmap(pixmapRect.topLeft(), pixmap);
+
+    painter.restore();
+}
+
 TrackList tracksFromMimeData(MusicLibrary* library, QByteArray data)
 {
     QDataStream stream(&data, QIODevice::ReadOnly);
@@ -38,6 +169,80 @@ TrackList tracksFromMimeData(MusicLibrary* library, QByteArray data)
     return tracks;
 }
 
+void populateExternalTrackMimeData(const TrackList& tracks, QMimeData* mimeData)
+{
+    if(!mimeData) {
+        return;
+    }
+
+    QList<QUrl> urls;
+    QStringList paths;
+    QSet<QString> seenPaths;
+
+    for(const Track& track : tracks) {
+        if(!track.isValid() || track.isInArchive()) {
+            continue;
+        }
+
+        const QFileInfo fileInfo{track.filepath()};
+        if(!fileInfo.exists() || !fileInfo.isFile()) {
+            continue;
+        }
+
+        const QString path = QDir::cleanPath(fileInfo.absoluteFilePath());
+        if(path.isEmpty() || seenPaths.contains(path)) {
+            continue;
+        }
+
+        seenPaths.insert(path);
+        urls.push_back(QUrl::fromLocalFile(path));
+        paths.push_back(path);
+    }
+
+    if(urls.empty()) {
+        return;
+    }
+
+    mimeData->setUrls(urls);
+    mimeData->setText(paths.join(QStringLiteral("\n")));
+}
+
+TrackList sortTracksForLibraryViewerPlaylist(SettingsManager* settings, const TrackList& tracks)
+{
+    if(!settings || tracks.size() < 2) {
+        return tracks;
+    }
+
+    const QString sortScript = settings->value<Settings::Core::LibraryViewPlaylistSortScript>();
+    if(sortScript.isEmpty()) {
+        return tracks;
+    }
+
+    TrackSorter sorter;
+    return sorter.calcSortTracks(sortScript, tracks);
+}
+
+TrackIds sortTrackIdsForLibraryViewerPlaylist(MusicLibrary* library, SettingsManager* settings, const TrackIds& ids)
+{
+    if(!library || ids.size() < 2) {
+        return ids;
+    }
+
+    const TrackList sortedTracks = sortTracksForLibraryViewerPlaylist(settings, library->tracksForIds(ids));
+    if(sortedTracks.size() != ids.size()) {
+        return ids;
+    }
+
+    TrackIds sortedIds;
+    sortedIds.reserve(sortedTracks.size());
+
+    for(const Track& track : sortedTracks) {
+        sortedIds.push_back(track.id());
+    }
+
+    return sortedIds;
+}
+
 QByteArray queueTracksToMimeData(const QueueTracks& tracks)
 {
     QByteArray data;
@@ -46,6 +251,7 @@ QByteArray queueTracksToMimeData(const QueueTracks& tracks)
     for(const auto& track : tracks) {
         stream << track.track.id();
         stream << track.playlistId;
+        stream << track.entryId;
         stream << track.indexInPlaylist;
     }
 
@@ -64,6 +270,7 @@ QueueTracks queueTracksFromMimeData(MusicLibrary* library, QByteArray data)
         int id{-1};
         stream >> id;
         stream >> track.playlistId;
+        stream >> track.entryId;
         stream >> track.indexInPlaylist;
 
         track.track = library->trackForId(id);
@@ -71,6 +278,41 @@ QueueTracks queueTracksFromMimeData(MusicLibrary* library, QByteArray data)
     }
 
     return tracks;
+}
+
+RatingStarSymbols ratingStarSymbols(const SettingsManager& settings)
+{
+    return {
+        .fullStarSymbol  = settings.value<Settings::Gui::RatingFullStarSymbol>(),
+        .halfStarSymbol  = settings.value<Settings::Gui::RatingHalfStarSymbol>(),
+        .emptyStarSymbol = settings.value<Settings::Gui::RatingEmptyStarSymbol>(),
+    };
+}
+
+QColor loveHeartColour(const SettingsManager& settings)
+{
+    return settings.value<Settings::Gui::LoveHeartColour>().value<QColor>();
+}
+
+QColor unlovedHeartColour(const SettingsManager& settings)
+{
+    return settings.value<Settings::Gui::UnlovedHeartColour>().value<QColor>();
+}
+
+QColor unratedStarColour(const SettingsManager& settings)
+{
+    return settings.value<Settings::Gui::UnratedStarColour>().value<QColor>();
+}
+
+RatingStarColours ratingStarColours(const SettingsManager& settings)
+{
+    return {
+        settings.value<Settings::Gui::RatingOneStarColour>().value<QColor>(),
+        settings.value<Settings::Gui::RatingTwoStarColour>().value<QColor>(),
+        settings.value<Settings::Gui::RatingThreeStarColour>().value<QColor>(),
+        settings.value<Settings::Gui::RatingFourStarColour>().value<QColor>(),
+        settings.value<Settings::Gui::RatingFiveStarColour>().value<QColor>(),
+    };
 }
 
 QMap<PaletteKey, QColor> coloursFromPalette()
@@ -117,4 +359,66 @@ QMap<PaletteKey, QColor> coloursFromPalette(const QPalette& palette)
 
     return colours;
 }
+
+void refreshItemViewPalette(QAbstractItemView* view)
+{
+    refreshItemViewPalette(view, QApplication::palette());
+}
+
+void refreshItemViewPalette(QAbstractItemView* view, const QPalette& palette)
+{
+    if(!view) {
+        return;
+    }
+
+    QPalette itemViewPalette{palette};
+    if(const auto* style = view->style();
+       style && styleUsesNormalItemViewSelectionText(style->name(), view->alternatingRowColors())) {
+        for(const auto group : {QPalette::Active, QPalette::Disabled, QPalette::Inactive}) {
+            itemViewPalette.setBrush(group, QPalette::HighlightedText, itemViewPalette.brush(group, QPalette::Text));
+        }
+    }
+
+    view->setPalette(itemViewPalette);
+    if(view->viewport()) {
+        view->viewport()->setPalette(itemViewPalette);
+    }
+    if(auto* header = itemViewHeader(view)) {
+        header->setPalette(itemViewPalette);
+    }
+}
+
+void updateItemViewStyle(QAbstractItemView* view)
+{
+    updateItemViewStyle(view, QApplication::palette());
+}
+
+void updateItemViewStyle(QAbstractItemView* view, const QPalette& palette)
+{
+    refreshItemViewPalette(view, palette);
+
+    if(!view) {
+        return;
+    }
+
+    view->doItemsLayout();
+    if(view->viewport()) {
+        view->viewport()->update();
+    }
+    if(auto* header = itemViewHeader(view); header && header->viewport()) {
+        header->viewport()->update();
+    }
+}
+
+QLabel* createSectionHeader(const QString& text, QWidget* parent)
+{
+    auto* label = new QLabel(text, parent);
+
+    QFont font{label->font()};
+    font.setBold(true);
+    label->setFont(font);
+
+    return label;
+}
+
 } // namespace Fooyin::Gui

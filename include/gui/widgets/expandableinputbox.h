@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -56,7 +56,7 @@ public:
     virtual void setAttributes(Attributes attributes);
     virtual void setText(const QString& text);
 
-signals:
+Q_SIGNALS:
     void textChanged(const QString& text);
 
 private:
@@ -91,7 +91,7 @@ public:
     void deleteBlock();
     void clearBlocks();
 
-signals:
+Q_SIGNALS:
     void blockDeleted(const QString& text);
 
 private:

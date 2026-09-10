@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,27 +19,43 @@
 
 #include "infomodel.h"
 
+#include "selectioninfofieldregistry.h"
+
 #include <core/track.h>
 
 #include <QFileInfo>
 #include <QFont>
 #include <QThread>
 
+#include <ranges>
+
 using namespace Qt::StringLiterals;
 
 constexpr auto HeaderFontDelta = 2;
 
 namespace Fooyin {
-InfoModel::InfoModel(LibraryManager* libraryManager, QObject* parent)
+InfoModel::InfoModel(LibraryManager* libraryManager, SelectionInfoFieldRegistry* fieldRegistry, QObject* parent)
     : TreeModel{parent}
     , m_populator{libraryManager}
+    , m_fieldRegistry{fieldRegistry}
 {
+    qRegisterMetaType<InfoDataPtr>("Fooyin::InfoDataPtr");
+
     m_populator.moveToThread(&m_populatorThread);
 
     m_headerFont.setPointSize(m_headerFont.pointSize() + HeaderFontDelta);
     m_headerFont.setBold(true);
 
-    QObject::connect(&m_populator, &InfoPopulator::populated, this, &InfoModel::populate);
+    QObject::connect(&m_populator, &InfoPopulator::populated, this,
+                     [this](InfoDataPtr data) { populate(std::move(data)); });
+
+    const auto resetFields = [this]() {
+        resetModel(m_tracks);
+    };
+    QObject::connect(m_fieldRegistry, &RegistryBase::itemAdded, this, resetFields);
+    QObject::connect(m_fieldRegistry, &RegistryBase::itemChanged, this, resetFields);
+    QObject::connect(m_fieldRegistry, &RegistryBase::itemRemoved, this, resetFields);
+    QObject::connect(m_fieldRegistry, &SelectionInfoFieldRegistry::fieldsReset, this, resetFields);
 }
 
 Qt::ItemFlags InfoModel::flags(const QModelIndex& index) const
@@ -66,7 +82,7 @@ InfoModel::~InfoModel()
 QVariant InfoModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole || orientation == Qt::Orientation::Vertical) {
@@ -74,9 +90,9 @@ QVariant InfoModel::headerData(int section, Qt::Orientation orientation, int rol
     }
 
     switch(section) {
-        case(0):
+        case 0:
             return u"Name"_s;
-        case(1):
+        case 1:
             return u"Value"_s;
         default:
             break;
@@ -115,14 +131,14 @@ QVariant InfoModel::data(const QModelIndex& index, int role) const
         return {};
     }
 
-    if(role != Qt::DisplayRole) {
+    if(role != Qt::DisplayRole && role != Qt::ToolTipRole) {
         return {};
     }
 
     switch(index.column()) {
-        case(0):
+        case 0:
             return item->name();
-        case(1):
+        case 1:
             return item->value();
         default:
             break;
@@ -153,6 +169,8 @@ void InfoModel::setOptions(InfoItem::Options options)
 
 void InfoModel::resetModel(const TrackList& tracks)
 {
+    m_tracks = tracks;
+
     if(m_populatorThread.isRunning()) {
         m_populator.stopThread();
     }
@@ -160,18 +178,25 @@ void InfoModel::resetModel(const TrackList& tracks)
         m_populatorThread.start();
     }
 
-    QMetaObject::invokeMethod(&m_populator, [this, tracks] { m_populator.run(m_options, tracks); });
+    const auto fields = m_fieldRegistry->items();
+    QMetaObject::invokeMethod(&m_populator, [this, tracks, fields] { m_populator.run(m_options, tracks, fields); });
 }
 
-void InfoModel::populate(const InfoData& data)
+void InfoModel::populate(InfoDataPtr data)
 {
     beginResetModel();
     resetRoot();
     m_nodes.clear();
 
-    m_nodes = data.nodes;
+    if(!data) {
+        endResetModel();
+        return;
+    }
 
-    for(const auto& [parentKey, children] : data.parents) {
+    auto parents = std::move(data->parents);
+    m_nodes      = std::move(data->nodes);
+
+    for(const auto& [parentKey, children] : parents) {
         InfoItem* parent{nullptr};
 
         if(parentKey == "Root"_L1) {
@@ -190,7 +215,24 @@ void InfoModel::populate(const InfoData& data)
         }
     }
 
-    rootItem()->sortChildren();
+    std::unordered_map<const InfoItem*, int> insertionOrder;
+    insertionOrder.reserve(m_nodes.size());
+    for(const auto& node : m_nodes | std::views::values) {
+        insertionOrder.emplace(&node, node.row());
+    }
+
+    rootItem()->sortChildren([&insertionOrder](const InfoItem* left, const InfoItem* right) {
+        if(!left || !right) {
+            return false;
+        }
+        if(*left < *right) {
+            return true;
+        }
+        if(*right < *left) {
+            return false;
+        }
+        return insertionOrder.at(left) < insertionOrder.at(right);
+    });
 
     endResetModel();
 }

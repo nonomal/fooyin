@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 
 #include "settings/scrobblersettings.h"
 
+#include <core/track.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QFile>
@@ -165,6 +166,8 @@ void ScrobblerCache::readCache()
 
         m_items.emplace_back(std::make_unique<CacheItem>(metadata, timestamp));
     }
+
+    qCDebug(SCROBBLER_CACHE) << "Restored" << m_items.size() << "cached scrobbles from" << m_filepath;
 }
 
 CacheItem* ScrobblerCache::add(const Track& track, const uint64_t timestamp)
@@ -199,9 +202,13 @@ CacheItemList ScrobblerCache::items() const
 
 void ScrobblerCache::flush(const CacheItemList& items)
 {
+    const auto removedCount = items.size();
     for(CacheItem* item : items) {
         remove(item);
     }
+
+    qCDebug(SCROBBLER_CACHE) << "Flushed" << removedCount << "cached scrobbles from" << m_filepath << "remaining"
+                             << m_items.size();
 
     if(!m_writeTimer.isActive()) {
         m_writeTimer.start(WriteInterval, this);
@@ -216,7 +223,7 @@ void ScrobblerCache::writeCache()
         return;
     }
 
-    qCDebug(SCROBBLER_CACHE) << "Writing cache to file" << m_filepath;
+    qCDebug(SCROBBLER_CACHE) << "Writing" << m_items.size() << "cached scrobbles to file" << m_filepath;
 
     QJsonArray array;
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,16 +18,90 @@
  */
 
 #include "stringfuncs.h"
-#include "core/constants.h"
 
+#include <core/constants.h>
 #include <utils/stringutils.h>
 
+#include <QCache>
 #include <QDir>
 #include <QRegularExpression>
+#include <QUrl>
+
+#include <optional>
+
+#include <zlib.h>
 
 using namespace Qt::StringLiterals;
 
 namespace {
+std::optional<QRegularExpression> regularExpression(const QString& pattern, const QString& flags)
+{
+    QRegularExpression::PatternOptions options{QRegularExpression::UseUnicodePropertiesOption};
+    for(const QChar flag : flags) {
+        switch(flag.unicode()) {
+            case u'i':
+                options |= QRegularExpression::CaseInsensitiveOption;
+                break;
+            case u'm':
+                options |= QRegularExpression::MultilineOption;
+                break;
+            case u's':
+                options |= QRegularExpression::DotMatchesEverythingOption;
+                break;
+            case u'x':
+                options |= QRegularExpression::ExtendedPatternSyntaxOption;
+                break;
+            case u'U':
+                options |= QRegularExpression::InvertedGreedinessOption;
+                break;
+            default:
+                return {};
+        }
+    }
+
+    const QString cacheKey = QString::number(options.toInt()) + u'\0' + pattern;
+    thread_local QCache<QString, QRegularExpression> cache{64};
+    if(const auto* cached = cache.object(cacheKey)) {
+        return *cached;
+    }
+
+    QRegularExpression regex{pattern, options};
+    if(!regex.isValid()) {
+        return {};
+    }
+
+    cache.insert(cacheKey, new QRegularExpression{regex});
+    return regex;
+}
+
+struct RegexCaptureGroup
+{
+    int index{0};
+    QString name;
+};
+
+std::optional<RegexCaptureGroup> regexCaptureGroup(const QRegularExpression& regex, const QString& group)
+{
+    bool isIndex{false};
+    const int index = group.toInt(&isIndex);
+    if(isIndex) {
+        if(index < 0 || index > regex.captureCount()) {
+            return {};
+        }
+        return RegexCaptureGroup{.index = index, .name = {}};
+    }
+
+    if(group.isEmpty() || !regex.namedCaptureGroups().contains(group)) {
+        return {};
+    }
+    return RegexCaptureGroup{.name = group};
+}
+
+QString captured(const QRegularExpressionMatch& match, const RegexCaptureGroup& group)
+{
+    return group.name.isEmpty() ? match.captured(group.index) : match.captured(group.name);
+}
+
 QString strstrHelper(const QStringList& vec, bool reverse, Qt::CaseSensitivity cs)
 {
     const qsizetype count = vec.size();
@@ -47,8 +121,10 @@ QString strstrHelper(const QStringList& vec, bool reverse, Qt::CaseSensitivity c
 
     const QStringView str = vec.at(0);
     const auto ret        = reverse ? str.lastIndexOf(vec.at(1), from, cs) : str.indexOf(vec.at(1), from, cs);
-    if(ret == -1)
+    if(ret == -1) {
         return {};
+    }
+
     return QString::number(ret);
 }
 } // namespace
@@ -93,6 +169,10 @@ QString replace(const QStringList& vec)
 
     if(count == 3) {
         // Single replace call
+        if(vec.at(1).isEmpty()) {
+            return vec.front();
+        }
+
         QString origStr{vec.front()};
         return origStr.replace(vec.at(1), vec.at(2));
     }
@@ -100,12 +180,22 @@ QString replace(const QStringList& vec)
     // Arbitrary replacements
     // Much slower as we need to match all and then rebuild
 
+    struct Replacement
+    {
+        qsizetype length{0};
+        QString text;
+    };
+
     const QString& origStr = vec.front();
-    std::map<qsizetype, QString, std::greater<>> replacements;
+    std::map<qsizetype, Replacement> replacements;
 
     for(qsizetype i{1}; i < count - 1; i += 2) {
         const QString& search  = vec[i];
         const QString& replace = vec[i + 1];
+        if(search.isEmpty()) {
+            continue;
+        }
+
         const QRegularExpression regex{QRegularExpression::escape(search),
                                        QRegularExpression::UseUnicodePropertiesOption};
         QRegularExpressionMatchIterator matches = regex.globalMatch(origStr);
@@ -113,26 +203,83 @@ QString replace(const QStringList& vec)
         while(matches.hasNext()) {
             const QRegularExpressionMatch match = matches.next();
             const qsizetype start               = match.capturedStart();
-            replacements[start]                 = replace;
+            replacements[start]                 = {.length = match.capturedLength(), .text = replace};
         }
     }
 
     QString result;
-    qsizetype lastIndex = origStr.size();
-    for(const auto& [pos, replace] : replacements) {
-        if(pos >= lastIndex) {
+    qsizetype cursor{0};
+    for(const auto& [pos, replacement] : replacements) {
+        if(pos < cursor) {
             continue;
         }
 
-        const QString& replacement = replacements.at(pos);
-        const QRegularExpression regex{QRegularExpression::escape(origStr.mid(pos, replacement.length())),
-                                       QRegularExpression::UseUnicodePropertiesOption};
-        result.prepend(origStr.mid(pos, lastIndex - pos).replace(regex, replacement));
-        lastIndex = pos;
+        result.append(origStr.sliced(cursor, pos - cursor));
+        result.append(replacement.text);
+        cursor = pos + replacement.length;
     }
-    result.prepend(origStr.left(lastIndex));
+    result.append(origStr.sliced(cursor));
 
     return result;
+}
+
+QString regexReplace(const QStringList& vec)
+{
+    if(vec.size() < 3 || vec.size() > 4) {
+        return {};
+    }
+
+    const auto regex = regularExpression(vec.at(1), vec.value(3));
+    if(!regex) {
+        return {};
+    }
+
+    QString result{vec.front()};
+    return result.replace(*regex, vec.at(2));
+}
+
+QString regexMatch(const QStringList& vec)
+{
+    if(vec.size() < 2 || vec.size() > 4) {
+        return {};
+    }
+
+    const auto regex = regularExpression(vec.at(1), vec.value(3));
+    if(!regex) {
+        return {};
+    }
+
+    const auto group = regexCaptureGroup(*regex, vec.size() >= 3 ? vec.at(2) : u"0"_s);
+    if(!group) {
+        return {};
+    }
+
+    const QRegularExpressionMatch match = regex->match(vec.front());
+    return match.hasMatch() ? captured(match, *group) : QString{};
+}
+
+QString regexMatches(const QStringList& vec)
+{
+    if(vec.size() < 3 || vec.size() > 5) {
+        return {};
+    }
+
+    const auto regex = regularExpression(vec.at(1), vec.value(4));
+    if(!regex) {
+        return {};
+    }
+
+    const auto group = regexCaptureGroup(*regex, vec.size() >= 4 ? vec.at(3) : u"0"_s);
+    if(!group) {
+        return {};
+    }
+
+    QStringList matches;
+    auto matchIterator = regex->globalMatch(vec.front());
+    while(matchIterator.hasNext()) {
+        matches.emplace_back(captured(matchIterator.next(), *group));
+    }
+    return matches.join(vec.at(2));
 }
 
 QString ascii(const QStringList& vec)
@@ -147,12 +294,6 @@ QString ascii(const QStringList& vec)
     for(QChar ch : normalizedStr) {
         if(ch.unicode() < 128) {
             result.append(ch);
-        }
-        else if(ch.category() != QChar::Mark_NonSpacing) {
-            const char asciiChar = ch.toLatin1();
-            if(asciiChar != 0) {
-                result.append(QChar::fromLatin1(asciiChar));
-            }
         }
     }
 
@@ -192,7 +333,7 @@ QString chop(const QStringList& vec)
 
     bool numSuccess{false};
     const int num = vec.at(1).toInt(&numSuccess);
-    if(numSuccess && num >= 0) {
+    if(numSuccess && num >= 0 && num <= vec.at(0).size()) {
         return vec.at(0).chopped(num);
     }
 
@@ -208,11 +349,8 @@ QString left(const QStringList& vec)
     bool numSuccess{false};
 
     const int num = vec.at(1).toInt(&numSuccess);
-    if(numSuccess && num >= 0) {
-        const QStringView str = vec.at(0);
-        if(num <= str.size()) {
-            return str.first(num).toString();
-        }
+    if(numSuccess) {
+        return vec.at(0).left(num);
     }
 
     return {};
@@ -299,7 +437,7 @@ QString stristrLast(const QStringList& vec)
 
 QString split(const QStringList& vec)
 {
-    if(vec.size() != 2) {
+    if(vec.size() != 3) {
         return {};
     }
 
@@ -312,7 +450,30 @@ QString split(const QStringList& vec)
         part = part.trimmed();
     }
 
-    return parts.join(QLatin1String{Constants::UnitSeparator});
+    bool ok{false};
+    const int index = vec.at(2).toInt(&ok);
+
+    if(!ok || index <= 0 || std::cmp_greater(index, parts.size())) {
+        return {};
+    }
+
+    return parts.at(index - 1);
+}
+
+QString join(const QStringList& vec)
+{
+    if(vec.size() < 2) {
+        return {};
+    }
+
+    QStringList parts;
+    for(auto it = vec.cbegin() + 1; it != vec.cend(); ++it) {
+        if(!it->isEmpty()) {
+            parts.emplace_back(*it);
+        }
+    }
+
+    return parts.join(vec.front());
 }
 
 QString len(const QStringList& vec)
@@ -331,38 +492,6 @@ QString longest(const QStringList& vec)
     }
 
     return *std::max_element(vec.cbegin(), vec.cend());
-}
-
-ScriptResult strcmp(const QStringList& vec)
-{
-    if(vec.size() != 2) {
-        return {};
-    }
-
-    return {.value = {}, .cond = QString::compare(vec.at(0), vec.at(1), Qt::CaseSensitive) == 0};
-}
-
-ScriptResult stricmp(const QStringList& vec)
-{
-    if(vec.size() != 2) {
-        return {};
-    }
-
-    return {.value = {}, .cond = QString::compare(vec.at(0), vec.at(1), Qt::CaseInsensitive) == 0};
-}
-
-ScriptResult longer(const QStringList& vec)
-{
-    if(vec.size() != 2) {
-        return {};
-    }
-
-    return {.value = {}, .cond = vec.at(0).length() > vec.at(1).length()};
-}
-
-QString sep()
-{
-    return QDir::separator();
 }
 
 QString crlf(const QStringList& vec)
@@ -582,7 +711,7 @@ QString abbr(const QStringList& vec)
 
 QString elideEnd(const QStringList& vec)
 {
-    if(vec.size() != 3) {
+    if(vec.size() != 2 && vec.size() != 3) {
         return {};
     }
 
@@ -592,9 +721,10 @@ QString elideEnd(const QStringList& vec)
         return {};
     }
 
-    const auto length = vec.at(0).size();
+    const QString ellipsis = vec.size() == 2 ? u"…"_s : vec.at(2);
+    const auto length      = vec.at(0).size();
     if(length > limit) {
-        return vec.at(0).first(limit) + vec.at(2);
+        return vec.at(0).first(limit) + ellipsis;
     }
 
     return vec.at(0);
@@ -602,7 +732,7 @@ QString elideEnd(const QStringList& vec)
 
 QString elideMid(const QStringList& vec)
 {
-    if(vec.size() != 3) {
+    if(vec.size() != 2 && vec.size() != 3) {
         return {};
     }
 
@@ -612,14 +742,15 @@ QString elideMid(const QStringList& vec)
         return {};
     }
 
-    const auto length = vec.at(0).size();
+    const QString ellipsis = vec.size() == 2 ? u"…"_s : vec.at(2);
+    const auto length      = vec.at(0).size();
     if(length > limit) {
         auto left        = limit / 2;
         const auto right = left;
         if(limit & 1) {
             ++left;
         }
-        return vec.at(0).first(left) + vec.at(2) + vec.at(0).last(right);
+        return vec.at(0).first(left) + ellipsis + vec.at(0).last(right);
     }
 
     return vec.at(0);
@@ -747,5 +878,159 @@ QString progress2(const QStringList& vec)
     }
 
     return progressBar;
+}
+
+QString doclink(const QStringList& vec)
+{
+    if(vec.size() != 2 || vec.at(0).isEmpty() || vec.at(1).isEmpty()) {
+        return {};
+    }
+
+    QString url = vec.at(1);
+    url.replace(u'"', u"%22"_s);
+
+    return u"<a href=\"%1\">%2</a>"_s.arg(url, vec.at(0));
+}
+
+QString cmdlink(const QStringList& vec)
+{
+    if(vec.size() != 2 || vec.at(0).isEmpty() || vec.at(1).isEmpty()) {
+        return {};
+    }
+
+    const QString commandId = QString::fromUtf8(QUrl::toPercentEncoding(vec.at(1)));
+    return u"<a href=\"fooyin://command/%1\">%2</a>"_s.arg(commandId, vec.at(0));
+}
+
+QString urlencode(const QStringList& vec)
+{
+    if(vec.size() != 1) {
+        return {};
+    }
+
+    return QString::fromUtf8(QUrl::toPercentEncoding(vec.front()));
+}
+
+QString crc32(const QStringList& values)
+{
+    if(values.size() != 1) {
+        return {};
+    }
+
+    const QByteArray bytes = values.constFirst().toUtf8();
+    const auto crc         = static_cast<quint32>(
+        ::crc32(0L, reinterpret_cast<const Bytef*>(bytes.constData()), static_cast<uInt>(bytes.size())));
+
+    return QString::number(crc);
+}
+
+QString hex(const QStringList& vec)
+{
+    if(vec.size() != 2) {
+        return {};
+    }
+
+    bool isInt{false};
+    const qlonglong number = vec.at(0).toLongLong(&isInt);
+    if(!isInt) {
+        return {};
+    }
+
+    const int length = vec.at(1).toInt(&isInt);
+    if(!isInt) {
+        return {};
+    }
+
+    return u"%1"_s.arg(number, length, 16, QLatin1Char{'0'}).toUpper();
+}
+
+QString sep()
+{
+    return QDir::separator();
+}
+
+ScriptResult strcmp(const QStringList& vec)
+{
+    if(vec.size() != 2) {
+        return {};
+    }
+
+    return {.value = {}, .cond = QString::compare(vec.at(0), vec.at(1), Qt::CaseSensitive) == 0};
+}
+
+ScriptResult stricmp(const QStringList& vec)
+{
+    if(vec.size() != 2) {
+        return {};
+    }
+
+    return {.value = {}, .cond = QString::compare(vec.at(0), vec.at(1), Qt::CaseInsensitive) == 0};
+}
+
+ScriptResult regexTest(const QStringList& vec)
+{
+    if(vec.size() < 2 || vec.size() > 3) {
+        return {};
+    }
+
+    const auto regex = regularExpression(vec.at(1), vec.value(2));
+    return {.value = {}, .cond = regex && regex->match(vec.front()).hasMatch()};
+}
+
+ScriptResult longer(const QStringList& vec)
+{
+    if(vec.size() != 2) {
+        return {};
+    }
+
+    return {.value = {}, .cond = vec.at(0).length() > vec.at(1).length()};
+}
+
+ScriptResult isalpha(const QStringList& vec)
+{
+    if(vec.size() != 1 || vec.front().isEmpty()) {
+        return {};
+    }
+
+    const QString& str = vec.front();
+    for(const QChar& ch : str) {
+        if(!ch.isLetter()) {
+            return {.value = {}, .cond = false};
+        }
+    }
+
+    return {.value = {}, .cond = true};
+}
+
+ScriptResult isalnum(const QStringList& vec)
+{
+    if(vec.size() != 1 || vec.front().isEmpty()) {
+        return {};
+    }
+
+    const QString& str = vec.front();
+    for(const QChar& ch : str) {
+        if(!ch.isLetterOrNumber()) {
+            return {.value = {}, .cond = false};
+        }
+    }
+
+    return {.value = {}, .cond = true};
+}
+
+ScriptResult isnum(const QStringList& vec)
+{
+    if(vec.size() != 1 || vec.front().isEmpty()) {
+        return {};
+    }
+
+    const QString& str = vec.front();
+    for(const QChar& ch : str) {
+        if(!ch.isNumber()) {
+            return {.value = {}, .cond = false};
+        }
+    }
+
+    return {.value = {}, .cond = true};
 }
 } // namespace Fooyin::Scripting

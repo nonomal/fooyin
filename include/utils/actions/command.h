@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,8 +54,11 @@ public:
     [[nodiscard]] bool hasAttribute(ProxyAction::Attribute attribute) const;
 
     [[nodiscard]] bool isActive() const;
+    [[nodiscard]] bool hasOverrideActions() const;
 
     void setShortcut(const ShortcutList& keys);
+    void setGlobalShortcuts(const ShortcutList& keys);
+    void setGlobalShortcutRegistered(bool registered);
     [[nodiscard]] QString stringWithShortcut(const QString& str) const;
     void actionWithShortcutToolTip(QAction* action) const;
 
@@ -63,6 +66,8 @@ public:
     void setDefaultShortcut(const ShortcutList& keys);
     [[nodiscard]] ShortcutList defaultShortcuts() const;
     [[nodiscard]] ShortcutList shortcuts() const;
+    [[nodiscard]] ShortcutList globalShortcuts() const;
+    [[nodiscard]] bool isGlobalShortcutRegistered() const;
     [[nodiscard]] QKeySequence shortcut() const;
 
     void setDescription(const QString& text);
@@ -73,9 +78,12 @@ public:
 
     void setCurrentContext(const Context& newContext);
     void addOverrideAction(QAction* actionToAdd, const Context& context, bool changeContext = true);
+    bool removeOverrideAction(QAction* action, const Context& context);
 
-signals:
+Q_SIGNALS:
     void shortcutChanged();
+    void globalShortcutsChanged();
+    void globalShortcutRegistrationChanged();
     void activeStateChanged();
 
 private:

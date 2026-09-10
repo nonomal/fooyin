@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -48,13 +48,16 @@ void StarDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, 
     QStyleOptionViewItem opt{option};
     initStyleOption(&opt, index);
 
+    const QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
+
     if(!index.data().canConvert<StarRating>()) {
-        QStyle* style = opt.widget ? opt.widget->style() : QApplication::style();
         style->drawControl(QStyle::CE_ItemViewItem, &opt, painter, opt.widget);
         return;
     }
 
-    auto starRating = index.data().value<StarRating>();
+    auto starRating        = index.data().value<StarRating>();
+    const bool mixedValues = index.data(MixedValues).toBool();
+    const bool selected    = opt.state.testFlag(QStyle::State_Selected);
 
     const bool hover = m_hoverIndex.isValid()
                     && (m_hoverIndex == index || (m_selected.contains(m_hoverIndex) && m_selected.contains(index)));
@@ -63,7 +66,34 @@ void StarDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, 
         starRating.setRating(StarEditor::ratingAtPosition(m_hoverPos, option.rect, starRating, opt.displayAlignment));
     }
 
-    starRating.paint(painter, opt.rect, opt.palette, StarRating::EditMode::ReadOnly, opt.displayAlignment);
+    starRating.paint(painter, opt.rect, opt.palette, StarRating::EditMode::ReadOnly, opt.displayAlignment, selected);
+
+    if(mixedValues && !hover) {
+        painter->save();
+
+        QFont font{opt.font};
+        font.setPointSizeF(std::max(7.0, font.pointSizeF() - 1.0));
+        painter->setFont(font);
+
+        QColor textColour = selected ? opt.palette.highlightedText().color() : opt.palette.text().color();
+        textColour.setAlpha(170);
+        painter->setPen(textColour);
+
+        int starX           = opt.rect.x();
+        const int starWidth = starRating.sizeHint().width();
+        if(opt.displayAlignment & Qt::AlignHCenter) {
+            starX += (opt.rect.width() - starWidth) / 2;
+        }
+        else if(opt.displayAlignment & Qt::AlignRight) {
+            starX += opt.rect.width() - starWidth;
+        }
+
+        const QRect mixedRect = opt.rect.adjusted((starX - opt.rect.x()) + starWidth + 4, 0, 0, 0);
+        //: Indicates that the selected tracks have different ratings in the tag editor.
+        painter->drawText(mixedRect, Qt::AlignLeft | Qt::AlignVCenter, tr("mixed"));
+
+        painter->restore();
+    }
 }
 
 QSize StarDelegate::sizeHint(const QStyleOptionViewItem& option, const QModelIndex& index) const
@@ -106,7 +136,7 @@ void StarDelegate::setModelData(QWidget* editor, QAbstractItemModel* model, cons
 void StarDelegate::finishEditing()
 {
     auto* editor = qobject_cast<StarEditor*>(sender());
-    emit commitData(editor);
-    emit closeEditor(editor);
+    Q_EMIT commitData(editor);
+    Q_EMIT closeEditor(editor);
 }
 } // namespace Fooyin

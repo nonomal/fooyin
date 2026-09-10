@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,11 +40,13 @@ void TagLyrics::search(const SearchParams& params)
 {
     std::vector<LyricData> data;
 
-    const auto searchTags = settings()->value<Settings::Lyrics::SearchTags>();
+    const auto searchTags = settings()->fileValue(Settings::SearchTags, Defaults::searchTags()).toStringList();
     for(const QString& tag : searchTags) {
         const QStringList lyrics = params.track.extraTag(tag);
+
         if(!lyrics.empty()) {
             LyricData lyricData;
+            lyricData.tag    = tag;
             lyricData.title  = params.title;
             lyricData.album  = params.album;
             lyricData.artist = params.artist;
@@ -53,6 +55,6 @@ void TagLyrics::search(const SearchParams& params)
         }
     }
 
-    emit searchResult(data);
+    Q_EMIT searchResult(data);
 }
 } // namespace Fooyin::Lyrics

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "dialog/aboutdialog.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/utils.h>
@@ -29,18 +30,10 @@
 #include <QAction>
 #include <QDesktopServices>
 #include <QIcon>
+#include <QMainWindow>
 #include <QUrl>
 
 using namespace Qt::StringLiterals;
-
-namespace {
-void showAboutDialog()
-{
-    auto* aboutDialog = new Fooyin::AboutDialog();
-    aboutDialog->setAttribute(Qt::WA_DeleteOnClose);
-    aboutDialog->show();
-}
-} // namespace
 
 namespace Fooyin {
 HelpMenu::HelpMenu(ActionManager* actionManager, QObject* parent)
@@ -70,15 +63,30 @@ HelpMenu::HelpMenu(ActionManager* actionManager, QObject* parent)
     QObject::connect(faq, &QAction::triggered, this,
                      []() { QDesktopServices::openUrl(u"https://www.fooyin.org/faq"_s); });
 
-    auto* about = new QAction(Utils::iconFromTheme(Constants::Icons::Fooyin), tr("&About"), this);
+    auto* about = new QAction(tr("&About"), this);
+    about->setIcon(Gui::applicationIcon());
     about->setStatusTip(tr("Open the about dialog"));
-    QObject::connect(about, &QAction::triggered, this, showAboutDialog);
+    QObject::connect(about, &QAction::triggered, this, &HelpMenu::showAboutDialog);
 
     helpMenu->addAction(quickStart);
     helpMenu->addAction(scripting);
     helpMenu->addAction(searching);
     helpMenu->addAction(faq);
     helpMenu->addAction(about);
+}
+
+void HelpMenu::showAboutDialog()
+{
+    if(m_aboutDialog) {
+        m_aboutDialog->show();
+        m_aboutDialog->raise();
+        m_aboutDialog->activateWindow();
+        return;
+    }
+
+    m_aboutDialog = new AboutDialog(Utils::getMainWindow());
+    m_aboutDialog->setAttribute(Qt::WA_DeleteOnClose);
+    m_aboutDialog->show();
 }
 } // namespace Fooyin
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,19 +40,25 @@ InfoView::InfoView(QWidget* parent)
 
 void InfoView::resizeView()
 {
-    const int lastColumn = model()->columnCount() - 1;
+    if(!model() || model()->columnCount() <= 0) {
+        return;
+    }
+
+    const int lastColumn    = model()->columnCount() - 1;
+    const int viewportWidth = viewport()->width();
 
     if(!m_elideText) {
-        const int geometryWidth = geometry().width();
-
         header()->setSectionResizeMode(lastColumn, QHeaderView::Fixed);
-        header()->resizeSection(lastColumn, static_cast<int>(static_cast<double>(geometryWidth) * 1.25));
+        header()->resizeSection(lastColumn, static_cast<int>(static_cast<double>(viewportWidth) * 1.25));
         header()->setStretchLastSection(false);
     }
     else {
-        header()->setSectionResizeMode(lastColumn, QHeaderView::Stretch);
-        header()->adjustSize();
-        header()->setStretchLastSection(true);
+        int columnsWidth = 0;
+        for(int i{0}; i < lastColumn; ++i) {
+            columnsWidth += header()->sectionSize(i);
+        }
+        header()->setSectionResizeMode(lastColumn, QHeaderView::Fixed);
+        header()->resizeSection(lastColumn, std::max(0, viewportWidth - columnsWidth));
     }
 }
 

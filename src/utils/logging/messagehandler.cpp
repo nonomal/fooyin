@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -85,7 +85,7 @@ void MessageHandler::handler(QtMsgType type, const QMessageLogContext& context, 
     }
 
     QMetaObject::invokeMethod(
-        instance(), [formattedMsg, type]() { emit instance() -> showMessage(formattedMsg, type); },
+        instance(), [formattedMsg, type]() { Q_EMIT instance()->showMessage(formattedMsg, type); },
         Qt::QueuedConnection);
 }
 

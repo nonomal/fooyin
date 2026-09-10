@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,11 +24,29 @@
 
 #include <utils/treestatusitem.h>
 
+#include <QApplication>
 #include <QLoggingCategory>
 
 Q_LOGGING_CATEGORY(PL_COLMOD, "fy.playlistcolmodel")
 
 using namespace Qt::StringLiterals;
+
+namespace {
+QString normaliseWriteField(QString field)
+{
+    field = field.trimmed();
+
+    if(field.isEmpty()) {
+        return {};
+    }
+
+    if(field.size() >= 2 && field.startsWith(u'%') && field.endsWith(u'%')) {
+        field = field.sliced(1, field.size() - 2).trimmed();
+    }
+
+    return field;
+}
+} // namespace
 
 namespace Fooyin {
 ColumnItem::ColumnItem()
@@ -40,7 +58,7 @@ ColumnItem::ColumnItem(PlaylistColumn column, ColumnItem* parent)
     , m_column{std::move(column)}
 { }
 
-PlaylistColumn ColumnItem::column() const
+const PlaylistColumn& ColumnItem::column() const
 {
     return m_column;
 }
@@ -83,7 +101,7 @@ void PlaylistColumnModel::processQueue()
         const PlaylistColumn column         = node.column();
 
         switch(status) {
-            case(ColumnItem::Added): {
+            case ColumnItem::Added: {
                 if(column.field.isEmpty()) {
                     break;
                 }
@@ -98,7 +116,7 @@ void PlaylistColumnModel::processQueue()
                 }
                 break;
             }
-            case(ColumnItem::Removed): {
+            case ColumnItem::Removed: {
                 if(m_columnsRegistry->removeById(column.id)) {
                     beginRemoveRows({}, node.row(), node.row());
                     m_root.removeChild(node.row());
@@ -110,7 +128,7 @@ void PlaylistColumnModel::processQueue()
                 }
                 break;
             }
-            case(ColumnItem::Changed): {
+            case ColumnItem::Changed: {
                 if(m_columnsRegistry->changeItem(column)) {
                     if(const auto changedItem = m_columnsRegistry->itemById(column.id)) {
                         node.changeColumn(changedItem.value());
@@ -122,7 +140,7 @@ void PlaylistColumnModel::processQueue()
                 }
                 break;
             }
-            case(ColumnItem::None):
+            case ColumnItem::None:
                 break;
         }
     }
@@ -140,11 +158,20 @@ Qt::ItemFlags PlaylistColumnModel::flags(const QModelIndex& index) const
         return Qt::NoItemFlags;
     }
 
-    auto flags = ExtendableTableModel::flags(index);
+    Qt::ItemFlags flags = ExtendableTableModel::flags(index);
 
-    auto* item = static_cast<ColumnItem*>(index.internalPointer());
-    if(item && !item->column().isDefault) {
-        flags |= Qt::ItemIsEditable;
+    switch(index.column()) {
+        case 0:
+            flags |= Qt::ItemIsUserCheckable;
+            break;
+        case 2:
+        case 3:
+        case 4:
+        case 5:
+            flags |= Qt::ItemIsEditable;
+            break;
+        default:
+            break;
     }
 
     return flags;
@@ -153,7 +180,7 @@ Qt::ItemFlags PlaylistColumnModel::flags(const QModelIndex& index) const
 QVariant PlaylistColumnModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole || orientation == Qt::Orientation::Vertical) {
@@ -161,12 +188,18 @@ QVariant PlaylistColumnModel::headerData(int section, Qt::Orientation orientatio
     }
 
     switch(section) {
-        case(0):
+        case 0:
+            return tr("Enabled");
+        case 1:
             return tr("Index");
-        case(1):
+        case 2:
             return tr("Name");
-        case(2):
-            return tr("Field");
+        case 3:
+            return tr("Display Script");
+        case 4:
+            return tr("Sort Script");
+        case 5:
+            return tr("Write Field");
         default:
             break;
     }
@@ -186,21 +219,63 @@ QVariant PlaylistColumnModel::data(const QModelIndex& index, int role) const
         return item->font();
     }
 
+    if(role == Qt::TextAlignmentRole && index.column() == 0) {
+        return Qt::AlignCenter;
+    }
+
     if(role == Qt::UserRole) {
         return QVariant::fromValue(item->column());
     }
 
-    if(role == Qt::DisplayRole || role == Qt::EditRole) {
-        switch(index.column()) {
-            case(0):
-                return item->column().index;
-            case(1): {
-                const QString& name = item->column().name;
+    const PlaylistColumn& columnData = item->column();
+    const int column                 = index.column();
+    const QString& sortField         = columnData.sortField;
+    const QString& writeField        = columnData.writeField;
+
+    if(column == 0 && role == Qt::CheckStateRole) {
+        return columnData.enabled ? Qt::Checked : Qt::Unchecked;
+    }
+
+    if((column == 4 && role == Qt::ForegroundRole && sortField.isEmpty())
+       || (column == 5 && role == Qt::ForegroundRole && writeField.isEmpty())) {
+        return QApplication::palette().color(QPalette::PlaceholderText);
+    }
+
+    if(role == Qt::EditRole) {
+        switch(column) {
+            case 1:
+                return columnData.index;
+            case 2:
+                return columnData.name;
+            case 3:
+                return columnData.field;
+            case 4:
+                return sortField;
+            case 5:
+                return writeField;
+            default:
+                break;
+        }
+    }
+
+    if(role == Qt::DisplayRole) {
+        switch(column) {
+            case 1: {
+                return columnData.index;
+            }
+            case 2: {
+                const QString& name = columnData.name;
                 return !name.isEmpty() ? name : u"<enter name here>"_s;
             }
-            case(2): {
-                const QString& field = item->column().field;
+            case 3: {
+                const QString& field = columnData.field;
                 return !field.isEmpty() ? field : u"<enter field here>"_s;
+            }
+            case 4: {
+                return !sortField.isEmpty() ? sortField : tr("Use display script");
+            }
+            case 5: {
+                return !writeField.isEmpty() ? writeField : tr("No write field");
             }
             default:
                 break;
@@ -212,33 +287,61 @@ QVariant PlaylistColumnModel::data(const QModelIndex& index, int role) const
 
 bool PlaylistColumnModel::setData(const QModelIndex& index, const QVariant& value, int role)
 {
-    if(role != Qt::EditRole) {
+    if(role != Qt::EditRole && role != Qt::CheckStateRole) {
         return false;
     }
 
     auto* item            = static_cast<ColumnItem*>(index.internalPointer());
     PlaylistColumn column = item->column();
 
-    switch(index.column()) {
-        case(1): {
-            if(value.toString() == u"<enter name here>"_s || column.name == value.toString()) {
-                if(item->status() == ColumnItem::Added) {
-                    emit pendingRowCancelled();
+    if(index.column() == 0 && role == Qt::CheckStateRole) {
+        const bool enabled = value.value<Qt::CheckState>() == Qt::Checked;
+        if(column.enabled == enabled) {
+            return false;
+        }
+        column.enabled = enabled;
+    }
+    else if(role == Qt::EditRole) {
+        switch(index.column()) {
+            case 2: {
+                if(value.toString() == u"<enter name here>"_s || column.name == value.toString()) {
+                    if(item->status() == ColumnItem::Added) {
+                        Q_EMIT pendingRowCancelled();
+                    }
+                    return false;
                 }
-                return false;
+                column.name = value.toString();
+                break;
             }
-            column.name = value.toString();
-            break;
-        }
-        case(2): {
-            if(column.field == value.toString()) {
-                return false;
+            case 3: {
+                if(column.field == value.toString()) {
+                    return false;
+                }
+                column.field = value.toString();
+                break;
             }
-            column.field = value.toString();
-            break;
+            case 4: {
+                const QString sortField = value.toString();
+                if(column.sortField == sortField || sortField == tr("Use display script")) {
+                    return false;
+                }
+                column.sortField = sortField;
+                break;
+            }
+            case 5: {
+                const QString writeField = normaliseWriteField(value.toString());
+                if(column.writeField == writeField || writeField == tr("No write field")) {
+                    return false;
+                }
+                column.writeField = writeField;
+                break;
+            }
+            default:
+                return false;
         }
-        default:
-            break;
+    }
+    else {
+        return false;
     }
 
     if(item->status() == ColumnItem::None) {
@@ -246,7 +349,7 @@ bool PlaylistColumnModel::setData(const QModelIndex& index, const QVariant& valu
     }
 
     item->changeColumn(column);
-    emit dataChanged(index, index, {Qt::FontRole, Qt::DisplayRole});
+    Q_EMIT dataChanged(index, index, {Qt::FontRole, Qt::DisplayRole, Qt::CheckStateRole, Qt::UserRole});
 
     return true;
 }
@@ -257,8 +360,7 @@ QModelIndex PlaylistColumnModel::index(int row, int column, const QModelIndex& p
         return {};
     }
 
-    ColumnItem* item = m_root.child(row);
-
+    const ColumnItem* item = m_root.child(row);
     return createIndex(row, column, item);
 }
 
@@ -269,7 +371,7 @@ int PlaylistColumnModel::rowCount(const QModelIndex& /*parent*/) const
 
 int PlaylistColumnModel::columnCount(const QModelIndex& /*parent*/) const
 {
-    return 3;
+    return 6;
 }
 
 bool PlaylistColumnModel::removeRows(int row, int count, const QModelIndex& /*parent*/)

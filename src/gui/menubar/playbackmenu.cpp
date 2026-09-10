@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 #include <core/player/playercontroller.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
@@ -40,12 +41,14 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
     , m_actionManager{actionManager}
     , m_playerController{playerController}
     , m_settings{settings}
-    , m_playIcon{Utils::iconFromTheme(Constants::Icons::Play)}
-    , m_pauseIcon{Utils::iconFromTheme(Constants::Icons::Pause)}
-    , m_stop{new QAction(Utils::iconFromTheme(Constants::Icons::Stop), tr("&Stop"), this)}
-    , m_playPause{new QAction(m_playIcon, tr("&Play"), this)}
-    , m_previous{new QAction(Utils::iconFromTheme(Constants::Icons::Prev), tr("P&revious"), this)}
-    , m_next{new QAction(Utils::iconFromTheme(Constants::Icons::Next), tr("&Next"), this)}
+    , m_stop{new QAction(tr("&Stop"), this)}
+    , m_playPause{new QAction(tr("&Play"), this)}
+    , m_previous{new QAction(tr("P&revious"), this)}
+    , m_next{new QAction(tr("&Next"), this)}
+    , m_previousAlbum{new QAction(tr("&Previous album"), this)}
+    , m_nextAlbum{new QAction(tr("&Next album"), this)}
+    , m_randomTrack{new QAction(tr("Random &track"), this)}
+    , m_randomAlbum{new QAction(tr("Random &album"), this)}
     , m_defaultPlayback{new QAction(tr("&Default"), this)}
     , m_repeatTrack{new QAction(tr("Repeat &track"), this)}
     , m_repeatAlbum{new QAction(tr("Repeat &album"), this)}
@@ -56,6 +59,12 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
     , m_stopAfterCurrent{new QAction(tr("Stop &after current"), this)}
     , m_resetStopAfterCurrent{new QAction(tr("&Reset the above after stopping"), this)}
 {
+    Gui::setThemeIcon(m_stop, Constants::Icons::Stop);
+    Gui::setThemeIcon(m_previous, Constants::Icons::Prev);
+    Gui::setThemeIcon(m_next, Constants::Icons::Next);
+    Gui::setThemeIcon(m_randomTrack, Constants::Icons::RandomPlay);
+    Gui::setThemeIcon(m_randomAlbum, Constants::Icons::RandomPlay);
+
     auto* playbackMenu = m_actionManager->actionContainer(Constants::Menus::Playback);
 
     const QStringList playbackCategory = {tr("Playback")};
@@ -92,10 +101,52 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
     prevCmd->setAttribute(ProxyAction::UpdateText);
     playbackMenu->addAction(prevCmd);
 
+    QStringList randomCategory{playbackCategory};
+    randomCategory.append(tr("Random"));
+
+    auto* randomMenu = m_actionManager->createMenu(Constants::Menus::PlaybackRandom);
+    randomMenu->menu()->setTitle(tr("Ra&ndom"));
+    playbackMenu->addMenu(randomMenu);
+
+    m_randomTrack->setStatusTip(tr("Start playing a random track in the current playlist"));
+    auto* randomTrackCmd = actionManager->registerAction(m_randomTrack, Constants::Actions::RandomTrack);
+    randomTrackCmd->setCategories(randomCategory);
+    randomTrackCmd->setDescription(tr("Random Track"));
+    randomMenu->addAction(randomTrackCmd);
+
+    m_randomAlbum->setStatusTip(tr("Start playing the first track of a random album in the current playlist"));
+    auto* randomAlbumCmd = actionManager->registerAction(m_randomAlbum, Constants::Actions::RandomAlbum);
+    randomAlbumCmd->setCategories(randomCategory);
+    randomAlbumCmd->setDescription(tr("Random Album"));
+    randomMenu->addAction(randomAlbumCmd);
+
+    QStringList skipCategory{playbackCategory};
+    skipCategory.append(tr("Skip to"));
+
+    auto* skipToMenu = m_actionManager->createMenu(Constants::Menus::PlaybackSkipTo);
+    skipToMenu->menu()->setTitle(tr("Skip &to"));
+    playbackMenu->addMenu(skipToMenu);
+
+    m_nextAlbum->setStatusTip(tr("Start playing the first track of the next album in the current playlist"));
+    auto* nextAlbumCmd = actionManager->registerAction(m_nextAlbum, Constants::Actions::NextAlbum);
+    nextAlbumCmd->setCategories(skipCategory);
+    nextAlbumCmd->setDescription(tr("Next Album"));
+    skipToMenu->addAction(nextAlbumCmd);
+
+    m_previousAlbum->setStatusTip(tr("Start playing the first track of the previous album in the current playlist"));
+    auto* previousAlbumCmd = actionManager->registerAction(m_previousAlbum, Constants::Actions::PreviousAlbum);
+    previousAlbumCmd->setCategories(skipCategory);
+    previousAlbumCmd->setDescription(tr("Previous Album"));
+    skipToMenu->addAction(previousAlbumCmd);
+
     QObject::connect(m_stop, &QAction::triggered, playerController, &PlayerController::stop);
     QObject::connect(m_playPause, &QAction::triggered, playerController, &PlayerController::playPause);
     QObject::connect(m_next, &QAction::triggered, playerController, &PlayerController::next);
     QObject::connect(m_previous, &QAction::triggered, playerController, &PlayerController::previous);
+    QObject::connect(m_previousAlbum, &QAction::triggered, playerController, &PlayerController::previousAlbum);
+    QObject::connect(m_nextAlbum, &QAction::triggered, playerController, &PlayerController::nextAlbum);
+    QObject::connect(m_randomTrack, &QAction::triggered, playerController, &PlayerController::randomTrack);
+    QObject::connect(m_randomAlbum, &QAction::triggered, playerController, &PlayerController::randomAlbum);
 
     playbackMenu->addSeparator();
 
@@ -171,8 +222,15 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
 
     auto* followPlayback = new QAction(tr("Cursor follows play&back"), this);
     followPlayback->setStatusTip(tr("Select the currently playing track when changed"));
+    auto* followPlaybackCmd = actionManager->registerAction(followPlayback, Constants::Actions::CursorFollowsPlayback);
+    followPlaybackCmd->setCategories(playbackCategory);
+    followPlaybackCmd->setAttribute(ProxyAction::UpdateText);
+
     auto* followCursor = new QAction(tr("Playback follows &cursor"), this);
     followCursor->setStatusTip(tr("Start playback of the currently selected track on next"));
+    auto* followCursorCmd = actionManager->registerAction(followCursor, Constants::Actions::PlaybackFollowsCursor);
+    followCursorCmd->setCategories(playbackCategory);
+    followCursorCmd->setAttribute(ProxyAction::UpdateText);
 
     m_stopAfterCurrent->setStatusTip(tr("Stop playback at the end of the current track"));
     auto* stopCurrentCmd = actionManager->registerAction(m_stopAfterCurrent, Constants::Actions::StopAfterCurrent);
@@ -183,6 +241,7 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
     auto* resetStopCurrentCmd
         = actionManager->registerAction(m_resetStopAfterCurrent, Constants::Actions::StopAfterCurrentReset);
     resetStopCurrentCmd->setCategories(playbackCategory);
+    resetStopCurrentCmd->setDescription(tr("Reset 'Stop after current' after stopping"));
     resetStopCurrentCmd->setAttribute(ProxyAction::UpdateText);
 
     m_stopAfterCurrent->setCheckable(true);
@@ -213,8 +272,8 @@ PlaybackMenu::PlaybackMenu(ActionManager* actionManager, PlayerController* playe
     m_settings->subscribe<Settings::Gui::PlaybackFollowsCursor>(
         this, [followCursor](bool enabled) { followCursor->setChecked(enabled); });
 
-    playbackMenu->addAction(followPlayback);
-    playbackMenu->addAction(followCursor);
+    playbackMenu->addAction(followPlaybackCmd->action());
+    playbackMenu->addAction(followCursorCmd->action());
     playbackMenu->addSeparator();
     playbackMenu->addAction(stopCurrentCmd->action());
     playbackMenu->addAction(resetStopCurrentCmd->action());
@@ -227,11 +286,11 @@ void PlaybackMenu::updatePlayPause(Player::PlayState state) const
 {
     if(state == Player::PlayState::Playing) {
         m_playPause->setText(tr("&Pause"));
-        m_playPause->setIcon(m_pauseIcon);
+        Gui::setThemeIcon(m_playPause, Constants::Icons::Pause);
     }
     else {
         m_playPause->setText(tr("&Play"));
-        m_playPause->setIcon(m_playIcon);
+        Gui::setThemeIcon(m_playPause, Constants::Icons::Play);
     }
 }
 

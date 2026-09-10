@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,6 @@
 #include "discordpresencedata.h"
 
 #include <core/player/playerdefs.h>
-#include <core/track.h>
 
 #include <QLocalSocket>
 
@@ -50,11 +49,13 @@ public:
     QCoro::Task<> changeClientId(const QString clientId);
 
 private:
+    void logSocketError(QLocalSocket::LocalSocketError error);
     void setError(const QString& error);
 
+    [[nodiscard]] bool hasCompleteMessage();
     std::optional<DiscordMessage> readMessage();
     void sendMessage(const QJsonObject& packet, int opCode);
-    bool processMessage(const DiscordMessage message);
+    bool processMessage(const DiscordMessage& message);
 
     QCoro::Task<bool> waitForReadyRead();
     QCoro::Task<bool> startHandshake();
@@ -64,7 +65,10 @@ private:
 
     QString m_clientId;
 
+    quint64 m_connectGeneration;
+    bool m_connectInProgress;
     bool m_handshakeCompleted;
+    bool m_loggedServerNotFound;
     QString m_error;
 };
 } // namespace Fooyin::Discord

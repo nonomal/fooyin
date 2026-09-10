@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 
 #include "artworksource.h"
 
+#include <core/coresettings.h>
+#include <core/network/networkutils.h>
 #include <utils/stringutils.h>
 #include <utils/utils.h>
 
@@ -39,6 +41,14 @@ using namespace Qt::StringLiterals;
 constexpr auto MaxSize = 1024;
 
 namespace {
+Fooyin::Utils::DetectEncodingOptions detectEncodingOptions()
+{
+    const Fooyin::FySettings settings;
+    return {
+        .preferredFallbackEncoding
+        = settings.value(QString::fromLatin1(Fooyin::Utils::PreferredFallbackEncodingSetting)).toString().toLatin1()};
+}
+
 QSize calculateScaledSize(const QSize& originalSize, int maxSize)
 {
     int newWidth{0};
@@ -174,7 +184,7 @@ QString ArtworkSource::toUtf8(QIODevice* file)
         toUtf16 = QStringDecoder{encoding.value()};
     }
     else {
-        const auto encodingName = Utils::detectEncoding(data);
+        const auto encodingName = Utils::detectEncoding(data, detectEncodingOptions());
         if(encodingName.isEmpty()) {
             return {};
         }
@@ -229,8 +239,7 @@ QNetworkRequest ArtworkSource::createRequest(const QUrl& url, const std::map<QSt
     QUrl reqUrl{url};
     reqUrl.setQuery(queryUrl);
 
-    QNetworkRequest req{reqUrl};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkRequest req = makeNetworkRequest(reqUrl);
     req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/x-www-form-urlencoded"_s);
 
     qCDebug(ARTWORK) << "Sending request" << queryUrl.toString(QUrl::FullyDecoded);

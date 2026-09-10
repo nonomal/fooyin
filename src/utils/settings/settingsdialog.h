@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,10 +23,15 @@
 
 #include <utils/id.h>
 
+#include <QByteArray>
 #include <QDialog>
+#include <QString>
+
+#include <set>
 
 class QDialogButtonBox;
 class QStackedLayout;
+class QModelIndex;
 
 namespace Fooyin {
 class SettingsModel;
@@ -43,6 +48,8 @@ public:
     void openPage(const Id& id);
 
     [[nodiscard]] Id currentPage() const;
+    [[nodiscard]] QByteArray saveState() const;
+    void restoreState(const QByteArray& state);
 
     void done(int value) override;
     void accept() override;
@@ -50,11 +57,11 @@ public:
 
     [[nodiscard]] QSize sizeHint() const override;
 
-signals:
+Q_SIGNALS:
     void resettingAll();
 
 private:
-    void apply();
+    bool apply();
     void reset();
     void resetAll();
     void showCategory(const QModelIndex& index);
@@ -62,6 +69,7 @@ private:
     void currentChanged(const QModelIndex& current);
     void currentTabChanged(int index);
     SettingsPage* findPage(const Id& id);
+    static QString categoryKey(const QModelIndex& index);
 
     SettingsModel* m_model;
     SimpleTreeView* m_categoryTree;

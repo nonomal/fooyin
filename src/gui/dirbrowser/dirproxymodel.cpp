@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +20,14 @@
 #include "dirproxymodel.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
+#include <gui/widgets/autoheaderview.h>
 #include <utils/modelutils.h>
 #include <utils/utils.h>
 
 #include <QAbstractFileIconProvider>
 #include <QApplication>
+#include <QFileInfo>
 #include <QFileSystemModel>
 #include <QPalette>
 #include <QPixmap>
@@ -39,8 +42,10 @@ DirProxyModel::DirProxyModel(bool flat, QObject* parent)
     , m_playingState{Player::PlayState::Stopped}
     , m_showIcons{true}
     , m_playingColour{QApplication::palette().highlight().color()}
+    , m_columnAlignments{Qt::AlignLeft, Qt::AlignRight, Qt::AlignLeft, Qt::AlignLeft}
 {
     m_playingColour.setAlpha(90);
+    setRecursiveFilteringEnabled(true);
 }
 
 void DirProxyModel::reset(const QModelIndex& root)
@@ -113,10 +118,27 @@ Qt::ItemFlags DirProxyModel::flags(const QModelIndex& index) const
 QVariant DirProxyModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
+    }
+
+    if(role == AutoHeaderView::SectionAlignment) {
+        return columnAlignment(section).toInt();
     }
 
     return sourceModel()->headerData(section, orientation, role);
+}
+
+bool DirProxyModel::setHeaderData(int section, Qt::Orientation orientation, const QVariant& value, int role)
+{
+    if(role != AutoHeaderView::SectionAlignment || section < 0
+       || std::cmp_greater_equal(section, m_columnAlignments.size())) {
+        return QSortFilterProxyModel::setHeaderData(section, orientation, value, role);
+    }
+
+    m_columnAlignments.at(section) = value.value<Qt::Alignment>();
+    Q_EMIT headerDataChanged(orientation, section, section);
+    Utils::recursiveDataChanged(this, {}, {Qt::TextAlignmentRole});
+    return true;
 }
 
 QVariant DirProxyModel::data(const QModelIndex& proxyIndex, int role) const
@@ -156,18 +178,29 @@ QVariant DirProxyModel::data(const QModelIndex& proxyIndex, int role) const
         sourcePath = QSortFilterProxyModel::data(proxyIndex, QFileSystemModel::FilePathRole).toString();
     }
 
-    if(m_playingState != Player::PlayState::Stopped && !m_playingTrackPath.isEmpty()
-       && sourcePath == m_playingTrackPath) {
+    if(role == Qt::TextAlignmentRole) {
+        return QVariant::fromValue(Qt::AlignVCenter | columnAlignment(proxyIndex.column()));
+    }
+
+    const bool isPlayingTrack = m_playingState != Player::PlayState::Stopped && !m_playingTrackPath.isEmpty()
+                             && sourcePath == m_playingTrackPath;
+    const bool isPlayingCell  = isPlayingTrack && proxyIndex.column() == 0;
+
+    if(role == IsPlaying) {
+        return isPlayingCell;
+    }
+
+    if(isPlayingTrack) {
         if(role == Qt::BackgroundRole) {
             return m_playingColour;
         }
-        if(role == Qt::DecorationRole) {
+        if(role == Qt::DecorationRole && isPlayingCell) {
             switch(m_playingState) {
-                case(Player::PlayState::Playing):
-                    return Utils::pixmapFromTheme(Constants::Icons::Play);
-                case(Player::PlayState::Paused):
-                    return Utils::pixmapFromTheme(Constants::Icons::Pause);
-                case(Player::PlayState::Stopped):
+                case Player::PlayState::Playing:
+                    return Gui::pixmapFromTheme(Constants::Icons::Play);
+                case Player::PlayState::Paused:
+                    return Gui::pixmapFromTheme(Constants::Icons::Pause);
+                case Player::PlayState::Stopped:
                     break;
             }
         }
@@ -178,6 +211,14 @@ QVariant DirProxyModel::data(const QModelIndex& proxyIndex, int role) const
     }
 
     return QSortFilterProxyModel::data(proxyIndex, role);
+}
+
+Qt::Alignment DirProxyModel::columnAlignment(int column) const
+{
+    if(column < 0 || std::cmp_greater_equal(column, m_columnAlignments.size())) {
+        return Qt::AlignLeft;
+    }
+    return m_columnAlignments.at(column);
 }
 
 QModelIndex DirProxyModel::parent(const QModelIndex& child) const
@@ -241,9 +282,14 @@ int DirProxyModel::rowCount(const QModelIndex& index) const
     return index.isValid() ? 0 : nodeCount();
 }
 
-int DirProxyModel::columnCount(const QModelIndex& /*index*/) const
+int DirProxyModel::columnCount(const QModelIndex& index) const
 {
-    return 1;
+    if(m_flat && index.isValid()) {
+        return 0;
+    }
+
+    const QModelIndex sourceParent = m_flat ? QModelIndex{m_sourceRoot} : mapToSource(index);
+    return sourceModel()->columnCount(sourceParent);
 }
 
 QModelIndex DirProxyModel::mapFromSource(const QModelIndex& index) const
@@ -256,11 +302,12 @@ QModelIndex DirProxyModel::mapFromSource(const QModelIndex& index) const
         return {};
     }
 
-    const auto indexIt
-        = std::ranges::find_if(m_nodes, [&index](const auto& node) { return node->sourceIndex == index; });
+    const QModelIndex firstColumnIndex = index.siblingAtColumn(0);
+    const auto indexIt                 = std::ranges::find_if(
+        m_nodes, [&firstColumnIndex](const auto& node) { return node->sourceIndex == firstColumnIndex; });
     if(indexIt != m_nodes.cend()) {
         const auto row = static_cast<int>(std::distance(m_nodes.begin(), indexIt));
-        return createIndex(row, 0, indexIt->get());
+        return createIndex(row, index.column(), indexIt->get());
     }
 
     return {};
@@ -277,10 +324,15 @@ QModelIndex DirProxyModel::mapToSource(const QModelIndex& index) const
     }
 
     if(auto* node = static_cast<DirNode*>(index.internalPointer())) {
-        return node->sourceIndex;
+        return QModelIndex{node->sourceIndex}.siblingAtColumn(index.column());
     }
 
     return {};
+}
+
+void DirProxyModel::sort(int column, Qt::SortOrder order)
+{
+    sourceModel()->sort(column, order);
 }
 
 bool DirProxyModel::canGoUp() const
@@ -306,13 +358,55 @@ void DirProxyModel::setIconsEnabled(bool enabled)
 void DirProxyModel::setPlayState(Player::PlayState state)
 {
     m_playingState = state;
-    Utils::recursiveDataChanged(this, {}, {Qt::BackgroundRole, Qt::DecorationRole});
+    Utils::recursiveDataChanged(this, {}, {Qt::BackgroundRole, Qt::DecorationRole, IsPlaying});
 }
 
 void DirProxyModel::setPlayingPath(const QString& path)
 {
-    m_playingTrackPath = path;
-    Utils::recursiveDataChanged(this, {}, {Qt::BackgroundRole, Qt::DecorationRole});
+    if(std::exchange(m_playingTrackPath, path) == path) {
+        return;
+    }
+
+    Utils::recursiveDataChanged(this, {}, {Qt::BackgroundRole, Qt::DecorationRole, IsPlaying});
+}
+
+void DirProxyModel::setSearchText(const QString& text)
+{
+    if(std::exchange(m_searchText, text) == text) {
+        return;
+    }
+
+    if(m_flat) {
+        reset(m_sourceRoot);
+    }
+    else {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+        beginFilterChange();
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+        invalidateRowsFilter();
+#endif
+    }
+}
+
+bool DirProxyModel::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const
+{
+    if(m_flat || m_searchText.isEmpty()) {
+        return QSortFilterProxyModel::filterAcceptsRow(sourceRow, sourceParent);
+    }
+
+    return matchesSearch(sourceModel()->index(sourceRow, 0, sourceParent));
+}
+
+bool DirProxyModel::matchesSearch(const QModelIndex& sourceIndex) const
+{
+    if(m_searchText.isEmpty()) {
+        return true;
+    }
+
+    const QString path = sourceIndex.data(QFileSystemModel::FilePathRole).toString();
+    const QString name = path.isEmpty() ? sourceIndex.data(Qt::DisplayRole).toString() : QFileInfo{path}.fileName();
+    return name.contains(m_searchText, Qt::CaseInsensitive);
 }
 
 void DirProxyModel::populate()
@@ -334,7 +428,10 @@ void DirProxyModel::populate()
     m_nodes.reserve(m_nodes.size() + rowCount);
 
     for(int row{0}; row <= last; ++row) {
-        m_nodes.emplace_back(std::make_unique<DirNode>(sourceModel()->index(row, 0, m_sourceRoot)));
+        const QModelIndex sourceIndex = sourceModel()->index(row, 0, m_sourceRoot);
+        if(matchesSearch(sourceIndex)) {
+            m_nodes.emplace_back(std::make_unique<DirNode>(sourceIndex));
+        }
     }
 }
 
@@ -345,6 +442,11 @@ int DirProxyModel::nodeCount() const
 
 void DirProxyModel::sourceRowsRemoved(const QModelIndex& parent, int first, int last)
 {
+    if(!m_searchText.isEmpty()) {
+        reset(m_sourceRoot);
+        return;
+    }
+
     const QString path = parent.data(QFileSystemModel::FilePathRole).toString();
     if(path != m_rootPath) {
         return;

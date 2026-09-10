@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,10 +23,24 @@
 #include <gui/widgets/clickablelabel.h>
 #include <utils/stringutils.h>
 
+#include <QEvent>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 
 using namespace Qt::StringLiterals;
+
+namespace {
+QString widestDigitsText(QString text)
+{
+    for(QChar& ch : text) {
+        if(ch.isDigit()) {
+            ch = u'8'; // Safer upper bound
+        }
+    }
+
+    return text;
+}
+} // namespace
 
 namespace Fooyin {
 class SeekContainerPrivate
@@ -35,11 +49,15 @@ public:
     SeekContainerPrivate(SeekContainer* self, PlayerController* playerController);
 
     void reset();
+    [[nodiscard]] QString elapsedWidthText() const;
+    [[nodiscard]] QString totalWidthText() const;
+    void updateLabelWidth(ClickableLabel* label, const QString& text) const;
+    void updateLabelWidths() const;
+    [[nodiscard]] bool hasLiveDuration() const;
 
     void trackChanged(const Track& track);
     void stateChanged(Player::PlayState state);
     void updateLabels(uint64_t time) const;
-    void updateLabelSize() const;
 
     SeekContainer* m_self;
 
@@ -49,7 +67,8 @@ public:
     ClickableLabel* m_elapsed;
     ClickableLabel* m_total;
     uint64_t m_max{0};
-    bool m_elapsedTotal{false};
+    bool m_showRemainingTime{false};
+    QString m_liveText{SeekContainer::tr("Live")};
 };
 
 SeekContainerPrivate::SeekContainerPrivate(SeekContainer* self, PlayerController* playerController)
@@ -71,6 +90,47 @@ void SeekContainerPrivate::reset()
 {
     m_max = 0;
     updateLabels(m_max);
+    updateLabelWidths();
+}
+
+QString SeekContainerPrivate::elapsedWidthText() const
+{
+    return widestDigitsText(Utils::msToString(m_max));
+}
+
+QString SeekContainerPrivate::totalWidthText() const
+{
+    if(hasLiveDuration()) {
+        return m_liveText;
+    }
+
+    const QString totalText         = widestDigitsText(Utils::msToString(m_max));
+    const QString remainingTimeText = u"-"_s + totalText;
+    return m_showRemainingTime ? remainingTimeText : totalText;
+}
+
+void SeekContainerPrivate::updateLabelWidth(ClickableLabel* label, const QString& text) const
+{
+    if(!label) {
+        return;
+    }
+
+    const QFontMetrics fm{label->fontMetrics()};
+    const auto margins = label->contentsMargins();
+    const int width    = fm.horizontalAdvance(text) + margins.left() + margins.right() + (2 * label->margin()) + 2;
+    label->setFixedWidth(width);
+}
+
+void SeekContainerPrivate::updateLabelWidths() const
+{
+    updateLabelWidth(m_elapsed, elapsedWidthText());
+    updateLabelWidth(m_total, totalWidthText());
+}
+
+bool SeekContainerPrivate::hasLiveDuration() const
+{
+    const Track track = m_playerController->currentTrack();
+    return track.isValid() && track.isRemote() && !m_playerController->currentTrackSeekable() && m_max == 0;
 }
 
 void SeekContainerPrivate::trackChanged(const Track& track)
@@ -78,6 +138,7 @@ void SeekContainerPrivate::trackChanged(const Track& track)
     if(track.isValid()) {
         m_max = track.duration();
         updateLabels(0);
+        updateLabelWidths();
     }
 }
 
@@ -100,23 +161,23 @@ void SeekContainerPrivate::stateChanged(Player::PlayState state)
 
 void SeekContainerPrivate::updateLabels(uint64_t time) const
 {
-    m_elapsed->setText(Utils::msToString(time));
+    const auto elapsed = Utils::msToString(time);
+    m_elapsed->setText(elapsed);
 
-    if(m_elapsedTotal) {
-        const int remaining = static_cast<int>(m_max - time);
-        m_total->setText(u"-"_s + Utils::msToString(remaining < 0 ? 0 : remaining));
+    if(hasLiveDuration()) {
+        m_total->setText(m_liveText);
+        return;
+    }
+
+    QString total;
+    if(m_showRemainingTime) {
+        const int remaining = std::max(0, static_cast<int>(m_max - time));
+        total               = u"-"_s + Utils::msToString(remaining);
     }
     else {
-        m_total->setText(Utils::msToString(m_max));
+        total = Utils::msToString(m_max);
     }
-}
-
-void SeekContainerPrivate::updateLabelSize() const
-{
-    const QFontMetrics fm{m_self->fontMetrics()};
-    const QString zero = Utils::msToString(0) + u"0"_s;
-    m_elapsed->setFixedWidth(fm.horizontalAdvance(zero));
-    m_total->setFixedWidth(fm.horizontalAdvance((m_elapsedTotal ? u"-"_s : QString{}) + zero));
+    m_total->setText(total);
 }
 
 SeekContainer::SeekContainer(PlayerController* playerController, QWidget* parent)
@@ -130,10 +191,15 @@ SeekContainer::SeekContainer(PlayerController* playerController, QWidget* parent
                      [this](Player::PlayState state) { p->stateChanged(state); });
     QObject::connect(p->m_playerController, &PlayerController::currentTrackChanged, this,
                      [this](const Track& track) { p->trackChanged(track); });
+    QObject::connect(p->m_playerController, &PlayerController::currentTrackSeekableChanged, this, [this]() {
+        p->updateLabels(p->m_playerController->currentPosition());
+        p->updateLabelWidths();
+    });
     QObject::connect(p->m_playerController, &PlayerController::positionChanged, this,
                      [this](uint64_t pos) { p->updateLabels(pos); });
 
-    QObject::connect(this, &SeekContainer::totalClicked, this, [this]() { setElapsedTotal(!elapsedTotal()); });
+    QObject::connect(this, &SeekContainer::totalClicked, this,
+                     [this]() { setShowRemainingTime(!showRemainingTime()); });
 }
 
 SeekContainer::~SeekContainer() = default;
@@ -148,30 +214,36 @@ bool SeekContainer::labelsEnabled() const
     return !p->m_elapsed->isHidden() && !p->m_total->isHidden();
 }
 
-bool SeekContainer::elapsedTotal() const
+bool SeekContainer::showRemainingTime() const
 {
-    return p->m_elapsedTotal;
+    return p->m_showRemainingTime;
 }
 
 void SeekContainer::setLabelsEnabled(bool enabled)
 {
     p->m_elapsed->setHidden(!enabled);
     p->m_total->setHidden(!enabled);
-    p->updateLabelSize();
 }
 
-void SeekContainer::setElapsedTotal(bool enabled)
+void SeekContainer::setShowRemainingTime(bool enabled)
 {
-    p->m_elapsedTotal = enabled;
-    p->updateLabelSize();
-    if(!p->m_elapsedTotal) {
-        p->m_total->setText(Utils::msToString(p->m_max));
+    p->m_showRemainingTime = enabled;
+    p->updateLabels(p->m_playerController->currentPosition());
+    p->updateLabelWidths();
+}
+
+void SeekContainer::changeEvent(QEvent* event)
+{
+    QWidget::changeEvent(event);
+
+    switch(event->type()) {
+        case QEvent::FontChange:
+        case QEvent::StyleChange:
+        case QEvent::PaletteChange:
+            p->updateLabelWidths();
+            break;
+        default:
+            break;
     }
-}
-
-void SeekContainer::showEvent(QShowEvent* event)
-{
-    QWidget::showEvent(event);
-    p->updateLabelSize();
 }
 } // namespace Fooyin

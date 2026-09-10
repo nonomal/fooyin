@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -120,14 +120,18 @@ void ReplayGainPopulator::run(const TrackList& tracks)
 
     if(tracks.size() == 1) {
         const Track& track = tracks.front();
-        p->addNodeIfNew(u"TrackGain"_s, tr("Track Gain"), track.rgTrackGain(), ReplayGainModel::ItemParent::Root,
-                        ReplayGainItem::TrackGain, track);
-        p->addNodeIfNew(u"TrackPeak"_s, tr("Track Peak"), track.rgTrackPeak(), ReplayGainModel::ItemParent::Root,
-                        ReplayGainItem::TrackPeak, track);
-        p->addNodeIfNew(u"AlbumGain"_s, tr("Album Gain"), track.rgAlbumGain(), ReplayGainModel::ItemParent::Root,
-                        ReplayGainItem::AlbumGain, track);
-        p->addNodeIfNew(u"AlbumPeak"_s, tr("Album Peak"), track.rgAlbumPeak(), ReplayGainModel::ItemParent::Root,
-                        ReplayGainItem::AlbumPeak, track);
+        p->addNodeIfNew(u"TrackGain"_s, tr("Track Gain"),
+                        track.hasTrackGain() ? track.effectiveRGTrackGain() : Constants::InvalidGain,
+                        ReplayGainModel::ItemParent::Root, ReplayGainItem::TrackGain, track);
+        p->addNodeIfNew(u"TrackPeak"_s, tr("Track Peak"),
+                        track.hasTrackPeak() ? track.effectiveRGTrackPeak() : Constants::InvalidPeak,
+                        ReplayGainModel::ItemParent::Root, ReplayGainItem::TrackPeak, track);
+        p->addNodeIfNew(u"AlbumGain"_s, tr("Album Gain"),
+                        track.hasAlbumGain() ? track.effectiveRGAlbumGain() : Constants::InvalidGain,
+                        ReplayGainModel::ItemParent::Root, ReplayGainItem::AlbumGain, track);
+        p->addNodeIfNew(u"AlbumPeak"_s, tr("Album Peak"),
+                        track.hasAlbumPeak() ? track.effectiveRGAlbumPeak() : Constants::InvalidPeak,
+                        ReplayGainModel::ItemParent::Root, ReplayGainItem::AlbumPeak, track);
     }
     else {
         if(auto* gain
@@ -200,8 +204,8 @@ void ReplayGainPopulator::run(const TrackList& tracks)
     }
 
     if(mayRun()) {
-        emit populated(p->m_data);
-        emit finished();
+        Q_EMIT populated(p->m_data);
+        Q_EMIT finished();
     }
 
     p->reset();

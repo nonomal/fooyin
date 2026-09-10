@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,8 +22,13 @@
 #include <core/scripting/scriptvalue.h>
 
 namespace Fooyin::Scripting {
+ScriptResult boolAnd(const ScriptValueList& vec);
+ScriptResult boolNot(const ScriptValueList& vec);
+ScriptResult boolOr(const ScriptValueList& vec);
+ScriptResult boolXOr(const ScriptValueList& vec);
 ScriptResult cif(const ScriptValueList& vec);
 ScriptResult cif2(const ScriptValueList& vec);
+ScriptResult cif3(const ScriptValueList& vec);
 ScriptResult ifequal(const ScriptValueList& vec);
 ScriptResult ifgreater(const ScriptValueList& vec);
 ScriptResult iflonger(const ScriptValueList& vec);

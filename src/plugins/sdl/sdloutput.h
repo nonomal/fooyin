@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,19 +19,23 @@
 
 #pragma once
 
+#include "sdlaudiosubsystem.h"
+
 #include <core/engine/audiooutput.h>
 
 #include <SDL2/SDL_audio.h>
 #include <SDL2/SDL_events.h>
 
-#include <QBasicTimer>
 #include <QString>
+
+#include <memory>
+#include <optional>
 
 namespace Fooyin::Sdl {
 class SdlOutput : public AudioOutput
 {
 public:
-    SdlOutput();
+    explicit SdlOutput(std::shared_ptr<SdlAudioSubsystem> audioSubsystem);
 
     bool init(const AudioFormat& format) override;
     void uninit() override;
@@ -45,31 +49,30 @@ public:
     OutputState currentState() override;
     [[nodiscard]] OutputDevices getAllDevices(bool isCurrentOutput) override;
 
-    int write(const AudioBuffer& buffer) override;
+    int write(std::span<const std::byte> data, int frameCount) override;
     void setPaused(bool pause) override;
-    void setVolume(double volume) override;
+    [[nodiscard]] bool supportsVolumeControl() const override;
     void setDevice(const QString& device) override;
 
     [[nodiscard]] QString error() const override;
     [[nodiscard]] AudioFormat format() const override;
 
-protected:
-    void timerEvent(QTimerEvent* event) override;
-
 private:
     void checkEvents();
+    [[nodiscard]] int queuedFrames() const;
 
+    std::shared_ptr<SdlAudioSubsystem> m_audioSubsystem;
+    std::optional<SdlAudioLease> m_audioLease;
     AudioFormat m_format;
-    int m_bufferSize;
+    int m_deviceBufferFrames;
+    int m_targetBufferFrames;
     bool m_initialised;
     QString m_device;
-    double m_volume;
 
     SDL_AudioSpec m_desiredSpec;
     SDL_AudioSpec m_obtainedSpec;
     SDL_AudioDeviceID m_audioDeviceId;
 
     SDL_Event m_event;
-    QBasicTimer m_eventTimer;
 };
 } // namespace Fooyin::Sdl

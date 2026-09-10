@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,19 +22,14 @@
 #include <core/coresettings.h>
 #include <core/engine/audioinput.h>
 
-#include <gme/gme.h>
-#undef byte // Fix conflicts with QSpan
+struct Music_Emu;
 
 namespace Fooyin::Gme {
 struct MusicEmuDeleter
 {
-    void operator()(Music_Emu* emu) const
-    {
-        if(emu) {
-            gme_delete(emu);
-        }
-    }
+    void operator()(Music_Emu* emu) const;
 };
+
 using MusicEmuPtr = std::unique_ptr<Music_Emu, MusicEmuDeleter>;
 
 class GmeDecoder : public AudioDecoder
@@ -44,6 +39,7 @@ public:
 
     [[nodiscard]] QStringList extensions() const override;
     [[nodiscard]] bool isSeekable() const override;
+    [[nodiscard]] RepeatHandling repeatHandling() const override;
     [[nodiscard]] bool trackHasChanged() const override;
     [[nodiscard]] Track changedTrack() const override;
 
@@ -55,14 +51,21 @@ public:
 
     AudioBuffer readBuffer(size_t bytes) override;
 
+protected:
+    void playbackHintsChanged(PlaybackHints hints) override;
+
 private:
+    void applyRepeatPolicy();
+
     bool m_repeatTrack;
-    FySettings m_settings;
+    bool m_allowInfiniteRepeat;
+    bool m_isDecoding;
+    bool m_shouldFade;
     AudioFormat m_format;
     MusicEmuPtr m_emu;
     int m_subsong;
     int m_duration;
-    int m_loopLength;
+    int m_fadeLength;
     Track m_changedTrack;
 };
 

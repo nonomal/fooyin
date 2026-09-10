@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +20,13 @@
 #pragma once
 
 #include <core/playlist/playlist.h>
+#include <core/scripting/scripttypes.h>
+#include <gui/scripting/richtext.h>
 #include <utils/treeitem.h>
 
 namespace Fooyin {
 class ScriptParser;
+class ScriptFormatter;
 
 class QueueViewerItem : public TreeItem<QueueViewerItem>
 {
@@ -31,6 +34,9 @@ public:
     enum Role
     {
         RightText = Qt::UserRole,
+        RichTitle,
+        RichRightText,
+        IsPlaybackIcon,
         Track
     };
 
@@ -39,13 +45,16 @@ public:
 
     [[nodiscard]] QString title() const;
     [[nodiscard]] QString subtitle() const;
+    [[nodiscard]] const RichText& richTitle() const;
+    [[nodiscard]] const RichText& richSubtitle() const;
     [[nodiscard]] PlaylistTrack track() const;
 
-    void generateTitle(ScriptParser* parser, const QString& leftScript, const QString& rightScript);
+    void generateTitle(ScriptParser* parser, ScriptFormatter* formatter, const QString& leftScript,
+                       const QString& rightScript, const ScriptContext& context);
 
 private:
-    QString m_title;
-    QString m_subtitle;
+    RichText m_title;
+    RichText m_subtitle;
     PlaylistTrack m_track;
 };
 } // namespace Fooyin

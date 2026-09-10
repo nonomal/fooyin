@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,7 +82,7 @@ public:
     static QImage readImage(QByteArray data);
     static QImage readImage(const QString& path, int requestedSize, const char* hintType);
 
-signals:
+Q_SIGNALS:
     void searchResult(const Fooyin::SearchResults& results);
 
 protected:

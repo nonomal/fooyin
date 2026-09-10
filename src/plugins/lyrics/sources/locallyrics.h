@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,8 @@
 
 #include <core/scripting/scriptparser.h>
 
+#include <stop_token>
+
 namespace Fooyin {
 class SettingsManager;
 
@@ -38,9 +40,11 @@ public:
     [[nodiscard]] bool isLocal() const override;
 
     void search(const SearchParams& params) override;
+    void cancel() override;
 
 private:
     ScriptParser m_parser;
+    std::stop_source m_stopSource;
 };
 } // namespace Lyrics
 } // namespace Fooyin

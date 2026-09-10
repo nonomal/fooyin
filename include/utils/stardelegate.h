@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,11 @@ class FYUTILS_EXPORT StarDelegate : public QStyledItemDelegate
     Q_OBJECT
 
 public:
+    enum Role
+    {
+        MixedValues = Qt::UserRole + 100
+    };
+
     using QStyledItemDelegate::QStyledItemDelegate;
 
     [[nodiscard]] QModelIndex hoveredIndex() const;

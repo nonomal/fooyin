@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -101,7 +101,7 @@ bool ArtworkSourcesModel::setData(const QModelIndex& index, const QVariant& valu
     if(role == Qt::CheckStateRole) {
         const bool isChecked = (value.value<Qt::CheckState>() == Qt::Checked);
         if(std::exchange(source.enabled, isChecked) != isChecked) {
-            emit dataChanged(index, index, {role});
+            Q_EMIT dataChanged(index, index, {role});
             return true;
         }
     }

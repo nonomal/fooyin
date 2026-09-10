@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,9 @@
 
 #include <QObject>
 
+#include <memory>
+#include <vector>
+
 class QAction;
 class QMainWindow;
 
@@ -36,6 +39,13 @@ class SettingsManager;
 class ActionContainer;
 
 using CommandList = std::vector<Command*>;
+
+enum class GlobalShortcutManagement : uint8_t
+{
+    Unavailable = 0,
+    ApplicationManaged,
+    SystemManaged,
+};
 
 class FYUTILS_EXPORT ActionManager : public QObject
 {
@@ -60,14 +70,26 @@ public:
     ActionContainer* createMenuBar(const Id& id);
     Command* registerAction(QAction* action, const Id& id,
                             const Context& context = Context{Constants::Context::Global});
+    bool unregisterAction(QAction* action, const Id& id, const Context& context = Context{Constants::Context::Global});
 
     [[nodiscard]] Command* command(const Id& id) const;
     [[nodiscard]] CommandList commands() const;
     [[nodiscard]] ActionContainer* actionContainer(const Id& id) const;
 
-signals:
+    [[nodiscard]] GlobalShortcutManagement globalShortcutManagement() const;
+    void setGlobalShortcutManagement(GlobalShortcutManagement management);
+    [[nodiscard]] bool globalShortcutConfigurationAvailable() const;
+    void setGlobalShortcutConfigurationAvailable(bool available);
+    void configureGlobalShortcuts();
+
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
+Q_SIGNALS:
     void commandsChanged();
     void contextChanged(const Fooyin::Context& context);
+    void globalShortcutManagementChanged(Fooyin::GlobalShortcutManagement management);
+    void globalShortcutConfigurationAvailabilityChanged(bool available);
+    void globalShortcutConfigurationRequested();
 
 private:
     std::unique_ptr<ActionManagerPrivate> p;

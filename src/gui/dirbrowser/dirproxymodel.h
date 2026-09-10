@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,9 @@
 
 #include <QColor>
 #include <QSortFilterProxyModel>
+#include <QString>
+
+#include <array>
 
 class QAbstractFileIconProvider;
 class QDir;
@@ -42,6 +45,11 @@ class DirProxyModel : public QSortFilterProxyModel
     Q_OBJECT
 
 public:
+    enum Role
+    {
+        IsPlaying = Qt::UserRole + 1000,
+    };
+
     explicit DirProxyModel(bool flat, QObject* parent = nullptr);
 
     void reset(const QModelIndex& root);
@@ -51,15 +59,17 @@ public:
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
+    bool setHeaderData(int section, Qt::Orientation orientation, const QVariant& value, int role) override;
     [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
+    [[nodiscard]] QModelIndex parent(const QModelIndex& index) const override;
+    [[nodiscard]] QModelIndex sibling(int row, int column, const QModelIndex& index) const override;
+    [[nodiscard]] bool hasChildren(const QModelIndex& parent) const override;
     [[nodiscard]] QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
     [[nodiscard]] int rowCount(const QModelIndex& index) const override;
     [[nodiscard]] int columnCount(const QModelIndex& index) const override;
     [[nodiscard]] QModelIndex mapFromSource(const QModelIndex& index) const override;
     [[nodiscard]] QModelIndex mapToSource(const QModelIndex& index) const override;
-    [[nodiscard]] QModelIndex parent(const QModelIndex& index) const override;
-    [[nodiscard]] QModelIndex sibling(int row, int column, const QModelIndex& index) const override;
-    [[nodiscard]] bool hasChildren(const QModelIndex& parent) const override;
+    void sort(int column, Qt::SortOrder order) override;
 
     [[nodiscard]] bool canGoUp() const;
 
@@ -67,8 +77,14 @@ public:
     void setIconsEnabled(bool enabled);
     void setPlayState(Player::PlayState state);
     void setPlayingPath(const QString& path);
+    void setSearchText(const QString& text);
+
+protected:
+    [[nodiscard]] bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override;
 
 private:
+    [[nodiscard]] Qt::Alignment columnAlignment(int column) const;
+    [[nodiscard]] bool matchesSearch(const QModelIndex& sourceIndex) const;
     void populate();
     [[nodiscard]] int nodeCount() const;
     void sourceRowsRemoved(const QModelIndex& parent, int first, int last);
@@ -83,8 +99,10 @@ private:
 
     Player::PlayState m_playingState;
     QString m_playingTrackPath;
+    QString m_searchText;
 
     bool m_showIcons;
     QColor m_playingColour;
+    std::array<Qt::Alignment, 4> m_columnAlignments;
 };
 } // namespace Fooyin

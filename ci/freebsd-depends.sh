@@ -3,9 +3,13 @@
 sudo pkg update
 sudo pkg upgrade -y
 sudo pkg install -y \
+     git \
+     bison \
+     flex \
      cmake-core \
      pkgconf \
      ninja \
+     glm \
      libgme \
      libvgm \
      vulkan-headers \
@@ -16,8 +20,13 @@ sudo pkg install -y \
      taglib \
      kdsingleapplication \
      pipewire-spa-oss \
+     pulseaudio \
      sdl2 \
      libopenmpt \
      libarchive \
      ebur128 \
+     libcdio \
+     libcdio-paranoia \
+     soundtouch \
+     libsoxr \
      googletest

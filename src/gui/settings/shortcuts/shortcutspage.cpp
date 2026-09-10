@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,51 +22,93 @@
 #include "shortcutsmodel.h"
 
 #include <gui/guiconstants.h>
-#include <gui/widgets/expandableinputbox.h>
+#include <gui/iconloader.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QKeySequenceEdit>
+#include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
+#include <QSignalBlocker>
+#include <QSortFilterProxyModel>
+#include <QToolButton>
 #include <QTreeView>
 
+using namespace Qt::StringLiterals;
+
+constexpr auto MaxShortcuts = 3;
+
 namespace Fooyin {
-class ShortcutInput : public ExpandableInput
+class ShortcutsFilterModel : public QSortFilterProxyModel
 {
     Q_OBJECT
 
 public:
-    explicit ShortcutInput(QWidget* parent = nullptr)
-        : ExpandableInput{ExpandableInput::ClearButton | ExpandableInput::CustomWidget, parent}
-        , m_shortcut{new QKeySequenceEdit(this)}
+    using QSortFilterProxyModel::QSortFilterProxyModel;
+
+protected:
+    [[nodiscard]] bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override
     {
-        auto* layout = new QVBoxLayout(this);
-        layout->setContentsMargins(0, 0, 0, 0);
-        layout->addWidget(m_shortcut);
+        if(filterRegularExpression().pattern().isEmpty()) {
+            return true;
+        }
 
-        m_shortcut->setClearButtonEnabled(true);
+        const QModelIndex sourceIndex = sourceModel()->index(sourceRow, 0, sourceParent);
+        if(matchesRow(sourceIndex) || ancestorMatches(sourceParent)) {
+            return true;
+        }
 
-        QObject::connect(m_shortcut, &QKeySequenceEdit::keySequenceChanged, this,
-                         [this](const QKeySequence& shortcut) { emit textChanged(shortcut.toString()); });
-    }
+        const int rowCount = sourceModel()->rowCount(sourceIndex);
+        for(int row{0}; row < rowCount; ++row) {
+            if(filterAcceptsRow(row, sourceIndex)) {
+                return true;
+            }
+        }
 
-    [[nodiscard]] QString text() const override
-    {
-        return m_shortcut->keySequence().toString();
-    }
-
-    void setShortcut(const QKeySequence& shortcut)
-    {
-        m_shortcut->setKeySequence(shortcut);
+        return false;
     }
 
 private:
-    QKeySequenceEdit* m_shortcut;
+    [[nodiscard]] bool matchesRow(const QModelIndex& sourceIndex) const
+    {
+        if(!sourceIndex.isValid()) {
+            return false;
+        }
+
+        const auto expression = filterRegularExpression();
+
+        const int columnCount = sourceModel()->columnCount(sourceIndex.parent());
+        for(int column{0}; column < columnCount; ++column) {
+            const QModelIndex columnIndex = sourceIndex.siblingAtColumn(column);
+
+            if(sourceModel()->data(columnIndex, Qt::DisplayRole).toString().contains(expression)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    [[nodiscard]] bool ancestorMatches(QModelIndex sourceParent) const
+    {
+        while(sourceParent.isValid()) {
+            if(matchesRow(sourceParent)) {
+                return true;
+            }
+            sourceParent = sourceParent.parent();
+        }
+
+        return false;
+    }
 };
 
 class ShortcutsPageWidget : public SettingsPageWidget
@@ -80,71 +122,164 @@ public:
     void apply() override;
     void reset() override;
 
+    [[nodiscard]] QString validationError() const override;
+
 private:
-    void updateCurrentShortcuts(const ShortcutList& shortcuts);
+    struct ShortcutRow
+    {
+        QWidget* widget;
+        QKeySequenceEdit* input;
+        QCheckBox* global;
+        QToolButton* removeButton;
+    };
+
+    [[nodiscard]] Command* selectedCommand() const;
+    void updateCurrentBindings(const ShortcutBindingList& bindings);
+    void addShortcutInput(const ShortcutBinding& binding = {}, bool focus = false);
+    void removeShortcutInput(QKeySequenceEdit* input);
+    void clearShortcutInputs();
+    void updateShortcutButtons();
+    void updateConflictState();
     void selectionChanged();
     void shortcutChanged();
-    void shortcutDeleted(const QString& text);
     void resetCurrentShortcut();
+    void reassignConflicts();
+    void repopulateShortcuts();
 
     ActionManager* m_actionManager;
 
+    QLineEdit* m_filter;
     QTreeView* m_shortcutTable;
     ShortcutsModel* m_model;
+    ShortcutsFilterModel* m_proxyModel;
     QGroupBox* m_shortcutBox;
-    ExpandableInputBox* m_inputBox;
+    QWidget* m_shortcutRows;
+    QVBoxLayout* m_shortcutRowsLayout;
+    QPushButton* m_resetShortcut;
+    QPushButton* m_addShortcut;
+    QCheckBox* m_globalShortcut;
+    QPushButton* m_configureGlobalShortcuts;
+    QLabel* m_conflictLabel;
+    QPushButton* m_reassignButton;
+    std::vector<ShortcutRow> m_shortcutRowsData;
 };
 
 ShortcutsPageWidget::ShortcutsPageWidget(ActionManager* actionManager)
     : m_actionManager{actionManager}
+    , m_filter{new QLineEdit(this)}
     , m_shortcutTable{new QTreeView(this)}
     , m_model{new ShortcutsModel(this)}
+    , m_proxyModel{new ShortcutsFilterModel(this)}
     , m_shortcutBox{new QGroupBox(this)}
-    , m_inputBox{
-          new ExpandableInputBox(tr("Shortcuts"), ExpandableInput::ClearButton | ExpandableInput::CustomWidget, this)}
+    , m_shortcutRows{new QWidget(this)}
+    , m_shortcutRowsLayout{new QVBoxLayout(m_shortcutRows)}
+    , m_resetShortcut{new QPushButton(tr("Reset to default"), this)}
+    , m_addShortcut{new QPushButton(Gui::iconFromTheme(Constants::Icons::Add), tr("Add shortcut"), this)}
+    , m_globalShortcut{new QCheckBox(tr("Global"), this)}
+    , m_configureGlobalShortcuts{new QPushButton(tr("Configure global shortcuts…"), this)}
+    , m_conflictLabel{new QLabel(this)}
+    , m_reassignButton{new QPushButton(tr("Overwrite Shortcut"), this)}
 {
-    m_shortcutTable->setModel(m_model);
+    m_filter->setPlaceholderText(tr("Filter shortcuts"));
+    m_filter->setClearButtonEnabled(true);
+
+    m_proxyModel->setSourceModel(m_model);
+    m_proxyModel->setFilterCaseSensitivity(Qt::CaseInsensitive);
+
+    m_shortcutTable->setModel(m_proxyModel);
     m_shortcutTable->hideColumn(1);
     m_shortcutTable->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
 
     auto* layout = new QGridLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    layout->addWidget(m_shortcutTable, 0, 0);
+    layout->addWidget(m_filter, 0, 0);
+    layout->addWidget(m_shortcutTable, 1, 0);
+    layout->setRowStretch(1, 1);
 
     QObject::connect(m_model, &QAbstractItemModel::modelReset, m_shortcutTable, &QTreeView::expandAll);
 
     auto* groupLayout = new QVBoxLayout(m_shortcutBox);
 
-    m_inputBox->setMaximum(3);
-    auto* resetShortcut = new QPushButton(tr("Reset"), this);
-    m_inputBox->addBoxWidget(resetShortcut);
-    m_inputBox->setInputWidget([this](QWidget* parent) {
-        auto* input = new ShortcutInput(parent);
-        QObject::connect(input, &ExpandableInput::textChanged, this, &ShortcutsPageWidget::shortcutChanged);
-        return input;
+    auto* shortcutHeader = new QHBoxLayout();
+    auto* shortcutLabel  = new QLabel(tr("Shortcuts"), this);
+    shortcutHeader->addWidget(shortcutLabel);
+    shortcutHeader->addStretch(1);
+
+    m_shortcutRowsLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* shortcutActions = new QHBoxLayout();
+    shortcutActions->addWidget(m_addShortcut);
+    shortcutActions->addWidget(m_globalShortcut);
+    shortcutActions->addWidget(m_configureGlobalShortcuts);
+    shortcutActions->addStretch(1);
+    shortcutActions->addWidget(m_resetShortcut);
+
+    groupLayout->addLayout(shortcutHeader);
+    groupLayout->addWidget(m_shortcutRows);
+    groupLayout->addLayout(shortcutActions);
+
+    m_conflictLabel->setWordWrap(true);
+    m_conflictLabel->hide();
+    groupLayout->addWidget(m_conflictLabel);
+
+    m_reassignButton->hide();
+    groupLayout->addWidget(m_reassignButton, 0, Qt::AlignLeft);
+
+    layout->addWidget(m_shortcutBox, 2, 0);
+
+    QObject::connect(m_resetShortcut, &QAbstractButton::clicked, this, &ShortcutsPageWidget::resetCurrentShortcut);
+    QObject::connect(m_addShortcut, &QAbstractButton::clicked, this, [this]() { addShortcutInput({}, true); });
+    QObject::connect(m_globalShortcut, &QCheckBox::toggled, this, [this](bool checked) {
+        if(Command* command = selectedCommand()) {
+            m_model->globalShortcutRegistrationChanged(command, checked);
+            updateShortcutButtons();
+        }
     });
-
-    groupLayout->addWidget(m_inputBox);
-
-    layout->addWidget(m_shortcutBox, 1, 0);
-
-    QObject::connect(resetShortcut, &QAbstractButton::clicked, this, &ShortcutsPageWidget::resetCurrentShortcut);
+    QObject::connect(m_configureGlobalShortcuts, &QAbstractButton::clicked, m_actionManager,
+                     &ActionManager::configureGlobalShortcuts);
+    QObject::connect(m_reassignButton, &QAbstractButton::clicked, this, &ShortcutsPageWidget::reassignConflicts);
     QObject::connect(m_shortcutTable->selectionModel(), &QItemSelectionModel::selectionChanged, this,
                      &ShortcutsPageWidget::selectionChanged);
-    QObject::connect(m_inputBox, &ExpandableInputBox::blockDeleted, this, &ShortcutsPageWidget::shortcutDeleted);
+    QObject::connect(m_filter, &QLineEdit::textChanged, this, [this](const QString& text) {
+        m_proxyModel->setFilterRegularExpression(
+            QRegularExpression{QRegularExpression::escape(text), QRegularExpression::CaseInsensitiveOption});
+        m_shortcutTable->expandAll();
+        selectionChanged();
+    });
+    QObject::connect(m_actionManager, &ActionManager::commandsChanged, this, &ShortcutsPageWidget::repopulateShortcuts);
+    QObject::connect(m_actionManager, &ActionManager::globalShortcutManagementChanged, this,
+                     &ShortcutsPageWidget::repopulateShortcuts);
+    QObject::connect(m_actionManager, &ActionManager::globalShortcutConfigurationAvailabilityChanged, this,
+                     &ShortcutsPageWidget::selectionChanged);
+    QObject::connect(m_model, &ShortcutsModel::bindingsSynchronised, this, [this](Command* command) {
+        if(command == selectedCommand()) {
+            updateCurrentBindings(m_model->bindings(command));
+            updateConflictState();
+        }
+    });
 
     m_shortcutBox->setDisabled(true);
 }
 
 void ShortcutsPageWidget::load()
 {
+    repopulateShortcuts();
+}
+
+void ShortcutsPageWidget::repopulateShortcuts()
+{
     m_model->populate(m_actionManager);
+    updateConflictState();
+    selectionChanged();
 }
 
 void ShortcutsPageWidget::apply()
 {
+    shortcutChanged();
     m_model->processQueue();
+    m_actionManager->saveSettings();
+    selectionChanged();
 }
 
 void ShortcutsPageWidget::reset()
@@ -152,98 +287,262 @@ void ShortcutsPageWidget::reset()
     const auto commands = m_actionManager->commands();
     for(Command* command : commands) {
         command->setShortcut(command->defaultShortcuts());
+        command->setGlobalShortcuts({});
+        command->setGlobalShortcutRegistered(false);
     }
 }
 
-void ShortcutsPageWidget::updateCurrentShortcuts(const ShortcutList& shortcuts)
+QString ShortcutsPageWidget::validationError() const
 {
-    m_inputBox->clearBlocks();
+    return m_model->firstConflictError();
+}
 
-    for(const auto& shortcut : shortcuts) {
-        auto* input = new ShortcutInput(this);
-        input->setShortcut(shortcut);
-        QObject::connect(input, &ExpandableInput::textChanged, this, &ShortcutsPageWidget::shortcutChanged);
-        m_inputBox->addInput(input);
+Command* ShortcutsPageWidget::selectedCommand() const
+{
+    const auto selected = m_shortcutTable->selectionModel()->selectedIndexes();
+    if(selected.empty()) {
+        return nullptr;
     }
 
-    if(shortcuts.empty()) {
-        m_inputBox->addEmptyBlock();
+    const QModelIndex index = m_proxyModel->mapToSource(selected.front());
+    if(index.data(ShortcutItem::IsCategory).toBool()) {
+        return nullptr;
     }
+
+    return index.data(ShortcutItem::ActionCommand).value<Command*>();
+}
+
+void ShortcutsPageWidget::updateCurrentBindings(const ShortcutBindingList& bindings)
+{
+    clearShortcutInputs();
+
+    for(const auto& binding : bindings) {
+        addShortcutInput(binding);
+    }
+
+    if(bindings.empty()) {
+        addShortcutInput();
+    }
+
+    updateShortcutButtons();
+}
+
+void ShortcutsPageWidget::addShortcutInput(const ShortcutBinding& binding, const bool focus)
+{
+    if(static_cast<int>(m_shortcutRowsData.size()) >= MaxShortcuts) {
+        return;
+    }
+
+    auto* rowWidget = new QWidget(m_shortcutRows);
+    auto* rowLayout = new QHBoxLayout(rowWidget);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto* input = new QKeySequenceEdit(rowWidget);
+    input->setClearButtonEnabled(true);
+    input->setKeySequence(binding.shortcut);
+
+    auto* global = new QCheckBox(tr("Global"), rowWidget);
+    global->setChecked(binding.scope == ShortcutScope::Global);
+
+    auto* removeButton = new QToolButton(rowWidget);
+    removeButton->setIcon(Gui::iconFromTheme(Constants::Icons::Remove));
+    removeButton->setToolTip(tr("Remove shortcut"));
+
+    rowLayout->addWidget(input);
+    rowLayout->addWidget(global);
+    rowLayout->addWidget(removeButton);
+
+    m_shortcutRowsLayout->addWidget(rowWidget);
+    m_shortcutRowsData.emplace_back(rowWidget, input, global, removeButton);
+
+    QObject::connect(input, &QKeySequenceEdit::keySequenceChanged, this, &ShortcutsPageWidget::shortcutChanged);
+    QObject::connect(global, &QCheckBox::toggled, this, [this, global](bool checked) {
+        if(checked) {
+            for(const auto& row : m_shortcutRowsData) {
+                if(row.global != global && row.global->isChecked()) {
+                    const QSignalBlocker blocker{row.global};
+                    row.global->setChecked(false);
+                }
+            }
+        }
+        shortcutChanged();
+    });
+    QObject::connect(removeButton, &QAbstractButton::clicked, this, [this, input]() { removeShortcutInput(input); });
+
+    updateShortcutButtons();
+
+    if(focus) {
+        input->setFocus();
+    }
+}
+
+void ShortcutsPageWidget::removeShortcutInput(QKeySequenceEdit* input)
+{
+    ShortcutBindingList bindings;
+    for(const auto& row : m_shortcutRowsData) {
+        if(row.input == input || row.input->keySequence().isEmpty()) {
+            continue;
+        }
+        const ShortcutBinding binding{.shortcut = row.input->keySequence(),
+                                      .scope
+                                      = row.global->isChecked() ? ShortcutScope::Global : ShortcutScope::Application};
+        if(std::ranges::find(bindings, binding) == bindings.cend()) {
+            bindings.push_back(binding);
+        }
+    }
+
+    updateCurrentBindings(bindings);
+    shortcutChanged();
+}
+
+void ShortcutsPageWidget::clearShortcutInputs()
+{
+    for(const auto& row : m_shortcutRowsData) {
+        m_shortcutRowsLayout->removeWidget(row.widget);
+        row.widget->hide();
+        row.widget->deleteLater();
+    }
+
+    m_shortcutRowsData.clear();
+}
+
+void ShortcutsPageWidget::updateShortcutButtons()
+{
+    Command* command                    = selectedCommand();
+    const auto management               = m_actionManager->globalShortcutManagement();
+    const bool available                = management != GlobalShortcutManagement::Unavailable;
+    const bool systemManaged            = management == GlobalShortcutManagement::SystemManaged;
+    const bool eligible                 = command && command->actionForContext(Constants::Context::Global);
+    const bool globalShortcutRegistered = m_model->isGlobalShortcutRegistered(command);
+    const bool configurationAvailable   = m_actionManager->globalShortcutConfigurationAvailable();
+
+    const bool allRowsHaveShortcuts
+        = std::ranges::all_of(m_shortcutRowsData, [](const auto& row) { return !row.input->keySequence().isEmpty(); });
+
+    m_addShortcut->setEnabled(allRowsHaveShortcuts && std::cmp_less(m_shortcutRowsData.size(), MaxShortcuts));
+
+    const bool canRemove = m_shortcutRowsData.size() > 1;
+    for(const auto& row : m_shortcutRowsData) {
+        row.global->setVisible(!systemManaged);
+        row.global->setEnabled(available && eligible);
+        row.input->setEnabled(true);
+
+        if(!available) {
+            row.global->setToolTip(tr("Global shortcuts are not available on this platform"));
+        }
+        else if(!eligible) {
+            row.global->setToolTip(tr("This action is only available within an application context"));
+        }
+        else {
+            row.global->setToolTip({});
+        }
+        row.input->setToolTip({});
+
+        row.removeButton->setEnabled(canRemove);
+    }
+
+    m_globalShortcut->setVisible(systemManaged);
+    m_globalShortcut->setEnabled(systemManaged && eligible);
+
+    {
+        const QSignalBlocker blocker{m_globalShortcut};
+        m_globalShortcut->setChecked(globalShortcutRegistered);
+    }
+
+    m_configureGlobalShortcuts->setVisible(systemManaged && configurationAvailable && globalShortcutRegistered);
+    m_configureGlobalShortcuts->setEnabled(command && command->isGlobalShortcutRegistered());
+}
+
+void ShortcutsPageWidget::updateConflictState()
+{
+    Command* command = selectedCommand();
+    if(!command) {
+        m_conflictLabel->hide();
+        m_reassignButton->hide();
+        return;
+    }
+
+    const QString conflicts = m_model->conflictDescription(command);
+    if(conflicts.isEmpty()) {
+        m_conflictLabel->hide();
+        m_reassignButton->hide();
+        return;
+    }
+
+    m_conflictLabel->setText(tr("Duplicate shortcuts") + u":\n%1"_s.arg(conflicts));
+    m_conflictLabel->show();
+    m_reassignButton->show();
 }
 
 void ShortcutsPageWidget::selectionChanged()
 {
-    const auto selected = m_shortcutTable->selectionModel()->selectedIndexes();
-
-    if(selected.empty()) {
+    Command* command = selectedCommand();
+    if(!command) {
         m_shortcutBox->setDisabled(true);
+        updateShortcutButtons();
+        updateConflictState();
         return;
     }
 
-    const QModelIndex index = selected.front();
+    const auto bindings = m_model->bindings(command);
 
-    if(index.data(ShortcutItem::IsCategory).toBool()) {
-        m_shortcutBox->setDisabled(true);
-        return;
-    }
-
-    auto* command        = index.data(ShortcutItem::ActionCommand).value<Command*>();
-    const auto shortcuts = command->shortcuts();
-
-    updateCurrentShortcuts(shortcuts);
-
+    updateCurrentBindings(bindings);
     m_shortcutBox->setDisabled(false);
+    updateConflictState();
 }
 
 void ShortcutsPageWidget::shortcutChanged()
 {
-    const auto selected = m_shortcutTable->selectionModel()->selectedIndexes();
-
-    if(selected.empty()) {
+    Command* command = selectedCommand();
+    if(!command) {
         return;
     }
 
-    ShortcutList shortcuts;
+    ShortcutBindingList bindings;
+    ShortcutList usedShortcuts;
 
-    const auto inputs = m_inputBox->blocks();
-    for(ExpandableInput* input : inputs) {
-        const QString text = input->text();
-        if(!text.isEmpty() && !shortcuts.contains(text)) {
-            shortcuts.append(text);
+    for(const auto& row : m_shortcutRowsData) {
+        const QKeySequence shortcut = row.input->keySequence();
+        if(!shortcut.isEmpty() && !usedShortcuts.contains(shortcut)) {
+            usedShortcuts.append(shortcut);
+            bindings.push_back({.shortcut = shortcut,
+                                .scope = row.global->isChecked() ? ShortcutScope::Global : ShortcutScope::Application});
         }
     }
 
-    const QModelIndex index = selected.front();
-    auto* command           = index.data(ShortcutItem::ActionCommand).value<Command*>();
-    m_model->shortcutChanged(command, shortcuts);
-}
-
-void ShortcutsPageWidget::shortcutDeleted(const QString& text)
-{
-    const auto selected = m_shortcutTable->selectionModel()->selectedIndexes();
-
-    if(selected.empty()) {
-        return;
-    }
-
-    const QModelIndex index = selected.front();
-    auto* command           = index.data(ShortcutItem::ActionCommand).value<Command*>();
-    m_model->shortcutDeleted(command, text);
+    m_model->bindingsChanged(command, bindings);
+    updateShortcutButtons();
+    updateConflictState();
 }
 
 void ShortcutsPageWidget::resetCurrentShortcut()
 {
-    const auto selected = m_shortcutTable->selectionModel()->selectedIndexes();
-
-    if(selected.empty()) {
+    Command* command = selectedCommand();
+    if(!command) {
         return;
     }
 
-    const QModelIndex index = selected.front();
-    auto* command           = index.data(ShortcutItem::ActionCommand).value<Command*>();
+    ShortcutBindingList bindings;
+    for(const auto& shortcut : command->defaultShortcuts()) {
+        bindings.emplace_back(shortcut, ShortcutScope::Application);
+    }
+    m_model->bindingsChanged(command, bindings);
+    if(m_actionManager->globalShortcutManagement() == GlobalShortcutManagement::SystemManaged) {
+        m_model->globalShortcutRegistrationChanged(command, false);
+    }
+    updateCurrentBindings(bindings);
+    updateConflictState();
+}
 
-    m_model->shortcutChanged(command, command->defaultShortcuts());
-    updateCurrentShortcuts(command->defaultShortcuts());
+void ShortcutsPageWidget::reassignConflicts()
+{
+    Command* command = selectedCommand();
+    if(!command) {
+        return;
+    }
+
+    m_model->reassignConflicts(command);
+    updateConflictState();
 }
 
 ShortcutsPage::ShortcutsPage(ActionManager* actionManager, SettingsManager* settings, QObject* parent)
@@ -252,6 +551,7 @@ ShortcutsPage::ShortcutsPage(ActionManager* actionManager, SettingsManager* sett
     setId(Constants::Page::Shortcuts);
     setName(tr("Shortcuts"));
     setCategory({tr("Shortcuts")});
+    setRelativePosition(SettingsPageRelativePosition::After, ::Fooyin::Constants::Page::PlaylistGeneral);
     setWidgetCreator([actionManager] { return new ShortcutsPageWidget(actionManager); });
 }
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,11 +31,27 @@
 
 Q_LOGGING_CATEGORY(EBUR128, "fy.ebur128")
 
+using namespace Qt::StringLiterals;
+
 constexpr auto ReferenceLUFS  = -18;
 constexpr auto BufferSize     = 10240;
 constexpr auto SingleAlbumKey = "Album";
 
 namespace Fooyin::RGScanner {
+namespace {
+bool storesReplayGainPeak(const Track& track)
+{
+    return !track.isOpus();
+}
+
+void clearReplayGain(TrackList& tracks)
+{
+    for(Track& track : tracks) {
+        track.clearRGInfo();
+    }
+}
+} // namespace
+
 Ebur128Scanner::Ebur128Scanner(std::shared_ptr<AudioLoader> audioLoader, QObject* parent)
     : RGWorker{parent}
     , m_audioLoader{std::move(audioLoader)}
@@ -61,7 +77,7 @@ void Ebur128Scanner::closeThread()
             cancelFuture(watcher);
         }
 
-        emit closed();
+        Q_EMIT closed();
     });
 }
 
@@ -74,10 +90,11 @@ void Ebur128Scanner::calculatePerTrack(const TrackList& tracks, bool truePeak)
     m_watcher       = new QFutureWatcher<void>(this);
     m_tracks        = tracks;
     m_scannedTracks = tracks;
+    clearReplayGain(m_scannedTracks);
 
     QObject::connect(m_watcher, &QFutureWatcher<void>::progressValueChanged, this, [this](const int val) {
         if(val >= 0 && std::cmp_less(val, m_tracks.size())) {
-            emit startingCalculation(m_tracks.at(val).prettyFilepath());
+            Q_EMIT startingCalculation(m_tracks.at(val).prettyFilepath());
         }
     });
 
@@ -89,10 +106,10 @@ void Ebur128Scanner::calculatePerTrack(const TrackList& tracks, bool truePeak)
     future.then(this, [this]() {
         if(mayRun()) {
             qCDebug(EBUR128) << "Finished calculating RG for" << m_scannedTracks.size() << "tracks";
-            emit calculationFinished(m_scannedTracks);
+            Q_EMIT calculationFinished(m_scannedTracks);
         }
         if(m_runningWatchers.fetch_sub(1, std::memory_order_release) <= 1) {
-            emit finished();
+            Q_EMIT finished();
         }
         setState(Idle);
     });
@@ -107,10 +124,11 @@ void Ebur128Scanner::calculateAsAlbum(const TrackList& tracks, bool truePeak)
     m_watcher       = new QFutureWatcher<void>(this);
     m_tracks        = tracks;
     m_scannedTracks = tracks;
+    clearReplayGain(m_scannedTracks);
 
     QObject::connect(m_watcher, &QFutureWatcher<void>::progressValueChanged, this, [this](const int val) {
         if(val >= 0 && std::cmp_less(val, m_tracks.size())) {
-            emit startingCalculation(m_tracks.at(val).prettyFilepath());
+            Q_EMIT startingCalculation(m_tracks.at(val).prettyFilepath());
         }
     });
 
@@ -139,16 +157,18 @@ void Ebur128Scanner::calculateAsAlbum(const TrackList& tracks, bool truePeak)
 
             for(Track& track : m_scannedTracks) {
                 track.setRGAlbumGain(static_cast<float>(albumGain));
-                track.setRGAlbumPeak(albumPeak);
+                if(storesReplayGainPeak(track)) {
+                    track.setRGAlbumPeak(albumPeak);
+                }
             }
         }
 
         if(mayRun()) {
             qCDebug(EBUR128) << "Finished calculating RG for" << m_scannedTracks.size() << "tracks";
-            emit calculationFinished(m_scannedTracks);
+            Q_EMIT calculationFinished(m_scannedTracks);
         }
         if(m_runningWatchers.fetch_sub(1, std::memory_order_release) <= 1) {
-            emit finished();
+            Q_EMIT finished();
         }
         setState(Idle);
     });
@@ -162,7 +182,9 @@ void Ebur128Scanner::calculateByAlbumTags(const TrackList& tracks, const QString
 
     for(const auto& track : tracks) {
         const QString album = m_parser.evaluate(groupScript, track);
-        m_albums[album].push_back(track);
+        auto scannedTrack   = track;
+        scannedTrack.clearRGInfo();
+        m_albums[album].push_back(std::move(scannedTrack));
     }
 
     m_currentAlbum = m_albums.begin();
@@ -175,29 +197,20 @@ void Ebur128Scanner::scanTrack(Track& track, bool truePeak, const QString& album
         return;
     }
 
-    auto decoder = m_audioLoader->decoderForTrack(track);
-    if(!decoder) {
+    const auto loadedDecoder
+        = m_audioLoader->loadDecoderForTrack(track, AudioDecoder::NoSeeking | AudioDecoder::NoInfiniteLooping);
+    if(!loadedDecoder.decoder) {
+        qCWarning(EBUR128) << "No decoder available for" << track.filepath();
         return;
     }
 
-    AudioSource source;
-    source.filepath = track.filepath();
-    QFile file{source.filepath};
-    if(!file.open(QIODevice::ReadOnly)) {
-        qCWarning(EBUR128) << "Failed to open" << source.filepath;
-        return;
-    }
-    source.device = &file;
+    AudioDecoder* decoder = loadedDecoder.decoder.get();
+    AudioFormat format    = loadedDecoder.format.value();
 
-    auto format = decoder->init(source, track, AudioDecoder::NoSeeking | AudioDecoder::NoInfiniteLooping);
-    if(!format) {
-        return;
-    }
-
-    format->setSampleFormat(SampleFormat::F64);
+    format.setSampleFormat(SampleFormat::F64);
     decoder->start();
 
-    EburStatePtr state{ebur128_init(format->channelCount(), format->sampleRate(),
+    EburStatePtr state{ebur128_init(format.channelCount(), format.sampleRate(),
                                     EBUR128_MODE_I | (truePeak ? EBUR128_MODE_TRUE_PEAK : EBUR128_MODE_SAMPLE_PEAK))};
 
     AudioBuffer buffer;
@@ -206,7 +219,7 @@ void Ebur128Scanner::scanTrack(Track& track, bool truePeak, const QString& album
             return;
         }
 
-        buffer = Audio::convert(buffer, *format);
+        buffer = Audio::convert(buffer, format);
         if(ebur128_add_frames_double(state.get(), reinterpret_cast<double*>(buffer.data()), buffer.frameCount())
            != EBUR128_SUCCESS) {
             break;
@@ -224,7 +237,7 @@ void Ebur128Scanner::scanTrack(Track& track, bool truePeak, const QString& album
     }
 
     double trackPeak{Constants::InvalidPeak};
-    const auto channels = static_cast<unsigned int>(format->channelCount());
+    const auto channels = static_cast<unsigned int>(format.channelCount());
 
     if(truePeak) {
         for(unsigned i{0}; i < channels; ++i) {
@@ -243,7 +256,9 @@ void Ebur128Scanner::scanTrack(Track& track, bool truePeak, const QString& album
         }
     }
 
-    track.setRGTrackPeak(static_cast<float>(trackPeak));
+    if(storesReplayGainPeak(track)) {
+        track.setRGTrackPeak(static_cast<float>(trackPeak));
+    }
 
     if(!album.isEmpty()) {
         const std::scoped_lock lock{m_mutex};
@@ -259,10 +274,10 @@ void Ebur128Scanner::scanAlbum(bool truePeak)
                 m_scannedTracks.insert(m_scannedTracks.end(), tracks.cbegin(), tracks.cend());
             }
             qCDebug(EBUR128) << "Finished calculating RG for" << m_scannedTracks.size() << "tracks";
-            emit calculationFinished(m_scannedTracks);
+            Q_EMIT calculationFinished(m_scannedTracks);
         }
         if(m_runningWatchers.fetch_sub(1, std::memory_order_release) <= 1) {
-            emit finished();
+            Q_EMIT finished();
         }
         setState(Idle);
         return;
@@ -279,7 +294,7 @@ void Ebur128Scanner::scanAlbum(bool truePeak)
 
     QObject::connect(albumWatcher, &QFutureWatcher<void>::progressValueChanged, this, [this](const int val) {
         if(val >= 0 && std::cmp_less(val, m_tracks.size())) {
-            emit startingCalculation(m_tracks.at(val).prettyFilepath());
+            Q_EMIT startingCalculation(m_tracks.at(val).prettyFilepath());
         }
     });
 
@@ -298,12 +313,18 @@ void Ebur128Scanner::scanAlbum(bool truePeak)
 
             auto& albumTracks = m_currentAlbum->second;
 
-            const float albumPeak
-                = std::ranges::max_element(albumTracks, std::ranges::less{}, &Track::rgTrackPeak)->rgTrackPeak();
+            float albumPeak{Constants::InvalidPeak};
+            for(const Track& track : std::as_const(albumTracks)) {
+                if(storesReplayGainPeak(track) && track.hasTrackPeak()) {
+                    albumPeak = std::max(albumPeak, track.rgTrackPeak());
+                }
+            }
 
             for(Track& track : albumTracks) {
                 track.setRGAlbumGain(static_cast<float>(albumGain));
-                track.setRGAlbumPeak(albumPeak);
+                if(storesReplayGainPeak(track) && albumPeak != Constants::InvalidPeak) {
+                    track.setRGAlbumPeak(albumPeak);
+                }
             }
 
             albumState->second.clear();

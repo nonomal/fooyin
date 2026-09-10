@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +22,19 @@
 #include "fycore_export.h"
 
 #include <QString>
+#include <QStringView>
 
 namespace Fooyin {
 class FYCORE_EXPORT ScriptScanner
 {
 public:
+    enum class WhitespaceMode : uint8_t
+    {
+        Preserve = 0,
+        IgnoreLayout,
+        IgnoreAll,
+    };
+
     enum TokenType : uint8_t
     {
         TokError       = 0,
@@ -65,17 +73,19 @@ public:
         TokHour        = 33,
         TokDay         = 34,
         TokWeek        = 35,
-        TokMissing     = 36,
-        TokPresent     = 37,
-        TokLimit       = 38,
-        TokPlus        = 39,
-        TokMinus       = 40,
+        TokMonth       = 36,
+        TokYear        = 37,
+        TokMissing     = 38,
+        TokPresent     = 39,
+        TokLimit       = 40,
+        TokPlus        = 41,
+        TokMinus       = 42,
     };
 
     struct Token
     {
         TokenType type{TokError};
-        QString value;
+        QStringView value;
         int position{-1};
     };
 
@@ -85,10 +95,10 @@ public:
     Token next();
     Token peekNext(int delta = 1);
 
-    void setSkipWhitespace(bool enabled);
+    void setWhitespaceMode(WhitespaceMode mode);
 
 private:
-    Token scanNext();
+    Token scanNext(bool insideQuote);
     [[nodiscard]] Token makeToken(TokenType type) const;
     Token literal();
     Token keyword();
@@ -106,6 +116,6 @@ private:
     std::vector<Token> m_tokens;
     Token* m_lastToken;
     int m_currentTokenIndex;
-    bool m_skipWhitespace;
+    WhitespaceMode m_whitespaceMode;
 };
 } // namespace Fooyin

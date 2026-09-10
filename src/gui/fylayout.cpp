@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,12 @@ Q_LOGGING_CATEGORY(LAYOUT, "fy.layout")
 
 using namespace Qt::StringLiterals;
 
+constexpr auto OptionsKey         = "Options"_L1;
+constexpr auto ShowInMenuKey      = "ShowInMenu"_L1;
+constexpr auto ApplyThemeKey      = "ApplyTheme"_L1;
+constexpr auto ApplyWindowSizeKey = "ApplyWindowSize"_L1;
+constexpr auto ThemeOptionsKey    = "ThemeOptions"_L1;
+
 namespace {
 struct ReadResult
 {
@@ -58,6 +64,19 @@ ReadResult readLayout(const QByteArray& json)
     }
 
     return {name, layoutObject};
+}
+
+bool optionValue(const QJsonObject& json, QLatin1StringView key, bool defaultValue)
+{
+    const auto options = json.value(OptionsKey).toObject();
+    return options.value(key).toBool(defaultValue);
+}
+
+void setOptionValue(QJsonObject& json, QLatin1StringView key, bool enabled)
+{
+    auto options     = json.value(OptionsKey).toObject();
+    options[key]     = enabled;
+    json[OptionsKey] = options;
 }
 } // namespace
 
@@ -90,6 +109,26 @@ QJsonObject FyLayout::json() const
     return m_json;
 }
 
+bool FyLayout::isShownInMenu() const
+{
+    return optionValue(m_json, ShowInMenuKey, true);
+}
+
+void FyLayout::setShownInMenu(bool shown)
+{
+    setOptionValue(m_json, ShowInMenuKey, shown);
+}
+
+bool FyLayout::appliesWindowSize() const
+{
+    return optionValue(m_json, ApplyWindowSizeKey, true);
+}
+
+void FyLayout::setAppliesWindowSize(bool enabled)
+{
+    setOptionValue(m_json, ApplyWindowSizeKey, enabled);
+}
+
 void FyLayout::saveWindowSize()
 {
     auto* window = Utils::getMainWindow();
@@ -102,6 +141,13 @@ void FyLayout::saveWindowSize()
     jsonSize["Width"_L1]    = size.width();
     jsonSize["Height"_L1]   = size.height();
     m_json["WindowSize"_L1] = jsonSize;
+    setAppliesWindowSize(true);
+}
+
+void FyLayout::removeWindowSize()
+{
+    m_json.remove("WindowSize"_L1);
+    setAppliesWindowSize(false);
 }
 
 void FyLayout::loadWindowSize() const
@@ -136,6 +182,51 @@ void FyLayout::loadWindowSize() const
     }
 }
 
+bool FyLayout::appliesTheme() const
+{
+    return optionValue(m_json, ApplyThemeKey, false);
+}
+
+void FyLayout::setAppliesTheme(bool enabled)
+{
+    setOptionValue(m_json, ApplyThemeKey, enabled);
+    if(!enabled) {
+        auto options = m_json.value(OptionsKey).toObject();
+        options.remove(ThemeOptionsKey);
+        m_json[OptionsKey] = options;
+    }
+}
+
+FyLayout::ThemeOptions FyLayout::themeOptions() const
+{
+    if(!appliesTheme()) {
+        return {};
+    }
+
+    const auto options = m_json.value(OptionsKey).toObject();
+    if(options.contains(ThemeOptionsKey)) {
+        return ThemeOptions::fromInt(options.value(ThemeOptionsKey).toInt());
+    }
+
+    const FyTheme theme = loadTheme();
+    if(!theme.isValid()) {
+        return ThemeOptions{All};
+    }
+
+    ThemeOptions inferred;
+    inferred.setFlag(SaveColours, !theme.colours.empty());
+    inferred.setFlag(SaveFonts, !theme.fonts.empty());
+    return inferred;
+}
+
+void FyLayout::setThemeOptions(ThemeOptions themeOptions)
+{
+    auto options             = m_json.value(OptionsKey).toObject();
+    options[ThemeOptionsKey] = static_cast<int>(themeOptions.toInt());
+    m_json[OptionsKey]       = options;
+    setAppliesTheme(themeOptions != ThemeOptions{});
+}
+
 void FyLayout::saveTheme(const FyTheme& theme, ThemeOptions options)
 {
     if(!theme.isValid()) {
@@ -155,8 +246,15 @@ void FyLayout::saveTheme(const FyTheme& theme, ThemeOptions options)
     QDataStream stream{&currTheme, QDataStream::WriteOnly};
     stream.setVersion(QDataStream::Qt_6_0);
 
-    stream << theme;
+    stream << saveTheme;
     m_json["Theme"_L1] = QString::fromUtf8(currTheme.toBase64());
+    setThemeOptions(options);
+}
+
+void FyLayout::removeTheme()
+{
+    m_json.remove("Theme"_L1);
+    setAppliesTheme(false);
 }
 
 FyTheme FyLayout::loadTheme() const

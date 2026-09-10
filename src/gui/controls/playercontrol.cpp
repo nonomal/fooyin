@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <core/player/playercontroller.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/toolbutton.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
@@ -29,6 +30,7 @@
 #include <utils/utils.h>
 
 #include <QAction>
+#include <QContextMenuEvent>
 #include <QHBoxLayout>
 #include <QJsonObject>
 #include <QMenu>
@@ -41,20 +43,26 @@ PlayerControl::PlayerControl(ActionManager* actionManager, PlayerController* pla
     : FyWidget{parent}
     , m_actionManager{actionManager}
     , m_playerController{playerController}
-    , m_settings{settings}
-    , m_stop{new ToolButton(this)}
-    , m_prev{new ToolButton(this)}
-    , m_playPause{new ToolButton(this)}
-    , m_next{new ToolButton(this)}
+    , m_stop{new ToolButton(settings, this)}
+    , m_prev{new ToolButton(settings, this)}
+    , m_playPause{new ToolButton(settings, this)}
+    , m_next{new ToolButton(settings, this)}
+    , m_randomTrack{new ToolButton(settings, this)}
+    , m_showStop{true}
+    , m_showPrev{true}
+    , m_showPlayPause{true}
+    , m_showNext{true}
+    , m_showRandomTrack{false}
 {
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setContentsMargins({});
     layout->setSpacing(0);
 
     layout->addWidget(m_stop);
     layout->addWidget(m_prev);
     layout->addWidget(m_playPause);
     layout->addWidget(m_next);
+    layout->addWidget(m_randomTrack);
 
     if(auto* stopCmd = m_actionManager->command(Constants::Actions::Stop)) {
         m_stop->setDefaultAction(stopCmd->action());
@@ -68,13 +76,16 @@ PlayerControl::PlayerControl(ActionManager* actionManager, PlayerController* pla
     if(auto* nextCmd = m_actionManager->command(Constants::Actions::Next)) {
         m_next->setDefaultAction(nextCmd->action());
     }
+    if(auto* randomTrackCmd = m_actionManager->command(Constants::Actions::RandomTrack)) {
+        m_randomTrack->setDefaultAction(randomTrackCmd->action());
+    }
 
-    updateButtonStyle();
+    m_randomTrack->hide();
+    updateIcons();
 
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this, &PlayerControl::stateChanged);
 
     settings->subscribe<Settings::Gui::IconTheme>(this, [this]() { updateIcons(); });
-    settings->subscribe<Settings::Gui::ToolButtonStyle>(this, [this]() { updateButtonStyle(); });
 }
 
 QString PlayerControl::name() const
@@ -87,43 +98,83 @@ QString PlayerControl::layoutName() const
     return u"PlayerControls"_s;
 }
 
-void PlayerControl::updateButtonStyle() const
+void PlayerControl::saveLayoutData(QJsonObject& layout)
 {
-    const auto options
-        = static_cast<Settings::Gui::ToolButtonOptions>(m_settings->value<Settings::Gui::ToolButtonStyle>());
+    layout["ShowStop"_L1]        = m_showStop;
+    layout["ShowPrevious"_L1]    = m_showPrev;
+    layout["ShowPlayPause"_L1]   = m_showPlayPause;
+    layout["ShowNext"_L1]        = m_showNext;
+    layout["ShowRandomTrack"_L1] = m_showRandomTrack;
+}
 
-    m_stop->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_stop->setAutoRaise(!(options & Settings::Gui::Raise));
+void PlayerControl::loadLayoutData(const QJsonObject& layout)
+{
+    const auto updateButton = [](ToolButton* button, bool& member, const bool value) {
+        member = value;
+        button->setVisible(value);
+    };
 
-    m_prev->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_prev->setAutoRaise(!(options & Settings::Gui::Raise));
+    if(layout.contains("ShowStop"_L1)) {
+        updateButton(m_stop, m_showStop, layout.value("ShowStop"_L1).toBool());
+    }
+    if(layout.contains("ShowPrevious"_L1)) {
+        updateButton(m_prev, m_showPrev, layout.value("ShowPrevious"_L1).toBool());
+    }
+    if(layout.contains("ShowPlayPause"_L1)) {
+        updateButton(m_playPause, m_showPlayPause, layout.value("ShowPlayPause"_L1).toBool());
+    }
+    if(layout.contains("ShowNext"_L1)) {
+        updateButton(m_next, m_showNext, layout.value("ShowNext"_L1).toBool());
+    }
+    if(layout.contains("ShowRandomTrack"_L1)) {
+        updateButton(m_randomTrack, m_showRandomTrack, layout.value("ShowRandomTrack"_L1).toBool());
+    }
+}
 
-    m_playPause->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_playPause->setAutoRaise(!(options & Settings::Gui::Raise));
+void PlayerControl::contextMenuEvent(QContextMenuEvent* event)
+{
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
 
-    m_next->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_next->setAutoRaise(!(options & Settings::Gui::Raise));
+    const auto setupButtonControl = [this, menu](const QString& title, ToolButton* button, bool* member) {
+        auto* action = menu->addAction(title);
+        action->setCheckable(true);
+        action->setChecked(*member);
+        QObject::connect(action, &QAction::triggered, this, [member, button](bool checked) {
+            *member = checked;
+            button->setVisible(checked);
+        });
+    };
+
+    setupButtonControl(tr("Show Stop"), m_stop, &m_showStop);
+    setupButtonControl(tr("Show Previous"), m_prev, &m_showPrev);
+    setupButtonControl(tr("Show Play/Pause"), m_playPause, &m_showPlayPause);
+    setupButtonControl(tr("Show Next"), m_next, &m_showNext);
+    setupButtonControl(tr("Show Random Track"), m_randomTrack, &m_showRandomTrack);
+
+    menu->popup(event->globalPos());
 }
 
 void PlayerControl::updateIcons() const
 {
-    m_stop->setIcon(Utils::iconFromTheme(Constants::Icons::Stop));
-    m_prev->setIcon(Utils::iconFromTheme(Constants::Icons::Prev));
-    m_next->setIcon(Utils::iconFromTheme(Constants::Icons::Next));
+    m_stop->setIcon(Gui::iconFromTheme(Constants::Icons::Stop));
+    m_prev->setIcon(Gui::iconFromTheme(Constants::Icons::Prev));
+    m_next->setIcon(Gui::iconFromTheme(Constants::Icons::Next));
+    m_randomTrack->setIcon(Gui::iconFromTheme(Constants::Icons::RandomPlay));
     stateChanged(m_playerController->playState());
 }
 
 void PlayerControl::stateChanged(Player::PlayState state) const
 {
     switch(state) {
-        case(Player::PlayState::Stopped):
-            m_playPause->setIcon(Utils::iconFromTheme(Constants::Icons::Play));
+        case Player::PlayState::Stopped:
+            m_playPause->setIcon(Gui::iconFromTheme(Constants::Icons::Play));
             break;
-        case(Player::PlayState::Playing):
-            m_playPause->setIcon(Utils::iconFromTheme(Constants::Icons::Pause));
+        case Player::PlayState::Playing:
+            m_playPause->setIcon(Gui::iconFromTheme(Constants::Icons::Pause));
             break;
-        case(Player::PlayState::Paused):
-            m_playPause->setIcon(Utils::iconFromTheme(Constants::Icons::Play));
+        case Player::PlayState::Paused:
+            m_playPause->setIcon(Gui::iconFromTheme(Constants::Icons::Play));
             break;
     }
 }

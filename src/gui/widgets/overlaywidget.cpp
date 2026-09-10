@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -271,7 +271,7 @@ void OverlayWidget::enterEvent(QEnterEvent* event)
     if(p->m_options & Selectable) {
         p->m_hovered = true;
         update();
-        emit entered();
+        Q_EMIT entered();
     }
 }
 
@@ -282,7 +282,7 @@ void OverlayWidget::leaveEvent(QEvent* event)
     if(p->m_options & Selectable) {
         p->m_hovered = false;
         update();
-        emit left();
+        Q_EMIT left();
     }
 }
 
@@ -293,7 +293,7 @@ void OverlayWidget::mousePressEvent(QMouseEvent* event)
     if(p->m_options & Selectable) {
         p->m_selected = true;
         update();
-        emit clicked();
+        Q_EMIT clicked();
     }
 }
 

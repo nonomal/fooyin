@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,10 +23,11 @@
 #include "tageditormodel.h"
 
 #include <gui/guiconstants.h>
-#include <gui/widgets/multilinedelegate.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
 #include <utils/actions/widgetcontext.h>
+#include <utils/heartdelegate.h>
+#include <utils/hearteditor.h>
 #include <utils/stardelegate.h>
 #include <utils/stareditor.h>
 
@@ -36,27 +37,34 @@
 #include <QHeaderView>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QTimer>
+
+#include <set>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::TagEditor {
 TagEditorView::TagEditorView(ActionManager* actionManager, QWidget* parent)
-    : ExtendableTableView{actionManager, parent}
+    : ExtendableTableView{parent}
     , m_actionManager{actionManager}
-    , m_editTrigger{EditTrigger::AllEditTriggers}
-    , m_context{new WidgetContext(this, Context{"Context.TagEditor"}, this)}
+    , m_editTrigger{AllEditTriggers}
+    , m_context{new WidgetContext(this, Context{Id{"Context.TagEditor."}.append(reinterpret_cast<uintptr_t>(this))},
+                                  this)}
+    , m_capitaliseAction{new QAction(tr("Capitalise"), this)}
     , m_copyAction{new QAction(tr("Copy"), this)}
+    , m_copyCmd{m_actionManager->registerAction(m_copyAction, Constants::Actions::Copy, m_context->context())}
     , m_pasteAction{new QAction(tr("Paste"), this)}
+    , m_pasteCmd{m_actionManager->registerAction(m_pasteAction, Constants::Actions::Paste, m_context->context())}
     , m_pasteFields{new QAction(tr("Paste fields"), this)}
     , m_ratingRow{-1}
     , m_starDelegate{nullptr}
+    , m_lovedRow{-1}
+    , m_heartDelegate{nullptr}
 {
     actionManager->addContextObject(m_context);
 
     setTextElideMode(Qt::ElideRight);
-    setSelectionBehavior(QAbstractItemView::SelectRows);
     setMouseTracking(true);
-    horizontalHeader()->setStretchLastSection(true);
     horizontalHeader()->setSectionsClickable(false);
     verticalHeader()->setVisible(false);
 }
@@ -64,31 +72,27 @@ TagEditorView::TagEditorView(ActionManager* actionManager, QWidget* parent)
 void TagEditorView::setTagEditTriggers(EditTriggers triggers)
 {
     m_editTrigger = triggers;
-    setEditTriggers(triggers);
+    setEditTriggers(triggers & EditKeyPressed);
 }
 
 void TagEditorView::setupActions()
 {
-    m_copyAction->setShortcut(QKeySequence::Copy);
-    if(auto* command = m_actionManager->command(Constants::Actions::Copy)) {
-        m_copyAction->setShortcuts(command->defaultShortcuts());
-    }
+    QObject::connect(m_capitaliseAction, &QAction::triggered, this, &TagEditorView::capitaliseSelection);
+
+    m_copyCmd->setDefaultShortcut(QKeySequence::Copy);
+    m_copyAction->setVisible(selectionModel()->hasSelection());
     QObject::connect(selectionModel(), &QItemSelectionModel::selectionChanged, this,
                      [this]() { m_copyAction->setVisible(selectionModel()->hasSelection()); });
     QObject::connect(m_copyAction, &QAction::triggered, this, &TagEditorView::copySelection);
-    m_copyAction->setVisible(selectionModel()->hasSelection());
 
-    m_pasteAction->setShortcut(QKeySequence::Paste);
-    if(auto* command = m_actionManager->command(Constants::Actions::Paste)) {
-        m_pasteAction->setShortcuts(command->defaultShortcuts());
-    }
+    m_pasteCmd->setDefaultShortcut(QKeySequence::Paste);
+    m_pasteAction->setVisible(selectionModel()->hasSelection());
+    m_pasteAction->setEnabled(!QApplication::clipboard()->text().isEmpty());
     QObject::connect(selectionModel(), &QItemSelectionModel::selectionChanged, this,
                      [this]() { m_pasteAction->setVisible(selectionModel()->hasSelection()); });
     QObject::connect(QApplication::clipboard(), &QClipboard::changed, this,
                      [this]() { m_pasteAction->setEnabled(!QApplication::clipboard()->text().isEmpty()); });
     QObject::connect(m_pasteAction, &QAction::triggered, this, [this]() { pasteSelection(false); });
-    m_pasteAction->setVisible(selectionModel()->hasSelection());
-    m_pasteAction->setEnabled(!QApplication::clipboard()->text().isEmpty());
 
     m_pasteFields->setShortcut(Qt::CTRL | Qt::SHIFT | Qt::Key_V);
     QObject::connect(QApplication::clipboard(), &QClipboard::changed, this,
@@ -108,6 +112,17 @@ void TagEditorView::setRatingRow(int row)
     }
 }
 
+void TagEditorView::setLovedRow(int row)
+{
+    m_lovedRow = row;
+    if(row >= 0) {
+        m_heartDelegate = qobject_cast<HeartDelegate*>(itemDelegateForRow(row));
+    }
+    else {
+        m_heartDelegate = nullptr;
+    }
+}
+
 int TagEditorView::sizeHintForRow(int row) const
 {
     if(!model()->hasIndex(row, 0, {})) {
@@ -120,10 +135,12 @@ int TagEditorView::sizeHintForRow(int row) const
 
 void TagEditorView::setupContextActions(QMenu* menu, const QPoint& /*pos*/)
 {
-    menu->addAction(m_copyAction);
-    menu->addAction(m_pasteAction);
-    menu->addSeparator();
+    menu->addAction(m_copyCmd->action());
+    menu->addAction(m_pasteCmd->action());
     menu->addAction(m_pasteFields);
+    menu->addSeparator();
+    m_capitaliseAction->setEnabled(canCapitaliseSelection());
+    menu->addAction(m_capitaliseAction);
 }
 
 void TagEditorView::mouseMoveEvent(QMouseEvent* event)
@@ -136,6 +153,13 @@ void TagEditorView::mouseMoveEvent(QMouseEvent* event)
         else if(m_starDelegate->hoveredIndex().isValid()) {
             ratingHoverOut();
         }
+
+        if(index.isValid() && index.row() == m_lovedRow && index.column() == 1) {
+            lovedHoverIn(index);
+        }
+        else if(m_heartDelegate->hoveredIndex().isValid()) {
+            lovedHoverOut();
+        }
     }
 
     ExtendableTableView::mouseMoveEvent(event);
@@ -145,53 +169,70 @@ void TagEditorView::mousePressEvent(QMouseEvent* event)
 {
     const QModelIndex index = indexAt(event->pos());
 
-    if(event->button() == Qt::RightButton || (index.isValid() && index.row() == m_ratingRow)) {
-        // Don't start editing on right-click
-        setEditTriggers(QAbstractItemView::NoEditTriggers);
-    }
-    else if(index.column() == 1) {
-        setEditTriggers(m_editTrigger | QAbstractItemView::CurrentChanged);
-    }
-    else {
-        setEditTriggers(m_editTrigger);
-    }
-
     if(event->button() == Qt::LeftButton) {
         if(!index.isValid() || index.column() != 1) {
             ExtendableTableView::mousePressEvent(event);
             return;
         }
 
-        if(!index.data().canConvert<StarRating>()) {
-            ExtendableTableView::mousePressEvent(event);
-            return;
+        if(index.data().canConvert<StarRating>()) {
+            auto starRating   = qvariant_cast<StarRating>(index.data());
+            const auto rating = StarEditor::ratingAtPosition(event->pos(), visualRect(index), starRating);
+            starRating.setRating(rating);
+
+            model()->setData(index, QVariant::fromValue(starRating));
         }
+        else if(index.data().canConvert<HeartValue>()) {
+            auto heartValue  = qvariant_cast<HeartValue>(index.data());
+            const auto loved = !heartValue.loved();
+            heartValue.setLoved(loved);
 
-        auto starRating   = qvariant_cast<StarRating>(index.data());
-        const auto rating = StarEditor::ratingAtPosition(event->pos(), visualRect(index), starRating);
-        starRating.setRating(rating);
-
-        model()->setData(index, QVariant::fromValue(starRating));
+            model()->setData(index, QVariant::fromValue(heartValue));
+        }
     }
 
     ExtendableTableView::mousePressEvent(event);
 }
 
+void TagEditorView::mouseReleaseEvent(QMouseEvent* event)
+{
+    const QModelIndex index = indexAt(event->pos());
+
+    ExtendableTableView::mouseReleaseEvent(event);
+
+    if(event->button() == Qt::LeftButton) {
+        reopenEditor(index);
+    }
+}
+
+void TagEditorView::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    const QModelIndex index = indexAt(event->pos());
+
+    ExtendableTableView::mouseDoubleClickEvent(event);
+
+    if(event->button() == Qt::LeftButton && index.isValid() && index.row() != m_ratingRow
+       && index.row() != m_lovedRow) {
+        reopenEditor(index);
+    }
+}
+
 void TagEditorView::keyPressEvent(QKeyEvent* event)
 {
-    const QKeyCombination pasteSeq{Qt::CTRL | Qt::SHIFT | Qt::Key_V};
+    static constexpr QKeyCombination pasteSeq{Qt::CTRL | Qt::SHIFT | Qt::Key_V};
 
-    if((event == QKeySequence::Copy)) {
-        m_copyAction->trigger();
-        return;
-    }
-    if((event == QKeySequence::Paste)) {
-        m_pasteAction->trigger();
-        return;
-    }
     if(event->keyCombination() == pasteSeq) {
         m_pasteFields->trigger();
         return;
+    }
+    if(event->key() == Qt::Key_F2 && event->modifiers() == Qt::NoModifier) {
+        const QModelIndex editIndex = editableIndexFor(currentIndex());
+        if(editIndex.isValid()) {
+            setCurrentIndex(editIndex);
+            edit(editIndex);
+            event->accept();
+            return;
+        }
     }
 
     ExtendableTableView::keyPressEvent(event);
@@ -202,13 +243,77 @@ void TagEditorView::leaveEvent(QEvent* event)
     if(m_starDelegate && m_starDelegate->hoveredIndex().isValid()) {
         ratingHoverOut();
     }
+    if(m_heartDelegate && m_heartDelegate->hoveredIndex().isValid()) {
+        lovedHoverOut();
+    }
 
     ExtendableTableView::leaveEvent(event);
 }
 
+void TagEditorView::reopenEditor(const QModelIndex& index)
+{
+    if(m_editTrigger == NoEditTriggers || !index.isValid() || index.row() == m_ratingRow || index.row() != m_lovedRow
+       || (model()->flags(index) & Qt::ItemIsEditable) == 0) {
+        return;
+    }
+
+    QTimer::singleShot(0, this, [this, index]() {
+        if(state() != EditingState && currentIndex() == index) {
+            edit(index);
+        }
+    });
+}
+
+QModelIndex TagEditorView::editableIndexFor(const QModelIndex& index) const
+{
+    if(m_editTrigger == NoEditTriggers || !model() || !index.isValid() || index.row() == m_ratingRow) {
+        return {};
+    }
+
+    if((model()->flags(index) & Qt::ItemIsEditable) != 0) {
+        return index;
+    }
+
+    const QModelIndex valueIndex = index.siblingAtColumn(1);
+    if(!valueIndex.isValid() || (model()->flags(valueIndex) & Qt::ItemIsEditable) == 0) {
+        return {};
+    }
+
+    return valueIndex;
+}
+
+QModelIndexList TagEditorView::selectedRows() const
+{
+    if(!model() || !selectionModel()) {
+        return {};
+    }
+
+    std::set<int> rows;
+
+    const auto selectedIndexes = selectionModel()->selectedIndexes();
+    for(const QModelIndex& index : selectedIndexes) {
+        if(index.isValid()) {
+            rows.emplace(index.row());
+        }
+    }
+
+    if(rows.empty() && currentIndex().isValid()) {
+        rows.emplace(currentIndex().row());
+    }
+
+    QModelIndexList indexes;
+    for(const int row : rows) {
+        const QModelIndex index = model()->index(row, 0);
+        if(index.isValid()) {
+            indexes.emplace_back(index);
+        }
+    }
+    return indexes;
+}
+
 void TagEditorView::copySelection()
 {
-    const auto selected = selectionModel()->selectedRows();
+    const auto selected = selectedRows();
     if(selected.empty()) {
         return;
     }
@@ -225,7 +330,7 @@ void TagEditorView::copySelection()
 
 void TagEditorView::pasteSelection(bool match)
 {
-    const auto selected = selectionModel()->selectedRows();
+    const auto selected = selectedRows();
     if(!match && selected.empty()) {
         return;
     }
@@ -262,6 +367,34 @@ void TagEditorView::pasteSelection(bool match)
     }
 }
 
+bool TagEditorView::canCapitaliseSelection() const
+{
+    if(m_editTrigger == NoEditTriggers || !selectionModel()) {
+        return false;
+    }
+
+    const auto rows = selectedRows();
+    return std::ranges::any_of(rows, [this](const QModelIndex& index) {
+        if(!index.isValid() || index.row() == m_ratingRow) {
+            return false;
+        }
+
+        const QModelIndex valueIndex = index.siblingAtColumn(1);
+        return valueIndex.isValid() && (model()->flags(valueIndex) & Qt::ItemIsEditable) != 0;
+    });
+}
+
+void TagEditorView::capitaliseSelection()
+{
+    if(!canCapitaliseSelection()) {
+        return;
+    }
+
+    if(auto* tagModel = qobject_cast<TagEditorModel*>(model())) {
+        tagModel->capitaliseRows(selectedRows());
+    }
+}
+
 void TagEditorView::ratingHoverIn(const QModelIndex& index, const QPoint& pos)
 {
     const QModelIndexList selected = selectedIndexes();
@@ -277,6 +410,26 @@ void TagEditorView::ratingHoverOut()
 {
     const QModelIndex prevIndex = m_starDelegate->hoveredIndex();
     m_starDelegate->setHoverIndex({});
+    setCursor({});
+
+    update(prevIndex);
+}
+
+void TagEditorView::lovedHoverIn(const QModelIndex& index)
+{
+    const QModelIndexList selected = selectedIndexes();
+    const QModelIndex prevIndex    = m_heartDelegate->hoveredIndex();
+    m_heartDelegate->setHoverIndex(index, selected);
+    setCursor(Qt::PointingHandCursor);
+
+    update(prevIndex);
+    update(index);
+}
+
+void TagEditorView::lovedHoverOut()
+{
+    const QModelIndex prevIndex = m_heartDelegate->hoveredIndex();
+    m_heartDelegate->setHoverIndex({});
     setCursor({});
 
     update(prevIndex);

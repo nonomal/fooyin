@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +31,7 @@ namespace Fooyin {
 struct InfoData;
 class InfoPopulator;
 class LibraryManager;
+class SelectionInfoFieldRegistry;
 
 class InfoModel : public TreeModel<InfoItem>
 {
@@ -43,12 +44,13 @@ public:
         Metadata,
         Location,
         General,
+        PlayStats,
         ReplayGain,
         Other
     };
     Q_ENUM(ItemParent)
 
-    explicit InfoModel(LibraryManager* libraryManager, QObject* parent = nullptr);
+    InfoModel(LibraryManager* libraryManager, SelectionInfoFieldRegistry* fieldRegistry, QObject* parent = nullptr);
     ~InfoModel() override;
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
@@ -64,10 +66,12 @@ public:
     void resetModel(const TrackList& tracks);
 
 private:
-    void populate(const InfoData& data);
+    void populate(InfoDataPtr data);
 
     QThread m_populatorThread;
     InfoPopulator m_populator;
+    SelectionInfoFieldRegistry* m_fieldRegistry;
+    TrackList m_tracks;
     std::unordered_map<QString, InfoItem> m_nodes;
 
     InfoItem::Options m_options{InfoItem::Default};

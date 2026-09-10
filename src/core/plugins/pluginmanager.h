@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@
 #include "fycore_export.h"
 
 #include "plugininfo.h"
+
+#include <ranges>
 
 namespace Fooyin {
 class SettingsManager;
@@ -45,7 +47,7 @@ public:
     template <typename T, typename Function>
     void initialisePlugins(Function function)
     {
-        for(auto& [name, plugin] : m_plugins) {
+        for(auto& plugin : m_plugins | std::views::values) {
             if(const auto& pluginInstance = qobject_cast<T*>(plugin->root())) {
                 function(pluginInstance);
                 plugin->initialise();
@@ -53,7 +55,14 @@ public:
         }
     }
 
-    static bool installPlugin(const QString& filepath);
+    enum class InstallResult : uint8_t
+    {
+        Installed = 0,
+        AlreadyInstalled,
+        Failed,
+    };
+    static InstallResult installPlugin(const QString& filepath, bool overwrite = false);
+
     void unloadPlugins();
 
 private:

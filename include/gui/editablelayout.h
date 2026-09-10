@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -47,7 +47,7 @@ public:
     ~EditableLayout() override;
 
     void initialise();
-    FyLayout saveCurrentToLayout(const QString& name);
+    FyLayout saveCurrentToLayout(const QString& name, bool saveWindowSize);
 
     [[nodiscard]] FyWidget* root() const;
 
@@ -101,9 +101,7 @@ public:
     static QJsonObject saveBaseWidget(FyWidget* widget);
     static FyWidget* loadWidget(WidgetProvider* provider, const QJsonObject& layout);
 
-    void showQuickSetup();
-
-signals:
+Q_SIGNALS:
     void layoutChanged();
 
 private:

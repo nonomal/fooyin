@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,34 +21,104 @@
 
 #include <gui/scripting/scriptformatter.h>
 
+#include <array>
+
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
-using FormatFunc = std::function<void(RichFormatting&, const QString&)>;
+namespace {
+using FormatterHandler = bool (*)(RichFormatting&, const QString&);
 
-void bold(RichFormatting& formatting, const QString& /*option*/)
+struct FormatterHandlerEntry
 {
-    formatting.font.setBold(true);
+    QLatin1StringView name;
+    FormatterHandler handler;
+};
+
+bool parseRgbComponent(const QString& value, int* component)
+{
+    bool isInt{false};
+    const int parsed = value.trimmed().toInt(&isInt);
+    if(!isInt || parsed < 0 || parsed > 255) {
+        return false;
+    }
+
+    *component = parsed;
+    return true;
 }
 
-void italic(RichFormatting& formatting, const QString& /*option*/)
-{
-    formatting.font.setItalic(true);
-}
-
-void fontFamily(RichFormatting& formatting, const QString& option)
+bool parseRgb(const QString& option, QColor* colour)
 {
     if(option.isEmpty()) {
-        return;
+        return false;
+    }
+
+    const QStringList parts = option.split(u","_s);
+    if(parts.size() < 3 || parts.size() > 4) {
+        return false;
+    }
+
+    int red{0};
+    int green{0};
+    int blue{0};
+    int alpha{255};
+
+    if(!parseRgbComponent(parts.at(0), &red) || !parseRgbComponent(parts.at(1), &green)
+       || !parseRgbComponent(parts.at(2), &blue)) {
+        return false;
+    }
+
+    if(parts.size() == 4 && !parseRgbComponent(parts.at(3), &alpha)) {
+        return false;
+    }
+
+    colour->setRgb(red, green, blue, alpha);
+    return true;
+}
+
+bool parseColour(const QString& option, QColor* colour)
+{
+    if(option.isEmpty()) {
+        return false;
+    }
+
+    const QString trimmed{option.trimmed()};
+
+    const QColor namedOrHex = QColor::fromString(trimmed);
+    if(namedOrHex.isValid()) {
+        *colour = namedOrHex;
+        return true;
+    }
+
+    return parseRgb(trimmed, colour);
+}
+
+bool bold(RichFormatting& formatting, const QString& /*option*/)
+{
+    formatting.font.setBold(true);
+    return true;
+}
+
+bool italic(RichFormatting& formatting, const QString& /*option*/)
+{
+    formatting.font.setItalic(true);
+    return true;
+}
+
+bool fontFamily(RichFormatting& formatting, const QString& option)
+{
+    if(option.isEmpty()) {
+        return false;
     }
 
     formatting.font.setFamily(option);
+    return true;
 }
 
-void fontSize(RichFormatting& formatting, const QString& option)
+bool fontSize(RichFormatting& formatting, const QString& option)
 {
     if(option.isEmpty()) {
-        return;
+        return false;
     }
 
     bool isInt{false};
@@ -56,13 +126,16 @@ void fontSize(RichFormatting& formatting, const QString& option)
 
     if(isInt) {
         formatting.font.setPointSize(size);
+        return true;
     }
+
+    return false;
 }
 
-void fontDelta(RichFormatting& formatting, const QString& option)
+bool fontDelta(RichFormatting& formatting, const QString& option)
 {
     if(option.isEmpty()) {
-        return;
+        return false;
     }
 
     bool isInt{false};
@@ -70,72 +143,96 @@ void fontDelta(RichFormatting& formatting, const QString& option)
 
     if(isInt) {
         formatting.font.setPointSize(formatting.font.pointSize() + delta);
+        return true;
     }
+
+    return false;
 }
 
-void colourAlpha(RichFormatting& formatting, const QString& option)
+bool colourAlpha(RichFormatting& formatting, const QString& option)
 {
     if(option.isEmpty()) {
-        return;
+        return false;
     }
 
     bool isInt{false};
     const int alpha = option.toInt(&isInt);
 
     if(isInt) {
-        formatting.colour.setAlpha(alpha);
+        formatting.colour.alpha = alpha;
+        return true;
     }
+
+    return false;
 }
 
-void colourRgb(RichFormatting& formatting, const QString& option)
+bool colourRgb(RichFormatting& formatting, const QString& option)
+{
+    QColor colour;
+    if(parseRgb(option, &colour)) {
+        formatting.colour.setColour(colour);
+        return true;
+    }
+
+    return false;
+}
+
+bool colourGeneric(RichFormatting& formatting, const QString& option)
+{
+    QColor colour;
+    if(parseColour(option, &colour)) {
+        formatting.colour.setColour(colour);
+        return true;
+    }
+
+    return false;
+}
+
+bool linkHref(RichFormatting& formatting, const QString& option)
 {
     if(option.isEmpty()) {
-        return;
+        return false;
     }
 
-    const QStringList rgb = option.split(","_L1);
-
-    if(rgb.size() < 3) {
-        return;
-    }
-
-    bool isInt{false};
-    const int red   = rgb.at(0).toInt(&isInt);
-    const int green = rgb.at(1).toInt(&isInt);
-    const int blue  = rgb.at(2).toInt(&isInt);
-    const int alpha = (rgb.size() == 4) ? rgb.at(3).toInt(&isInt) : 255;
-
-    if(isInt) {
-        formatting.colour.setRgb(red, green, blue, alpha);
-    }
+    formatting.link = option;
+    formatting.font.setUnderline(true);
+    return true;
 }
 
-class ScriptFormatterRegistryPrivate
+bool alignRight(RichFormatting& formatting, const QString& /*option*/)
 {
-public:
-    std::unordered_map<QString, FormatFunc> funcs{
-        {u"b"_s, bold},          {u"i"_s, italic},          {u"font"_s, fontFamily}, {u"size"_s, fontSize},
-        {u"sized"_s, fontDelta}, {u"alpha"_s, colourAlpha}, {u"rgb"_s, colourRgb},
-    };
+    formatting.alignment = RichAlignment::Right;
+    return true;
+}
+
+constexpr std::array FormatterHandlers{
+    FormatterHandlerEntry{.name = "b"_L1, .handler = &bold},
+    FormatterHandlerEntry{.name = "i"_L1, .handler = &italic},
+    FormatterHandlerEntry{.name = "font"_L1, .handler = &fontFamily},
+    FormatterHandlerEntry{.name = "size"_L1, .handler = &fontSize},
+    FormatterHandlerEntry{.name = "sized"_L1, .handler = &fontDelta},
+    FormatterHandlerEntry{.name = "alpha"_L1, .handler = &colourAlpha},
+    FormatterHandlerEntry{.name = "rgb"_L1, .handler = &colourRgb},
+    FormatterHandlerEntry{.name = "rgba"_L1, .handler = &colourRgb},
+    FormatterHandlerEntry{.name = "color"_L1, .handler = &colourGeneric},
+    FormatterHandlerEntry{.name = "a"_L1, .handler = &linkHref},
+    FormatterHandlerEntry{.name = "right"_L1, .handler = &alignRight},
 };
+} // namespace
 
-ScriptFormatterRegistry::ScriptFormatterRegistry()
-    : p{std::make_unique<ScriptFormatterRegistryPrivate>()}
-{ }
-
-ScriptFormatterRegistry::~ScriptFormatterRegistry() = default;
-
-bool ScriptFormatterRegistry::isFormatFunc(const QString& option) const
+bool ScriptFormatterRegistry::isKnown(const QString& func)
 {
-    return p->funcs.contains(option);
+    return std::ranges::any_of(FormatterHandlers, [&](const auto& entry) { return func == entry.name; });
 }
 
-void ScriptFormatterRegistry::format(RichFormatting& formatting, const QString& func, const QString& option) const
+bool ScriptFormatterRegistry::format(RichFormatting& formatting, const QString& func, const QString& option)
 {
-    if(!isFormatFunc(func)) {
-        return;
+    for(const auto& entry : FormatterHandlers) {
+        if(func == entry.name) {
+            return entry.handler(formatting, option);
+        }
     }
 
-    p->funcs.at(func)(formatting, option);
+    return false;
 }
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,9 +22,9 @@
 #include "fycore_export.h"
 
 #include <core/playlist/playlist.h>
-#include <core/track.h>
 
 #include <map>
+#include <optional>
 
 namespace Fooyin {
 // Queue positions for each playlist
@@ -40,18 +40,22 @@ public:
 
     [[nodiscard]] bool empty() const;
 
-    [[nodiscard]] QueueTracks tracks() const;
+    [[nodiscard]] const QueueTracks& tracks() const;
     [[nodiscard]] PlaylistTrack track(int index) const;
     [[nodiscard]] int trackCount() const;
-    [[nodiscard]] int freeSpace() const;
+
     [[nodiscard]] PlaylistIndexes playlistIndexes() const;
     [[nodiscard]] PlaylistTrackIndexes indexesForPlaylist(const UId& id) const;
+    [[nodiscard]] std::vector<int> indexesForTrack(const UId& playlistId, int playlistTrackIndex) const;
 
     [[nodiscard]] PlaylistTrack nextTrack() const;
     PlaylistTrack nextTrackChange();
 
+    [[nodiscard]] int getTrackIndex(const PlaylistTrack& track) const;
+    [[nodiscard]] bool containsTrack(const PlaylistTrack& track) const;
     void addTracks(const QueueTracks& tracks, int index = -1);
     void replaceTracks(const QueueTracks& tracks);
+    std::optional<PlaylistTrack> removeFirstMatchingTrack(const PlaylistTrack& track);
     QueueTracks removeTracks(const QueueTracks& tracks);
     QueueTracks removePlaylistTracks(const UId& playlistId);
 

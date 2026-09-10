@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,9 @@
 
 #pragma once
 
+#include <core/coresettings.h>
 #include <core/engine/audiooutput.h>
+#include <utils/lockfreeringbuffer.h>
 
 #include "pipewirecontext.h"
 #include "pipewirecore.h"
@@ -27,12 +29,15 @@
 #include "pipewirestream.h"
 #include "pipewirethreadloop.h"
 
+#include <cstddef>
 #include <memory>
 
 namespace Fooyin::Pipewire {
 class PipeWireOutput : public AudioOutput
 {
 public:
+    PipeWireOutput();
+
     bool init(const AudioFormat& format) override;
     void uninit() override;
     void reset() override;
@@ -45,11 +50,13 @@ public:
 
     OutputState currentState() override;
     [[nodiscard]] int bufferSize() const override;
-    int write(const AudioBuffer& buffer) override;
+    int write(std::span<const std::byte> data, int frameCount) override;
     void setPaused(bool pause) override;
 
     void setVolume(double volume) override;
+    [[nodiscard]] bool supportsVolumeControl() const override;
     void setDevice(const QString& device) override;
+    [[nodiscard]] AudioFormat negotiateFormat(const AudioFormat& requested) const override;
 
     [[nodiscard]] QString error() const override;
     [[nodiscard]] AudioFormat format() const override;
@@ -59,16 +66,18 @@ private:
     bool initStream();
     void uninitCore();
     static void process(void* userData);
-    static void handleStateChanged(void* userdata, pw_stream_state old, pw_stream_state state, const char* /*error*/);
+    static void handleStateChanged(void* userdata, pw_stream_state old, pw_stream_state state, const char* error);
     static void drained(void* userdata);
 
     QString m_device;
-    float m_volume{1.0};
+    float m_volume;
     AudioFormat m_format;
+    FySettings m_settings;
 
-    AudioBuffer m_buffer;
-    uint32_t m_bufferPos{0};
+    std::unique_ptr<LockFreeRingBuffer<std::byte>> m_buffer;
+    int m_targetBufferFrames;
 
+    bool m_loopStarted;
     std::unique_ptr<PipewireThreadLoop> m_loop;
     std::unique_ptr<PipewireContext> m_context;
     std::unique_ptr<PipewireCore> m_core;

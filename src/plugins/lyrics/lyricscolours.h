@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,22 +39,61 @@ struct Colours
         LineUnsynced
     };
 
-    QMap<Type, QColor> lyricsColours{{Type::Background, QApplication::palette().base().color()},
-                                     {Type::LineUnplayed, QApplication::palette().text().color().darker(150)},
-                                     {Type::LinePlayed, QApplication::palette().text().color().darker(150)},
-                                     {Type::LineSynced, QApplication::palette().text().color()},
-                                     {Type::WordLineSynced, QApplication::palette().text().color()},
-                                     {Type::WordSynced, QApplication::palette().highlight().color()},
-                                     {Type::LineUnsynced, QApplication::palette().text().color()}};
+    QMap<Type, QColor> lyricsColours;
 
-    [[nodiscard]] QColor colour(Type type) const
+    [[nodiscard]] static QColor dimmedTextColour(const QPalette& palette = QApplication::palette())
     {
-        return lyricsColours.value(type);
+        QColor colour = palette.color(QPalette::Active, QPalette::Text);
+        colour.setAlpha(std::max(1, colour.alpha() / 2));
+        return colour;
+    }
+
+    [[nodiscard]] static QColor defaultColour(Type type, const QPalette& palette = QApplication::palette())
+    {
+        switch(type) {
+            case Type::Background:
+                return palette.color(QPalette::Active, QPalette::Base);
+            case Type::LineUnplayed:
+            case Type::LinePlayed:
+            case Type::WordLineSynced:
+                return dimmedTextColour(palette);
+            case Type::LineSynced:
+            case Type::WordSynced:
+            case Type::LineUnsynced:
+                return palette.color(QPalette::Active, QPalette::Text);
+            default:
+                return {};
+        }
+    }
+
+    [[nodiscard]] QColor colour(Type type, const QPalette& palette = QApplication::palette()) const
+    {
+        const QColor override = lyricsColours.value(type);
+        if(override.isValid()) {
+            return override;
+        }
+
+        return defaultColour(type, palette);
+    }
+
+    [[nodiscard]] bool hasOverride(Type type) const
+    {
+        return lyricsColours.contains(type);
+    }
+
+    [[nodiscard]] bool isEmpty() const
+    {
+        return lyricsColours.isEmpty();
     }
 
     void setColour(Type type, const QColor& colour)
     {
-        lyricsColours[type] = colour;
+        if(colour.isValid()) {
+            lyricsColours[type] = colour;
+        }
+        else {
+            lyricsColours.remove(type);
+        }
     }
 
     bool operator==(const Colours& other) const

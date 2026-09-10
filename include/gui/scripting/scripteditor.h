@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 
 namespace Fooyin {
 class LibraryManager;
+class PlayerController;
 class TrackSelectionController;
 class ScriptEditorPrivate;
 
@@ -36,13 +37,15 @@ class FYGUI_EXPORT ScriptEditor : public QDialog
 
 public:
     ScriptEditor(LibraryManager* libraryManager, const Track& track, QWidget* parent = nullptr);
+    ScriptEditor(LibraryManager* libraryManager, TrackSelectionController* selectionController,
+                 PlayerController* playerController, QWidget* parent = nullptr);
     explicit ScriptEditor(LibraryManager* libraryManager, QWidget* parent = nullptr);
     ScriptEditor(const QString& script, const Track& track, QWidget* parent = nullptr);
     explicit ScriptEditor(QWidget* parent = nullptr);
     ~ScriptEditor() override;
 
     static void openEditor(const QString& script, const std::function<void(const QString&)>& callback,
-                           const Track& track = {});
+                           const Track& track = {}, QWidget* parent = nullptr);
 
     [[nodiscard]] QSize sizeHint() const override;
 

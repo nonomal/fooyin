@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -47,6 +47,7 @@ struct LyricData
 {
     QString id;   // Used by some services to query lyrics after searching
     QString path; // Only useful for local sources
+    QString tag;  // Only useful for tag sources
     QString data;
 
     QString title;
@@ -69,11 +70,12 @@ public:
     [[nodiscard]] virtual bool isLocal() const;
 
     virtual void search(const SearchParams& params) = 0;
+    virtual void cancel();
 
     void setIndex(int index);
     void setEnabled(bool enabled);
 
-signals:
+Q_SIGNALS:
     void searchResult(const std::vector<Fooyin::Lyrics::LyricData>& data);
 
 protected:

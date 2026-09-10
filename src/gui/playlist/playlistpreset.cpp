@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,8 +19,8 @@
 
 #include "playlistpreset.h"
 
-#include <QApplication>
-#include <QPalette>
+constexpr auto PlaylistPresetVersionMarker = -1;
+constexpr auto PlaylistPresetVersion       = 4;
 
 namespace Fooyin {
 QDataStream& operator<<(QDataStream& stream, const HeaderRow& header)
@@ -81,23 +81,61 @@ QDataStream& operator>>(QDataStream& stream, TrackRow& track)
 
 QDataStream& operator<<(QDataStream& stream, const PlaylistPreset& preset)
 {
+    stream << PlaylistPresetVersionMarker;
+    stream << PlaylistPresetVersion;
     stream << preset.id;
     stream << preset.index;
     stream << preset.name;
     stream << preset.header;
     stream << preset.subHeaders;
     stream << preset.track;
+    stream << preset.insetSubheadersToImageColumns;
+    stream << preset.showCoverBelowEverySubheader;
+    stream << preset.header.grouping;
+
+    QStringList subheaderGroupings;
+    subheaderGroupings.reserve(preset.subHeaders.size());
+    for(const auto& subheader : preset.subHeaders) {
+        subheaderGroupings.push_back(subheader.grouping);
+    }
+    stream << subheaderGroupings;
+
     return stream;
 }
 
 QDataStream& operator>>(QDataStream& stream, PlaylistPreset& preset)
 {
+    int version{1};
+
     stream >> preset.id;
+    if(preset.id == PlaylistPresetVersionMarker) {
+        stream >> version;
+        stream >> preset.id;
+    }
+
     stream >> preset.index;
     stream >> preset.name;
     stream >> preset.header;
     stream >> preset.subHeaders;
     stream >> preset.track;
+
+    if(version >= 2 && !stream.atEnd()) {
+        stream >> preset.insetSubheadersToImageColumns;
+    }
+    if(version >= 3 && !stream.atEnd()) {
+        stream >> preset.showCoverBelowEverySubheader;
+    }
+    if(version >= 4 && !stream.atEnd()) {
+        stream >> preset.header.grouping;
+
+        QStringList subheaderGroupings;
+        stream >> subheaderGroupings;
+        const auto count = std::min(preset.subHeaders.size(), subheaderGroupings.size());
+        for(qsizetype i{0}; i < count; ++i) {
+            preset.subHeaders[i].grouping = subheaderGroupings.at(i);
+        }
+    }
+
     return stream;
 }
 } // namespace Fooyin

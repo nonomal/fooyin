@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,20 +19,25 @@
 
 #pragma once
 
-#include <core/scripting/scriptparser.h>
+#include "lyrics.h"
 
+#include <core/scripting/scriptparser.h>
+#include <core/track.h>
+
+#include <QBasicTimer>
 #include <QObject>
 
-class QTimer;
+#include <optional>
+
+class QTimerEvent;
 
 namespace Fooyin {
 class MusicLibrary;
 class SettingsManager;
 class Track;
+struct WriteRequest;
 
 namespace Lyrics {
-struct Lyrics;
-
 class LyricsSaver : public QObject
 {
     Q_OBJECT
@@ -50,19 +55,38 @@ public:
     explicit LyricsSaver(MusicLibrary* library, SettingsManager* settings, QObject* parent = nullptr);
 
     void autoSaveLyrics(const Lyrics& lyrics, const Track& track);
-    void saveLyrics(const Lyrics& lyrics, const Track& track);
-    void saveLyricsToFile(const Lyrics& lyrics, const Track& track);
-    void saveLyricsToTag(const Lyrics& lyrics, const Track& track);
+    bool saveLyrics(const Lyrics& lyrics, const Track& track);
+    [[nodiscard]] Lyrics savedLyrics(const Lyrics& lyrics, const Track& track);
+    WriteRequest writeLyricsToTags(const TrackList& tracks);
+    bool saveLyricsToFile(const Lyrics& lyrics, const Track& track);
+    std::optional<Track> writeLyricsToTag(const Lyrics& lyrics, const Track& track);
+    [[nodiscard]] std::optional<Track> updateLyricsTag(const Lyrics& lyrics, const Track& track) const;
+    [[nodiscard]] Track restoreLyricsTags(const Track& originalTrack, const Track& track) const;
 
     static QString lyricsToLrc(const Lyrics& lyrics, const SaveOptions& options);
     static void lyricsToLrc(const Lyrics& lyrics, QIODevice* device, const SaveOptions& options);
 
+Q_SIGNALS:
+    void lyricsSaved(const Fooyin::Track& track, const Fooyin::Lyrics::Lyrics& lyrics);
+
+protected:
+    void timerEvent(QTimerEvent* event) override;
+
 private:
+    void clearAutoSaveTimer();
+    [[nodiscard]] QString configuredLyricsFilepath(const Track& track);
+    [[nodiscard]] QString configuredLyricsTag(const Lyrics& lyrics) const;
+    bool saveToConfiguredMethod(const Lyrics& lyrics, const Track& track);
+
     MusicLibrary* m_library;
     SettingsManager* m_settings;
 
     ScriptParser m_parser;
-    QTimer* m_autosaveTimer;
+    QBasicTimer m_autosaveTimer;
+
+    Lyrics m_pendingAutoSaveLyrics;
+    Track m_pendingAutoSaveTrack;
+    bool m_hasPendingAutoSave;
 };
 } // namespace Lyrics
 } // namespace Fooyin

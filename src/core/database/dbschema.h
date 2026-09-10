@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include "fycore_export.h"
+
 #include "settingsdatabase.h"
 
 #include <QXmlStreamReader>
@@ -26,7 +28,7 @@
 namespace Fooyin {
 class SettingsManager;
 
-class DbSchema : public DbModule
+class FYCORE_EXPORT DbSchema : public DbModule
 {
 public:
     enum class UpgradeResult

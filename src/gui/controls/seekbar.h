@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,6 +46,7 @@ protected:
 
 private:
     void reset();
+    void updateSeekEnabled() const;
     void trackChanged(const Track& track);
     void setCurrentPosition(uint64_t pos) const;
     void stateChanged(Player::PlayState state);

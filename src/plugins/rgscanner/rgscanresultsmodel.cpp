@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,7 +34,7 @@ QVariant RGScanResultsModel::headerData(int section, Qt::Orientation orientation
     }
 
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole) {
@@ -42,15 +42,15 @@ QVariant RGScanResultsModel::headerData(int section, Qt::Orientation orientation
     }
 
     switch(section) {
-        case(0):
+        case 0:
             return tr("Name");
-        case(1):
+        case 1:
             return tr("Track Gain");
-        case(2):
+        case 2:
             return tr("Album Gain");
-        case(3):
+        case 3:
             return tr("Track Peak");
-        case(4):
+        case 4:
             return tr("Album Peak");
         default:
             return {};
@@ -71,16 +71,18 @@ QVariant RGScanResultsModel::data(const QModelIndex& index, int role) const
     if(role == Qt::DisplayRole) {
         const Track& track = m_tracks.at(row);
         switch(index.column()) {
-            case(0):
+            case 0:
                 return track.effectiveTitle();
-            case(1):
-                return track.hasTrackGain() ? u"%1 dB"_s.arg(QString::number(track.rgTrackGain(), 'f', 2)) : QString{};
-            case(2):
-                return track.hasAlbumGain() ? u"%1 dB"_s.arg(QString::number(track.rgAlbumGain(), 'f', 2)) : QString{};
-            case(3):
-                return track.hasTrackPeak() ? QString::number(track.rgTrackPeak(), 'f', 6) : QString{};
-            case(4):
-                return track.hasAlbumPeak() ? QString::number(track.rgAlbumPeak(), 'f', 6) : QString{};
+            case 1:
+                return track.hasTrackGain() ? u"%1 dB"_s.arg(QString::number(track.effectiveRGTrackGain(), 'f', 2))
+                                            : QString{};
+            case 2:
+                return track.hasAlbumGain() ? u"%1 dB"_s.arg(QString::number(track.effectiveRGAlbumGain(), 'f', 2))
+                                            : QString{};
+            case 3:
+                return track.hasTrackPeak() ? QString::number(track.effectiveRGTrackPeak(), 'f', 6) : QString{};
+            case 4:
+                return track.hasAlbumPeak() ? QString::number(track.effectiveRGAlbumPeak(), 'f', 6) : QString{};
             default:
                 return {};
         }

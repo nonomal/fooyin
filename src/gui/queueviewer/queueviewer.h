@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,21 @@
 
 #pragma once
 
+#include <core/player/playbackqueue.h>
+#include <core/playlist/playlist.h>
 #include <gui/fywidget.h>
+
+#include "sortactionhandler.h"
+
+#include <memory>
+#include <vector>
+
+class QCloseEvent;
+class QJsonObject;
+class QMenu;
+class QModelIndex;
+class QMimeData;
+class QShowEvent;
 
 namespace Fooyin {
 class ActionManager;
@@ -27,9 +41,13 @@ class Command;
 class AudioLoader;
 class PlayerController;
 class PlaylistInteractor;
+class CoverRepository;
 class QueueViewerModel;
+class QueueViewerDelegate;
 class QueueViewerView;
 class SettingsManager;
+class SortingRegistry;
+class TrackSelectionController;
 class WidgetContext;
 
 class QueueViewer : public FyWidget
@@ -38,44 +56,135 @@ class QueueViewer : public FyWidget
 
 public:
     explicit QueueViewer(ActionManager* actionManager, PlaylistInteractor* playlistInteractor,
-                         std::shared_ptr<AudioLoader> audioLoader, SettingsManager* settings,
-                         QWidget* parent = nullptr);
+                         TrackSelectionController* selectionController, CoverRepository* coverRepository,
+                         SortingRegistry* sortingRegistry, SettingsManager* settings, QWidget* parent = nullptr);
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
+    void saveLayoutData(QJsonObject& layout) override;
+    void loadLayoutData(const QJsonObject& layout) override;
+
+    [[nodiscard]] QSize sizeHint() const override;
+
+    [[nodiscard]] bool isWindowWidget() const;
+
+    struct ConfigData
+    {
+        QString leftScript;
+        QString rightScript;
+        bool showCurrent{true};
+        bool showIcon{true};
+        QSize iconSize{36, 36};
+        int artworkCornerRadius{0};
+        bool showHeader{true};
+        bool showScrollBar{true};
+        bool alternatingRows{false};
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
+
+Q_SIGNALS:
+    void configChanged();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
 
 private:
+    struct ViewRowState
+    {
+        PlaylistTrack track;
+        int occurrence{0};
+        bool currentRow{false};
+
+        [[nodiscard]] bool isValid() const
+        {
+            return track.isValid();
+        }
+    };
+
+    struct ViewState
+    {
+        ViewRowState current;
+        ViewRowState top;
+        std::vector<ViewRowState> selection;
+        int scrollValue{0};
+    };
+
+    enum class QueueReorder : uint8_t
+    {
+        Randomise = 0,
+        Reverse,
+    };
+
     void setupActions();
     void setupConnections();
 
     void resetModel() const;
+    void addSortMenu(QMenu* menu) const;
+    void refreshSortActions();
+    void updateSortActionState() const;
+
+    [[nodiscard]] ViewState captureViewState() const;
+    void restoreViewState(const ViewState& state) const;
+    [[nodiscard]] ViewRowState viewRowState(const QModelIndex& index) const;
+    [[nodiscard]] QModelIndex indexForViewRowState(const ViewRowState& state) const;
 
     [[nodiscard]] bool canRemoveSelected() const;
+    void updateSelectedTracks() const;
 
     void handleRowsChanged() const;
     void removeSelectedTracks() const;
-    void handleTracksDropped(int row, const QByteArray& mimeData) const;
+    void handleQueueTracksMoved(int row, const QList<int>& indexes) const;
+    void handleTracksDropped(int row, const QMimeData* mimeData) const;
     void handlePlaylistTracksDropped(int row, const QByteArray& mimeData) const;
-    void handleQueueChanged();
     void handleQueueDoubleClicked(const QModelIndex& index) const;
+    void randomiseTracks(SortScope scope) const;
+    void reverseTracks(SortScope scope) const;
+    void sortTracks(const QString& script, SortScope scope) const;
+    void reorderTracks(QueueReorder reorder, SortScope scope) const;
+    void reorderTracks(QueueTracks reorderedTracks) const;
+    [[nodiscard]] std::vector<int> queueIndexesToSort(SortScope scope) const;
+    [[nodiscard]] std::vector<int> selectedQueueIndexes() const;
+    void replaceQueueTracks(QueueTracks tracks) const;
+    void insertQueueTracks(int row, const QueueTracks& tracks) const;
+
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    void saveConfigToLayout(const ConfigData& config, QJsonObject& layout) const;
+    void saveTopLevelState();
+    void loadTopLevelState();
+    void openConfigDialog() override;
 
     ActionManager* m_actionManager;
     PlaylistInteractor* m_playlistInteractor;
     PlayerController* m_playerController;
+    TrackSelectionController* m_selectionController;
+    SortingRegistry* m_sortingRegistry;
     SettingsManager* m_settings;
 
     QueueViewerView* m_view;
+    QueueViewerDelegate* m_delegate;
     QueueViewerModel* m_model;
     WidgetContext* m_context;
-    bool m_changingQueue{false};
+    ConfigData m_config;
 
     QAction* m_remove;
     Command* m_removeCmd;
 
     QAction* m_clear;
     Command* m_clearCmd;
+
+    QAction* m_randomise;
+    QAction* m_reverse;
+
+    std::unique_ptr<SortActionHandler> m_sortActions;
+
+    bool m_topLevelStateLoaded;
 };
 } // namespace Fooyin

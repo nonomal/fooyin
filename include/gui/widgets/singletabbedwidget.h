@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,6 +39,13 @@ public:
     };
     Q_ENUM(TabShape)
 
+    enum class TabPosition : uint8_t
+    {
+        Top = 0,
+        Bottom
+    };
+    Q_ENUM(TabPosition)
+
     explicit SingleTabbedWidget(QWidget* parent = nullptr);
     ~SingleTabbedWidget() override;
 
@@ -75,6 +82,9 @@ public:
     [[nodiscard]] TabShape tabShape() const;
     void setTabShape(TabShape shape);
 
+    [[nodiscard]] TabPosition tabPosition() const;
+    void setTabPosition(TabPosition position);
+
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
     [[nodiscard]] int heightForWidth(int width) const override;
@@ -102,14 +112,14 @@ public:
 
     [[nodiscard]] EditableTabBar* tabBar() const;
 
-signals:
+Q_SIGNALS:
     void currentChanged(int index);
     void tabMoved(int oldIndex, int newIndex);
     void tabCloseRequested(int index);
     void tabBarClicked(int index);
     void tabBarDoubleClicked(int index);
 
-public slots:
+public Q_SLOTS:
     void setCurrentIndex(int index);
 
 protected:

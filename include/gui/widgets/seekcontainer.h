@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,17 +38,17 @@ public:
     void insertWidget(int index, QWidget* widget);
 
     [[nodiscard]] bool labelsEnabled() const;
-    [[nodiscard]] bool elapsedTotal() const;
+    [[nodiscard]] bool showRemainingTime() const;
 
     void setLabelsEnabled(bool enabled);
-    void setElapsedTotal(bool enabled);
-
-signals:
-    void elapsedClicked();
-    void totalClicked();
+    void setShowRemainingTime(bool enabled);
 
 protected:
-    void showEvent(QShowEvent* event) override;
+    void changeEvent(QEvent* event) override;
+
+Q_SIGNALS:
+    void elapsedClicked();
+    void totalClicked();
 
 private:
     std::unique_ptr<SeekContainerPrivate> p;

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,9 +23,26 @@
 
 #include <utils/settings/settingsentry.h>
 
+#include <QFont>
+#include <QMap>
 #include <QObject>
+#include <QPalette>
 
-namespace Fooyin::Settings::Gui {
+namespace Fooyin {
+struct ResolvedAppStyle
+{
+    QPalette palette;
+    QFont defaultFont;
+    QMap<QString, QFont> classFonts;
+    quint64 revision{0};
+
+    [[nodiscard]] QFont font(const QString& className = {}) const
+    {
+        return className.isEmpty() ? defaultFont : classFonts.value(className, defaultFont);
+    }
+};
+
+namespace Settings::Gui {
 Q_NAMESPACE_EXPORT(FYGUI_EXPORT)
 
 enum ToolButtonOption : uint8_t
@@ -42,29 +59,52 @@ enum GuiSettings : uint32_t
     StartupBehaviour           = 2 | Type::Int,
     WaitForTracks              = 3 | Type::Bool,
     IconTheme                  = 4 | Type::Int,
-    CursorFollowsPlayback      = 5 | Type::Bool,
-    PlaybackFollowsCursor      = 6 | Type::Bool,
-    ToolButtonStyle            = 7 | Type::Int,
-    MainWindowPixelRatio       = 8 | Type::Double,
-    StarRatingSize             = 19 | Type::Int,
-    Style                      = 10 | Type::String,
-    SeekStepSmall              = 11 | Type::Int,
-    SeekStepLarge              = 12 | Type::Int,
-    ShowStatusTips             = 13 | Type::Bool,
-    Theme                      = 14 | Type::Variant,
-    ShowSplitterHandles        = 15 | Type::Bool,
-    LockSplitterHandles        = 16 | Type::Bool,
-    SplitterHandleSize         = 17 | Type::Int,
-    VolumeStep                 = 18 | Type::Double,
-    SearchSuccessClear         = 19 | Type::Bool,
-    SearchAutoDelay            = 20 | Type::Int,
-    SearchPlaylistName         = 21 | Type::String,
-    SearchPlaylistAppendSearch = 22 | Type::Bool,
-    SearchSuccessFocus         = 23 | Type::Bool,
-    SearchErrorBg              = 24 | Type::Variant,
-    SearchErrorFg              = 25 | Type::Variant,
-    SearchSuccessClose         = 26 | Type::Bool,
-    ShowMenuBar                = 27 | Type::Bool,
+    ResolvedAppStyle           = 5 | Type::Variant,
+    CursorFollowsPlayback      = 6 | Type::Bool,
+    PlaybackFollowsCursor      = 7 | Type::Bool,
+    ToolButtonStyle            = 8 | Type::Int,
+    MainWindowPixelRatio       = 9 | Type::Double,
+    StarRatingSize             = 10 | Type::Int,
+    Style                      = 11 | Type::String,
+    SeekStepSmall              = 12 | Type::Int,
+    SeekStepLarge              = 13 | Type::Int,
+    ShowStatusTips             = 14 | Type::Bool,
+    CustomTheme                = 15 | Type::Variant,
+    ShowSplitterHandles        = 16 | Type::Bool,
+    LockSplitterHandles        = 17 | Type::Bool,
+    SplitterHandleSize         = 18 | Type::Int,
+    VolumeStep                 = 19 | Type::Double,
+    SearchSuccessClear         = 20 | Type::Bool,
+    SearchAutoDelay            = 21 | Type::Int,
+    SearchPlaylistName         = 22 | Type::String,
+    SearchPlaylistAppendSearch = 23 | Type::Bool,
+    SearchSuccessFocus         = 24 | Type::Bool,
+    SearchErrorBg              = 25 | Type::Variant,
+    SearchErrorFg              = 26 | Type::Variant,
+    SearchSuccessClose         = 27 | Type::Bool,
+    ShowMenuBar                = 28 | Type::Bool,
+    RatingFullStarSymbol       = 29 | Type::String,
+    RatingHalfStarSymbol       = 30 | Type::String,
+    RatingEmptyStarSymbol      = 31 | Type::String,
+    SeekBarMouseFocus          = 32 | Type::Bool,
+    PlaylistIntegratedSearch   = 33 | Type::Bool,
+    PlaylistSearchMode         = 34 | Type::Int,
+    PlaylistSearchScript       = 35 | Type::String,
+    DragOnlyAfterSelect        = 36 | Type::Bool,
+    DarkMode                   = 37 | Type::Bool,
+    ResizeLockedAdjacentOnly   = 38 | Type::Bool,
+    LoveHeartSize              = 39 | Type::Int,
+    LoveHeartColour            = 40 | Type::Variant,
+    RatingOneStarColour        = 41 | Type::Variant,
+    RatingTwoStarColour        = 42 | Type::Variant,
+    RatingThreeStarColour      = 43 | Type::Variant,
+    RatingFourStarColour       = 44 | Type::Variant,
+    RatingFiveStarColour       = 45 | Type::Variant,
+    UnlovedHeartColour         = 46 | Type::Variant,
+    UnratedStarColour          = 47 | Type::Variant,
 };
 Q_ENUM_NS(GuiSettings)
-} // namespace Fooyin::Settings::Gui
+} // namespace Settings::Gui
+} // namespace Fooyin
+
+Q_DECLARE_METATYPE(Fooyin::ResolvedAppStyle)

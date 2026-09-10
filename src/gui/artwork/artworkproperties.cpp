@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,27 +19,55 @@
 
 #include "artworkproperties.h"
 
+#include "artworkexporter.h"
 #include "artworkrow.h"
+#include "sources/artworksource.h"
 
 #include <core/engine/audioloader.h>
-#include <gui/coverprovider.h>
+#include <core/library/pendingtrackcoverprovider.h>
+#include <gui/coverrepository.h>
+#include <gui/statusevent.h>
 
+#include <QDir>
 #include <QFutureWatcher>
 #include <QGridLayout>
 #include <QPainter>
-#include <QtConcurrentMap>
+#include <QPointer>
+#include <QtConcurrentRun>
 
 using namespace Qt::StringLiterals;
 
+namespace {
+struct ArtworkLoadEntry
+{
+    Fooyin::Track::Cover type;
+    QByteArray imageData;
+    int imageCount{0};
+    bool multipleImages{false};
+    bool sawMissing{false};
+};
+} // namespace
+
 namespace Fooyin {
-ArtworkProperties::ArtworkProperties(AudioLoader* loader, MusicLibrary* library, TrackList tracks, bool readOnly,
-                                     QWidget* parent)
+struct ArtworkLoadResult
+{
+    std::array<ArtworkLoadEntry, 3> entries;
+    bool cancelled{false};
+};
+
+ArtworkProperties::ArtworkProperties(AudioLoader* loader, MusicLibrary* library, CoverRepository* coverRepository,
+                                     SettingsManager* settings, TrackList tracks, bool readOnly, QWidget* parent)
     : PropertiesTabWidget{parent}
     , m_audioLoader{loader}
     , m_library{library}
+    , m_pendingCoverProvider{library->pendingTrackCoverProvider()}
+    , m_coverRepository{coverRepository}
+    , m_settings{settings}
     , m_tracks{std::move(tracks)}
-    , m_watcher{new QFutureWatcher<void>(this)}
-    , m_loading{true}
+    , m_watcher{new QFutureWatcher<std::shared_ptr<ArtworkLoadResult>>(this)}
+    , m_cancelLoading{std::make_shared<std::atomic_bool>(false)}
+    , m_loaded{false}
+    , m_loading{false}
     , m_writing{false}
     , m_artworkWidget{new QWidget(this)}
     , m_rows{new ArtworkRow(" "_L1 + tr("Front Cover"), Track::Cover::Front, readOnly, this),
@@ -58,55 +86,133 @@ ArtworkProperties::ArtworkProperties(AudioLoader* loader, MusicLibrary* library,
     int row{0};
     for(ArtworkRow* artworkRow : m_rows) {
         artworkLayout->addWidget(artworkRow, row++, 0);
+        QObject::connect(artworkRow, &ArtworkRow::requestExtract, this, [this, artworkRow]() {
+            const ArtworkResult artwork{.mimeType = artworkRow->mimeType(), .image = artworkRow->image()};
+            const auto summary = ArtworkExporter::extractTracks(m_tracks, artworkRow->type(), artwork);
+            if(const QString status = exportStatusMessage(summary.written, summary.failed, true); !status.isEmpty()) {
+                StatusEvent::post(status);
+            }
+        });
+        QObject::connect(artworkRow, &ArtworkRow::requestExtractAs, this, [this, artworkRow]() {
+            const ArtworkResult artwork{.mimeType = artworkRow->mimeType(), .image = artworkRow->image()};
+            const Track track = m_tracks.empty() ? Track{} : m_tracks.front();
+            if(const QString path = ArtworkExporter::extractArtworkAs(track, artworkRow->type(), artwork, this);
+               !path.isEmpty()) {
+                StatusEvent::post(tr("Exported artwork to %1").arg(QDir::toNativeSeparators(path)));
+            }
+        });
     }
     artworkLayout->setRowStretch(artworkLayout->rowCount(), 1);
 
     m_artworkWidget->hide();
-
-    loadTrackArtwork();
 }
 
 ArtworkProperties::~ArtworkProperties()
 {
-    if(m_watcher) {
-        m_watcher->waitForFinished();
-    }
+    m_cancelLoading->store(true);
 }
 
 void ArtworkProperties::loadTrackArtwork()
 {
-    const auto processTrack = [this](const Track& track) {
-        for(ArtworkRow* artworkRow : m_rows) {
-            const QByteArray cover = m_audioLoader->readTrackCover(track, artworkRow->type());
-            QMetaObject::invokeMethod(artworkRow, [artworkRow, cover]() { artworkRow->loadImage(cover); });
+    if(m_loaded) {
+        return;
+    }
+
+    m_loaded  = true;
+    m_loading = true;
+    m_cancelLoading->store(false);
+
+    constexpr std::array coverTypes = {Track::Cover::Front, Track::Cover::Back, Track::Cover::Artist};
+
+    const auto processTracks = [tracks = m_tracks, loader = m_audioLoader,
+                                pendingCoverProvider = m_pendingCoverProvider, cancel = m_cancelLoading, coverTypes]() {
+        auto result = std::make_shared<ArtworkLoadResult>();
+
+        for(size_t i{0}; i < coverTypes.size(); ++i) {
+            result->entries[i].type = coverTypes[i];
         }
+
+        for(const Track& track : tracks) {
+            if(cancel->load()) {
+                result->cancelled = true;
+                return result;
+            }
+
+            for(size_t i{0}; i < coverTypes.size(); ++i) {
+                auto& entry             = result->entries[i];
+                const auto pendingCover = pendingCoverProvider->pendingTrackCover(track, entry.type);
+                const QByteArray cover
+                    = pendingCover.has_value() ? pendingCover->image.data : loader->readTrackCover(track, entry.type);
+
+                if(cancel->load()) {
+                    result->cancelled = true;
+                    return result;
+                }
+
+                if(cover.isEmpty()) {
+                    entry.sawMissing = true;
+                    if(!entry.imageData.isEmpty()) {
+                        entry.multipleImages = true;
+                    }
+                    continue;
+                }
+
+                ++entry.imageCount;
+
+                if(entry.multipleImages) {
+                    continue;
+                }
+
+                if(entry.sawMissing) {
+                    entry.multipleImages = true;
+                    entry.imageData.clear();
+                    continue;
+                }
+
+                if(entry.imageData.isEmpty()) {
+                    entry.imageData = cover;
+                    continue;
+                }
+
+                if(entry.imageData != cover) {
+                    entry.multipleImages = true;
+                    entry.imageData.clear();
+                }
+            }
+        }
+
+        return result;
     };
 
     const int trackCount = static_cast<int>(m_tracks.size());
 
     const auto finishLoading = [this, trackCount]() {
-        for(ArtworkRow* artworkRow : m_rows) {
-            artworkRow->finalise(trackCount);
+        const auto result = m_watcher->result();
+        if(!result || result->cancelled || m_cancelLoading->load()) {
+            return;
+        }
+
+        for(size_t i{0}; i < m_rows.size(); ++i) {
+            const auto& entry = result->entries[i];
+            m_rows[i]->setLoadedState(entry.imageData, entry.imageCount, trackCount, entry.multipleImages);
         }
 
         m_loading = false;
-        m_artworkWidget->show();
-        update();
+        if(isVisible()) {
+            m_artworkWidget->show();
+            update();
+        }
     };
 
-    const auto future = QtConcurrent::map(m_tracks, processTrack);
+    QObject::disconnect(m_watcher, nullptr, this, nullptr);
+    const auto future = QtConcurrent::run(processTracks);
     QObject::connect(m_watcher, &QFutureWatcher<void>::finished, this, finishLoading);
     m_watcher->setFuture(future);
 }
 
-QString ArtworkProperties::name() const
+void ArtworkProperties::load()
 {
-    return tr("Artwork Properties");
-}
-
-QString ArtworkProperties::layoutName() const
-{
-    return u"ArtworkProperties"_s;
+    loadTrackArtwork();
 }
 
 void ArtworkProperties::apply()
@@ -116,7 +222,7 @@ void ArtworkProperties::apply()
 
     for(ArtworkRow* row : m_rows) {
         if(row->status() != ArtworkRow::Status::None) {
-            coverData.coverData.emplace(row->type(), CoverImage{row->mimeType(), row->image()});
+            coverData.coverData.emplace(row->type(), CoverImage{.mimeType = row->mimeType(), .data = row->image()});
             row->reset();
         }
     }
@@ -125,22 +231,64 @@ void ArtworkProperties::apply()
         return;
     }
 
-    QObject::connect(
-        m_library, &MusicLibrary::tracksMetadataChanged, this,
-        [this]() {
-            m_writeRequest = {};
-            m_writing      = false;
-            m_artworkWidget->show();
-            update();
-        },
-        Qt::SingleShotConnection);
-
     m_writing = true;
     m_artworkWidget->hide();
     update();
 
-    m_writeRequest = m_library->writeTrackCovers(coverData);
-    std::ranges::for_each(m_tracks, CoverProvider::removeFromCache);
+    WriteRequest writeRequest = m_library->writeTrackCovers(coverData);
+    const QPointer self{this};
+    writeRequest.finished = writeRequest.finished.then(
+        m_coverRepository, [self, coverRepository = m_coverRepository, settings = m_settings,
+                            tracks = m_tracks](const WriteResult& result) {
+            if(result.succeeded > 0) {
+                for(const Track& track : tracks) {
+                    coverRepository->removeFromCache(track, *settings);
+                }
+            }
+
+            if(const QString status = writeStatusMessage(result); !status.isEmpty()) {
+                StatusEvent::post(status);
+            }
+
+            if(self) {
+                self->m_writing = false;
+                self->m_artworkWidget->show();
+                self->update();
+            }
+            return result;
+        });
+
+    Q_EMIT writeRequestStarted(std::move(writeRequest));
+}
+
+void ArtworkProperties::setTrackScope(const TrackList& tracks)
+{
+    updateTracks(tracks);
+
+    m_cancelLoading->store(true);
+    m_loaded  = false;
+    m_loading = false;
+
+    for(ArtworkRow* row : m_rows) {
+        row->setLoadedState({}, 0, static_cast<int>(m_tracks.size()), false);
+    }
+
+    m_artworkWidget->hide();
+
+    if(isVisible()) {
+        loadTrackArtwork();
+    }
+}
+
+bool ArtworkProperties::commitPendingChanges()
+{
+    return std::ranges::none_of(m_rows,
+                                [](const ArtworkRow* row) { return row->status() != ArtworkRow::Status::None; });
+}
+
+void ArtworkProperties::updateTracks(const TrackList& tracks)
+{
+    m_tracks = tracks;
 }
 
 void ArtworkProperties::paintEvent(QPaintEvent* event)
@@ -163,6 +311,58 @@ void ArtworkProperties::paintEvent(QPaintEvent* event)
     }
 
     PropertiesTabWidget::paintEvent(event);
+}
+
+QString ArtworkProperties::writeStatusMessage(const WriteResult& result)
+{
+    return exportStatusMessage(result.succeeded, result.failed);
+}
+
+QString ArtworkProperties::exportStatusMessage(int written, int failed, bool includeEmptyMessage)
+{
+    if(written == 0 && failed == 0) {
+        if(includeEmptyMessage) {
+            return tr("No embedded artwork found to export");
+        }
+        return {};
+    }
+
+    if(failed == 0) {
+        return tr("Exported artwork to %Ln file(s)", nullptr, written);
+    }
+
+    if(written == 0) {
+        return tr("Failed to export artwork");
+    }
+
+    if(written > 0 && failed > 0) {
+        return tr("Exported artwork to %Ln file(s); some exports failed", nullptr, written);
+    }
+
+    return {};
+}
+
+void ArtworkProperties::showEvent(QShowEvent* event)
+{
+    PropertiesTabWidget::showEvent(event);
+
+    if(m_writing) {
+        update();
+        return;
+    }
+
+    if(m_loading) {
+        update();
+        return;
+    }
+
+    if(!m_loaded) {
+        loadTrackArtwork();
+        return;
+    }
+
+    m_artworkWidget->show();
+    update();
 }
 } // namespace Fooyin
 

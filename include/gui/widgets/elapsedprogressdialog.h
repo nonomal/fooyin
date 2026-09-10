@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,6 +42,7 @@ public:
 
     [[nodiscard]] int value() const;
     void setValue(int value);
+    void setBusy(bool busy);
 
     void setText(const QString& text);
     void setMinimumDuration(std::chrono::milliseconds duration);
@@ -53,17 +54,21 @@ public:
 
     [[nodiscard]] QSize sizeHint() const override;
 
-signals:
+Q_SIGNALS:
     void cancelled();
 
 private:
+    void ensureStarted();
     void updateStatus();
 
     QTextEdit* m_text;
     QProgressBar* m_progressBar;
+    int m_progressMinimum;
+    int m_progressMaximum;
     bool m_isStarting;
     bool m_isFinished;
     bool m_wasCancelled;
+    bool m_isBusy;
 
     std::chrono::milliseconds m_minDuration;
     QTimer* m_updateTimer;

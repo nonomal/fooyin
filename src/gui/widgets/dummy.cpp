@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -76,19 +76,34 @@ void Dummy::saveLayoutData(QJsonObject& layout)
 {
     if(!m_missingName.isEmpty()) {
         layout["MissingWidget"_L1] = m_missingName;
+
+        if(!m_missingLayoutData.empty()) {
+            layout["MissingWidgetData"_L1] = m_missingLayoutData;
+        }
     }
 }
 
 void Dummy::loadLayoutData(const QJsonObject& layout)
 {
     if(layout.contains("MissingWidget"_L1)) {
-        m_missingName = layout.value("MissingWidget"_L1).toString();
+        m_missingName       = layout.value("MissingWidget"_L1).toString();
+        m_missingLayoutData = layout.value("MissingWidgetData"_L1).toObject();
     }
+    else if(!m_missingName.isEmpty()) {
+        m_missingLayoutData = layout;
+    }
+
+    updateText();
 }
 
 QString Dummy::missingName() const
 {
     return m_missingName;
+}
+
+QJsonObject Dummy::missingLayoutData() const
+{
+    return m_missingLayoutData;
 }
 
 void Dummy::updateText()

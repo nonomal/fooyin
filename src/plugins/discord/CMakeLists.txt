@@ -3,10 +3,14 @@ create_fooyin_plugin_internal(
     DEPENDS Fooyin::Core
             Fooyin::Gui
             QCoro6::Network
-    SOURCES discordmessage.cpp
-            discordmessage.h
+    SOURCES discordartworkuploader.cpp
+            discordartworkuploader.h
+            discordcoverartresolver.cpp
+            discordcoverartresolver.h
             discordipcclient.cpp
             discordipcclient.h
+            discordmessage.cpp
+            discordmessage.h
             discordplugin.cpp
             discordplugin.h
             discordpresencedata.h

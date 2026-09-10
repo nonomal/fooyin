@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,20 +29,73 @@ using namespace Qt::StringLiterals;
 constexpr auto LoaderItems = "application/x-fooyin-loaderitems";
 
 namespace Fooyin {
+namespace {
+QString supportedExtensionsTooltip(const QStringList& extensions, const QString& title)
+{
+    static constexpr auto MaxLineLength = 120;
+
+    QStringList lines;
+    QString currentLine;
+
+    for(const QString& extension : extensions) {
+        const QString segment = currentLine.isEmpty() ? extension : u", %1"_s.arg(extension);
+
+        if(!currentLine.isEmpty() && currentLine.size() + segment.size() > MaxLineLength) {
+            lines.emplace_back(currentLine);
+            currentLine = extension;
+            continue;
+        }
+
+        currentLine += segment;
+    }
+
+    if(!currentLine.isEmpty()) {
+        lines.emplace_back(std::move(currentLine));
+    }
+
+    return lines.isEmpty() ? title : u"%1:\n%2"_s.arg(title, lines.join(u"\n"_s));
+}
+} // namespace
+
 DecoderModel::DecoderModel(QObject* parent)
     : QAbstractListModel{parent}
 { }
 
-void DecoderModel::setup(const LoaderVariant& loaders)
+void DecoderModel::setup(const LoaderVariant& loaders, SettingsHandlerMap settingsHandlers)
 {
     beginResetModel();
-    m_loaders = loaders;
+    m_loaders          = loaders;
+    m_settingsHandlers = std::move(settingsHandlers);
     endResetModel();
 }
 
 DecoderModel::LoaderVariant DecoderModel::loaders() const
 {
     return m_loaders;
+}
+
+bool DecoderModel::showSettings(const QModelIndex& index, QWidget* parent)
+{
+    if(!checkIndex(index, CheckIndexOption::IndexIsValid)) {
+        return false;
+    }
+
+    const auto showSettingsForLoader = [&](const auto& loaders) {
+        if(index.row() < 0 || std::cmp_greater_equal(index.row(), loaders.size())) {
+            return false;
+        }
+
+        const auto& loader    = loaders.at(index.row());
+        const auto settingsIt = m_settingsHandlers.find(loader.name);
+        if(settingsIt == m_settingsHandlers.cend()) {
+            return false;
+        }
+
+        settingsIt->second(parent);
+        return true;
+    };
+
+    return std::visit(showSettingsForLoader, m_loaders);
 }
 
 Qt::ItemFlags DecoderModel::flags(const QModelIndex& index) const
@@ -76,12 +129,14 @@ QVariant DecoderModel::data(const QModelIndex& index, int role) const
         const auto& loader = loaders.at(index.row());
 
         switch(role) {
-            case(Qt::DisplayRole):
+            case Qt::DisplayRole:
                 return loader.name;
-            case(Qt::ToolTipRole):
-                return u"%1: %2"_s.arg(tr("Supported extensions")).arg(loader.extensions.join(", "_L1));
-            case(Qt::CheckStateRole):
+            case Qt::ToolTipRole:
+                return supportedExtensionsTooltip(loader.extensions, tr("Supported extensions"));
+            case Qt::CheckStateRole:
                 return loader.enabled ? Qt::Checked : Qt::Unchecked;
+            case HasSettings:
+                return m_settingsHandlers.contains(loader.name);
             default:
                 return {};
         }
@@ -106,7 +161,7 @@ bool DecoderModel::setData(const QModelIndex& index, const QVariant& value, int 
         if(role == Qt::CheckStateRole) {
             const bool isChecked = (value.value<Qt::CheckState>() == Qt::Checked);
             if(std::exchange(loader.enabled, isChecked) != isChecked) {
-                emit dataChanged(index, index, {role});
+                Q_EMIT dataChanged(index, index, {role});
                 return true;
             }
         }

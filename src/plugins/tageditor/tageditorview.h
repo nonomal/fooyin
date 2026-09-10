@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@
 #include <gui/widgets/extendabletableview.h>
 
 namespace Fooyin {
+class Command;
+class HeartDelegate;
 class StarDelegate;
 class WidgetContext;
 
@@ -36,32 +38,49 @@ public:
     void setTagEditTriggers(EditTriggers triggers);
     void setupActions();
     void setRatingRow(int row);
-
-    [[nodiscard]] int sizeHintForRow(int row) const override;
+    void setLovedRow(int row);
 
 protected:
+    [[nodiscard]] int sizeHintForRow(int row) const override;
+
     void setupContextActions(QMenu* menu, const QPoint& pos) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 private:
+    void reopenEditor(const QModelIndex& index);
+    [[nodiscard]] QModelIndex editableIndexFor(const QModelIndex& index) const;
+    [[nodiscard]] QModelIndexList selectedRows() const;
     void copySelection();
     void pasteSelection(bool match);
+
+    [[nodiscard]] bool canCapitaliseSelection() const;
+    void capitaliseSelection();
+
     void ratingHoverIn(const QModelIndex& index, const QPoint& pos);
     void ratingHoverOut();
+    void lovedHoverIn(const QModelIndex& index);
+    void lovedHoverOut();
 
     ActionManager* m_actionManager;
 
     EditTriggers m_editTrigger;
     WidgetContext* m_context;
+    QAction* m_capitaliseAction;
     QAction* m_copyAction;
+    Command* m_copyCmd;
     QAction* m_pasteAction;
+    Command* m_pasteCmd;
     QAction* m_pasteFields;
 
     int m_ratingRow;
     StarDelegate* m_starDelegate;
+    int m_lovedRow;
+    HeartDelegate* m_heartDelegate;
 };
 } // namespace TagEditor
 } // namespace Fooyin

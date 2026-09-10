@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,12 +26,30 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
+#include <vector>
+
+using namespace Qt::StringLiterals;
+
 namespace Fooyin {
 WidgetContainer::WidgetContainer(WidgetProvider* widgetProvider, SettingsManager* settings, QWidget* parent)
     : FyWidget{parent}
     , m_widgetProvider{widgetProvider}
     , m_settings{settings}
 { }
+
+FyWidget* WidgetContainer::widgetAtPosition(const QPoint& /*pos*/) const
+{
+    return nullptr;
+}
+
+QRect WidgetContainer::widgetGeometry(FyWidget* widget) const
+{
+    if(!widget) {
+        return {};
+    }
+
+    return {widget->mapTo(const_cast<WidgetContainer*>(this), QPoint{}), widget->size()}; // NOLINT
+}
 
 int WidgetContainer::fullWidgetCount() const
 {
@@ -53,8 +71,29 @@ bool WidgetContainer::restoreState(const QByteArray& /*state*/)
     return true;
 }
 
+void WidgetContainer::saveCopyLayoutData(QJsonObject& layout, LayoutCopyContext& context, bool isRoot)
+{
+    FyWidget::saveCopyLayoutData(layout, context, isRoot);
+
+    const auto childWidgets = widgets();
+    if(childWidgets.empty()) {
+        return;
+    }
+
+    QJsonArray children;
+    for(FyWidget* widget : childWidgets) {
+        if(widget) {
+            widget->saveCopyLayout(children, context, false);
+        }
+    }
+
+    layout["Widgets"_L1] = children;
+}
+
 void WidgetContainer::loadWidgets(const QJsonArray& widgets)
 {
+    std::vector<FyWidget*> addedWidgets;
+
     for(const auto& widget : widgets) {
         if(!widget.isObject()) {
             continue;
@@ -84,19 +123,26 @@ void WidgetContainer::loadWidgets(const QJsonArray& widgets)
                     const QString missingName = dummy->missingName();
 
                     if(!missingName.isEmpty() && m_widgetProvider->canCreateWidget(missingName)) {
+                        const QJsonObject missingData = dummy->missingLayoutData();
                         childWidget->deleteLater();
                         childWidget = m_widgetProvider->createWidget(missingName);
 
-                        if(childValue.isObject()) {
-                            childWidget->loadLayout(childValue.toObject());
+                        if(childWidget && !missingData.empty()) {
+                            childWidget->loadLayout(missingData);
                         }
                     }
                 }
             }
 
-            addWidget(childWidget);
-            childWidget->finalise();
+            if(childWidget) {
+                addWidget(childWidget);
+                addedWidgets.emplace_back(childWidget);
+            }
         }
+    }
+
+    for(const auto& childWidget : addedWidgets) {
+        childWidget->finalise();
     }
 }
 } // namespace Fooyin

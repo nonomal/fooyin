@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,11 +20,13 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 
 class QAction;
 
 namespace Fooyin {
 class ActionManager;
+class AboutDialog;
 
 class HelpMenu : public QObject
 {
@@ -34,6 +36,9 @@ public:
     explicit HelpMenu(ActionManager* actionManager, QObject* parent = nullptr);
 
 private:
+    void showAboutDialog();
+
     ActionManager* m_actionManager;
+    QPointer<AboutDialog> m_aboutDialog;
 };
 } // namespace Fooyin

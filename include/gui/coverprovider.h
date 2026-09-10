@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,11 +22,13 @@
 #include "fygui_export.h"
 
 #include <core/track.h>
+#include <gui/coverartworktypes.h>
 
 #include <QFuture>
 #include <QObject>
 
 #include <memory>
+#include <optional>
 #include <set>
 
 class QPixmap;
@@ -35,7 +37,10 @@ class QSize;
 
 namespace Fooyin {
 class AudioLoader;
+class CoverRepository;
 class SettingsManager;
+
+class CoverProviderPrivate;
 
 /*!
  * Provides access to track album artwork.
@@ -45,22 +50,9 @@ class FYGUI_EXPORT CoverProvider : public QObject
     Q_OBJECT
 
 public:
-    enum ThumbnailSize : uint16_t
-    {
-        None        = 0,
-        Tiny        = 32,
-        Small       = 64,
-        MediumSmall = 96,
-        Medium      = 128,
-        Large       = 192,
-        VeryLarge   = 256,
-        ExtraLarge  = 512,
-        Huge        = 768,
-        Full        = 1024
-    };
-
     explicit CoverProvider(std::shared_ptr<AudioLoader> audioLoader, SettingsManager* settings,
                            QObject* parent = nullptr);
+    explicit CoverProvider(CoverRepository* repository, QObject* parent = nullptr);
     ~CoverProvider() override;
 
     /*!
@@ -69,6 +61,13 @@ public:
      * @note this is enabled by default.
      */
     void setUsePlaceholder(bool enabled);
+
+    /*!
+     * Sets the local source preference for artwork.
+     * If std::nullopt is passed, the global user-facing setting will be used.
+     * @note the global setting is used by default.
+     */
+    void setSourcePreference(std::optional<ArtworkSourcePreference> preference);
 
     /** Returns @c true if @p track has a cover of the specific @p type. */
     [[nodiscard]] QFuture<bool> trackHasCover(const Track& track, Track::Cover type = Track::Cover::Front) const;
@@ -87,6 +86,15 @@ public:
 
     /** Returns a valid pixmap if @p track has a cover of the specific @p type. */
     [[nodiscard]] QFuture<QPixmap> trackCoverFull(const Track& track, Track::Cover type = Track::Cover::Front) const;
+    /** Returns the original-size cover pixmap for @p track without applying the standard 1024px cap. */
+    [[nodiscard]] QFuture<QPixmap> trackCoverOriginal(const Track& track,
+                                                      Track::Cover type = Track::Cover::Front) const;
+    /** Returns the thumbnail cover pixmap for @p track asynchronously. */
+    [[nodiscard]] QFuture<QPixmap> trackCoverThumbnailAsync(const Track& track, ThumbnailSize size,
+                                                            Track::Cover type = Track::Cover::Front) const;
+    /** Returns the thumbnail cover pixmap for @p track asynchronously. */
+    [[nodiscard]] QFuture<QPixmap> trackCoverThumbnailAsync(const Track& track, const QSize& size,
+                                                            Track::Cover type = Track::Cover::Front) const;
 
     /*!
      * This will return the thumbnail picture of @p type for the @p track if it exists in the cache.
@@ -113,22 +121,53 @@ public:
                                               Track::Cover type = Track::Cover::Front) const;
 
     // Returns the placeholder cover used if a track doesn't have any artwork
-    [[nodiscard]] QPixmap placeholderCover() const;
+    [[nodiscard]] QPixmap placeholderCover(Track::Cover type = Track::Cover::Front) const;
+    /** Returns the shared repository used by this provider. */
+    [[nodiscard]] CoverRepository* repository() const;
+
+    /*!
+     * Returns the grouped artwork key used for thumbnails of @p track.
+     * Tracks in the same configured thumbnail group share this key.
+     */
+    [[nodiscard]] QString thumbnailCoverKey(const Track& track, Track::Cover type = Track::Cover::Front) const;
+    /*!
+     * Returns the exact in-memory cache key for a thumbnail of @p track at @p size.
+     * This is intended for views that need to pin visible thumbnails.
+     */
+    [[nodiscard]] QString thumbnailCacheKey(const Track& track, ThumbnailSize size,
+                                            Track::Cover type = Track::Cover::Front) const;
+    /*!
+     * This is an overloaded function.
+     * The requested pixel size is mapped to the nearest thumbnail bucket.
+     */
+    [[nodiscard]] QString thumbnailCacheKey(const Track& track, const QSize& size,
+                                            Track::Cover type = Track::Cover::Front) const;
+
+    /*!
+     * Registers the thumbnail cache keys currently visible for @p owner.
+     * Visible thumbnails are kept pinned while their normal cache entries are being reloaded or evicted.
+     * Passing an empty set clears the owner's visible keys.
+     */
+    void setVisibleThumbnailKeys(QObject* owner, const std::set<QString>& keys);
+    /** Clears all visible thumbnail keys registered by @p owner. */
+    void clearVisibleThumbnailKeys(QObject* owner);
 
     /** Returns an equivalent thumbnail size for the given @p size */
     static ThumbnailSize findThumbnailSize(const QSize& size);
     /** Clears the QPixmapCache as well as the on-disk cache. */
-    static void clearCache();
+    void clearCache();
     /** Removes all covers of the @p track from the cache. */
-    static void removeFromCache(const Track& track);
+    void removeFromCache(const Track& track);
+    /** Removes all covers of the @p track from the cache using settings for grouped thumbnails. */
+    void removeFromCache(const Track& track, const SettingsManager& settings);
 
-signals:
-    /** Emitted after a @fn trackCover or @fn trackCoverThumbnail call if and when the cover is added to the cache. */
+Q_SIGNALS:
+    /** Emitted after cached artwork for @p track has changed or been invalidated. */
     void coverAdded(const Fooyin::Track& track);
+    /** Emitted when the configured placeholder artwork changes. */
+    void placeholderChanged();
 
 private:
-    class CoverProviderPrivate;
     std::unique_ptr<CoverProviderPrivate> p;
-    static std::set<QString> m_noCoverKeys;
 };
 } // namespace Fooyin

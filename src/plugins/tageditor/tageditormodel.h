@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #pragma once
 
 #include "tageditorfield.h"
+#include "tageditorpopulator.h"
 
 #include <core/track.h>
 #include <gui/widgets/extendabletableview.h>
@@ -40,9 +41,15 @@ public:
     ~TagEditorModel() override;
 
     [[nodiscard]] TrackList tracks() const;
-    void reset(const TrackList& tracks, const std::vector<TagEditorField>& fields);
-    void setRatingRow(int row);
+    [[nodiscard]] Track::Stats changedStats() const;
+    void updateTracks(const TrackList& tracks);
 
+    void populate(TagEditorDataPtr data);
+
+    void setRatingRow(int row);
+    void setLoveRow(int row);
+
+    void capitaliseRows(const QModelIndexList& rows);
     void autoNumberTracks();
     void updateValues(const std::map<QString, QString>& fieldValues, bool match);
 

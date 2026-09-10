@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,15 +19,22 @@
 
 #pragma once
 
+#include "fileopsdefs.h"
+
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/plugin.h>
-#include <core/track.h>
 #include <gui/plugins/guiplugin.h>
+#include <utils/id.h>
 
-class QMenu;
+#include <memory>
+#include <vector>
+
+class QAction;
 
 namespace Fooyin {
-class ActionContainer;
+class AudioLoader;
+class Command;
+struct TrackSelection;
 
 namespace FileOps {
 class FileOpsPlugin : public QObject,
@@ -46,15 +53,26 @@ public:
     void initialise(const GuiPluginContext& context) override;
 
 private:
-    void recreateMenu();
+    struct PresetAction
+    {
+        Operation operation;
+        QString presetName;
+        Id id;
+        QAction* action;
+        Command* command;
+    };
+
+    void setupMenu();
+    void openDialog(const TrackSelection& selection, Operation operation, const QString& presetName = {});
+    void refreshPresetActions();
 
     ActionManager* m_actionManager;
+    std::shared_ptr<AudioLoader> m_audioLoader;
     MusicLibrary* m_library;
+    LibraryManager* m_libraryManager;
     TrackSelectionController* m_trackSelectionController;
     SettingsManager* m_settings;
-
-    ActionContainer* m_fileOpsMenu;
-    std::vector<QObject*> m_opActions;
+    std::vector<PresetAction> m_presetActions;
 };
 } // namespace FileOps
 } // namespace Fooyin

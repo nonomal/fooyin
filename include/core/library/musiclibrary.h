@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,15 +24,22 @@
 #include <core/library/libraryinfo.h>
 #include <core/track.h>
 
+#include <QFuture>
 #include <QObject>
 
 namespace Fooyin {
+class PendingTrackCoverProvider;
+class TrackMetadataStore;
 /*!
- * There are four types of scan request:
- * - Files: Scans a list of files; emits tracksScanned when finished.
- * - Tracks: Scans a TrackList; emits tracksUpdated when finished.
- * - Library: Scans an entire library; emits tracksAdded, tracksUpdated, tracksDeleted.
- * - Playlist: Loads a playlist; emits tracksScanned when finished.
+ * Represents a queued or in-progress library scan operation.
+ *
+ * Request completion is reported by scanFinished(). Some request types may emit
+ * intermediate results before completion:
+ * - Files: emits tracksScanned() for discovered standalone tracks and playlist-backed tracks.
+ * - Tracks: emits tracksUpdated() via the library update path.
+ * - Library: emits tracksAdded(), tracksUpdated(), and tracksDeleted() as changes are applied.
+ * - Playlist: emits tracksScanned() with the resolved playlist entries.
+ *
  * In-progress requests can be cancelled early using cancel().
  */
 struct ScanRequest
@@ -50,27 +57,71 @@ struct ScanRequest
     std::function<void()> cancel;
 };
 
+/*!
+ * Describes the current state of a scan request.
+ *
+ * @note total may be 0 when the amount of work is not yet known. In that case
+ * percentage() returns 0 and callers should decide how to present indeterminate
+ * progress.
+ */
 struct ScanProgress
 {
+    enum class Phase : uint8_t
+    {
+        Enumerating = 0,
+        ReadingMetadata,
+        WritingDatabase,
+        Finalising,
+        Finished,
+    };
+
     ScanRequest::Type type;
     LibraryInfo info;
     int id{-1};
     int total{0};
     int current{0};
+    int discovered{0};
+    bool onlyModified{true};
+    Phase phase{Phase::ReadingMetadata};
     QString file;
 
+    /** Returns a clamped percentage in the range 0-100 when total is known. */
     [[nodiscard]] int percentage() const
     {
-        if(id < 0 || total == 0) {
+        if(id < 0) {
             return 100;
         }
-        return std::max(0, static_cast<int>((static_cast<double>(current) / total) * 100));
+        if(total <= 0) {
+            return 0;
+        }
+        return std::clamp(static_cast<int>((static_cast<double>(current) / total) * 100), 0, 100);
     }
+};
+
+enum class WriteState : uint8_t
+{
+    Completed = 0,
+    Cancelled,
+};
+
+struct WriteResult
+{
+    WriteState state{WriteState::Completed};
+    int succeeded{0};
+    int failed{0};
 };
 
 struct WriteRequest
 {
     std::function<void()> cancel;
+    QFuture<WriteResult> finished;
+};
+
+struct ScanSummaryCounts
+{
+    int added{0};
+    int updated{0};
+    int removed{0};
 };
 
 /*!
@@ -109,6 +160,8 @@ public:
     virtual ScanRequest refresh(const LibraryInfo& library) = 0;
     /** Rescans the tracks in @p library */
     virtual ScanRequest rescan(const LibraryInfo& library) = 0;
+    /** Cancels the in-progress or queued scan request with id @p id. */
+    virtual void cancelScan(int id) = 0;
 
     /*!
      * Rescans the @p tracks, replacing existing metadata.
@@ -131,12 +184,16 @@ public:
      */
     virtual ScanRequest loadPlaylist(const QList<QUrl>& files) = 0;
 
-    /** Returns all tracks for all libraries */
+    /** Returns all tracks, including non-library tracks loaded from playlists or external files. */
     [[nodiscard]] virtual TrackList tracks() const = 0;
+    /** Returns all tracks that belong to a music library. */
+    [[nodiscard]] virtual TrackList libraryTracks() const = 0;
     /** Returns the track with an id of @p id, or an invalid track if not found.  */
     [[nodiscard]] virtual Track trackForId(int id) const = 0;
     /** Returns a TrackList containing each track (if) found with an id from @p ids  */
     [[nodiscard]] virtual TrackList tracksForIds(const TrackIds& ids) const = 0;
+    /** Returns the metadata store used by resident library tracks. */
+    [[nodiscard]] virtual std::shared_ptr<TrackMetadataStore> metadataStore() const = 0;
 
     /** Updates the track @p track in the library.  */
     virtual void updateTrack(const Track& track) = 0;
@@ -153,24 +210,47 @@ public:
      * @returns a WriteRequest which can be used to cancel the operation.
      */
     virtual WriteRequest writeTrackCovers(const TrackCoverData& coverData) = 0;
+    /*!
+     * Returns the overlay used by artwork readers to see embedded cover writes that have been accepted by the
+     * library but deferred because the backing file is currently being played.
+     */
+    [[nodiscard]] virtual PendingTrackCoverProvider* pendingTrackCoverProvider() const = 0;
 
-    /** Updates the statistics (playcount, rating etc) in the database for @p tracks.  */
-    virtual void updateTrackStats(const TrackList& tracks) = 0;
-    /** Updates the statistics (playcount, rating etc) in the database for @p track.  */
-    virtual void updateTrackStats(const Track& track) = 0;
+    /** Updates the specified @p stats in the database for @p tracks. */
+    virtual void updateTrackStats(const TrackList& tracks, Track::Stats stats) = 0;
+    /** Updates the specified @p stats in the database for @p track. */
+    virtual void updateTrackStats(const Track& track, Track::Stats stats) = 0;
 
     /** Remove unavailable tracks from the library and database. */
     virtual WriteRequest removeUnavailbleTracks() = 0;
+    /** Delete @p tracks from the library and database. */
+    virtual WriteRequest deleteTracks(const TrackList& tracks) = 0;
 
-signals:
+Q_SIGNALS:
+    /** Emitted whenever the progress state for a scan request changes. */
     void scanProgress(const Fooyin::ScanProgress& progress);
+    /**
+     * Emitted when a file or playlist scan has produced track results.
+     * scanFinished() for the same request is emitted afterwards.
+     */
     void tracksScanned(int id, const Fooyin::TrackList& tracks);
+    /** Internal acknowledgement emitted after a scan update batch has been committed into tracks(). */
+    void scanApplyCompleted(int id);
+    /** Emitted when a scan request has applied its added, updated, and removed track changes. */
+    void scanSummary(int id, Fooyin::ScanRequest::Type type, Fooyin::ScanSummaryCounts summary);
+    /** Emitted exactly once when a scan request completes or is cancelled. */
+    void scanFinished(int id, Fooyin::ScanRequest::Type type, bool cancelled);
 
     void tracksLoaded(const Fooyin::TrackList& tracks);
     void tracksAdded(const Fooyin::TrackList& tracks);
     void tracksMetadataChanged(const Fooyin::TrackList& tracks);
     void tracksUpdated(const Fooyin::TrackList& tracks);
+    /** Emitted after changed playback statistics have been committed to the database and library. */
+    void tracksStatsChanged(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
     void tracksDeleted(const Fooyin::TrackList& tracks);
     void tracksSorted(const Fooyin::TrackList& tracks);
 };
 } // namespace Fooyin
+
+Q_DECLARE_METATYPE(Fooyin::ScanProgress)
+Q_DECLARE_METATYPE(Fooyin::ScanSummaryCounts)

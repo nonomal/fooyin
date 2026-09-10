@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 
 #include "settings/lyricssettings.h"
 
+#include <utils/async.h>
+#include <utils/fileutils.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QDir>
@@ -42,46 +44,68 @@ bool LocalLyrics::isLocal() const
 
 void LocalLyrics::search(const SearchParams& params)
 {
+    cancel();
+    m_stopSource                    = std::stop_source{};
+    const std::stop_token stopToken = m_stopSource.get_token();
+
     QStringList filters;
 
-    const auto paths = settings()->value<Settings::Lyrics::Paths>();
+    const auto paths = settings()->fileValue(Settings::Paths, Defaults::paths()).toStringList();
     for(const QString& path : paths) {
         filters.emplace_back(m_parser.evaluate(path.trimmed(), params.track));
     }
 
-    QStringList lrcPaths;
+    Utils::asyncExec([filters = std::move(filters), params, stopToken]() -> std::vector<LyricData> {
+        QStringList lrcPaths;
 
-    for(const auto& filter : filters) {
-        const QFileInfo fileInfo{QDir::cleanPath(filter)};
-        const QDir filePath{fileInfo.path()};
-        const QString filePattern  = fileInfo.fileName();
-        const QStringList fileList = filePath.entryList({filePattern}, QDir::Files);
+        for(const auto& filter : filters) {
+            if(stopToken.stop_requested()) {
+                return {};
+            }
 
-        for(const QString& file : fileList) {
-            lrcPaths.emplace_back(filePath.absoluteFilePath(file));
+            const QStringList fileList
+                = Utils::File::filesFromWildcardPath(filter, QDir::Files | QDir::Hidden, QDir::NoSort);
+            for(const QString& file : fileList) {
+                lrcPaths.emplace_back(file);
+            }
         }
-    }
 
-    std::vector<LyricData> data;
+        std::vector<LyricData> data;
 
-    for(const QString& file : lrcPaths) {
-        QFile lrcFile{file};
-        if(!lrcFile.open(QIODevice::ReadOnly)) {
-            qCInfo(LYRICS) << "Could not open file" << file << "for reading:" << lrcFile.errorString();
-        }
-        else {
+        for(const QString& file : lrcPaths) {
+            if(stopToken.stop_requested()) {
+                return std::vector<LyricData>{};
+            }
+
+            QFile lrcFile{file};
+            if(!lrcFile.open(QIODevice::ReadOnly)) {
+                qCInfo(LYRICS) << "Could not open file" << file << "for reading:" << lrcFile.errorString();
+                continue;
+            }
+
             LyricData lyricData;
             lyricData.data = toUtf8(&lrcFile);
 
             if(!lyricData.data.isEmpty()) {
+                lyricData.path   = file;
                 lyricData.title  = params.title;
                 lyricData.album  = params.album;
                 lyricData.artist = params.artist;
-                data.push_back(lyricData);
+                data.push_back(std::move(lyricData));
             }
         }
-    }
 
-    emit searchResult({data});
+        return data;
+    }).then(this, [this, stopToken](const std::vector<LyricData>& data) {
+        if(!stopToken.stop_requested()) {
+            Q_EMIT searchResult(data);
+        }
+    });
+}
+
+void LocalLyrics::cancel()
+{
+    m_stopSource.request_stop();
+    LyricSource::cancel();
 }
 } // namespace Fooyin::Lyrics

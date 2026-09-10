@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "tracklistfuncs.h"
 
 #include <core/track.h>
+#include <utils/fileutils.h>
 #include <utils/stringutils.h>
 
 #include <set>
@@ -40,14 +41,40 @@ QString playtime(const TrackList& tracks)
     return Utils::msToString(total);
 }
 
+QString playlistSize(const TrackList& tracks)
+{
+    uint64_t total{0};
+    std::set<QString> seenSegmentPaths;
+
+    for(const Track& track : tracks) {
+        if(!track.isBoundedSegment()) {
+            total += track.fileSize();
+            continue;
+        }
+
+        const QString sourcePath = Utils::File::cleanPath(track.filepath());
+        if(sourcePath.isEmpty()) {
+            total += track.fileSize();
+            continue;
+        }
+
+        const auto [_, inserted] = seenSegmentPaths.emplace(sourcePath);
+        if(inserted) {
+            total += track.fileSize();
+        }
+    }
+
+    return Utils::formatFileSize(total);
+}
+
 QString genres(const TrackList& tracks)
 {
     std::set<QString> uniqueGenres;
 
     for(const auto& track : tracks) {
-        const auto trackGenres = track.genres();
-        const std::set<QString> genreSet{trackGenres.cbegin(), trackGenres.cend()};
-        uniqueGenres.insert(genreSet.cbegin(), genreSet.cend());
+        for(qsizetype index{0}; index < track.genreCount(); ++index) {
+            uniqueGenres.insert(track.genreAt(index));
+        }
     }
 
     const QStringList genreList{uniqueGenres.cbegin(), uniqueGenres.cend()};

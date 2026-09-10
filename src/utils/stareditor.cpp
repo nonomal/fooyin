@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -126,7 +126,7 @@ void StarEditor::mousePressEvent(QMouseEvent* event)
 
 void StarEditor::mouseReleaseEvent(QMouseEvent* /*event*/)
 {
-    emit editingFinished();
+    Q_EMIT editingFinished();
 }
 
 void StarEditor::keyPressEvent(QKeyEvent* event)
@@ -135,15 +135,15 @@ void StarEditor::keyPressEvent(QKeyEvent* event)
     const int key      = event->key();
 
     if(key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape) {
-        emit editingFinished();
+        Q_EMIT editingFinished();
     }
-    else if(event->key() == Qt::Key_Left) {
+    else if(key == Qt::Key_Left) {
         if(rating > 0) {
             m_rating.setRating(rating - 0.1F);
             update();
         }
     }
-    else if(event->key() == Qt::Key_Right) {
+    else if(key == Qt::Key_Right) {
         if(rating < static_cast<float>(m_rating.maxStarCount())) {
             m_rating.setRating(rating + 0.1F);
             update();

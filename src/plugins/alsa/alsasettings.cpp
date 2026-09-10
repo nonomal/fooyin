@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,8 +32,7 @@ AlsaSettings::AlsaSettings(QWidget* parent)
     , m_bufferLength{new QSpinBox(this)}
     , m_periodLength{new QSpinBox(this)}
 {
-    setWindowTitle(tr("%1 Settings").arg(u"ALSA"_s));
-    setModal(true);
+    setWindowTitle(tr("ALSA Settings"));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
     QObject::connect(buttons, &QDialogButtonBox::accepted, this, &AlsaSettings::accept);

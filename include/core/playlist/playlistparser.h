@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,8 @@
 #include <QDir>
 #include <QString>
 
+class QUrl;
+
 namespace Fooyin {
 class FYCORE_EXPORT PlaylistParser
 {
@@ -34,6 +36,7 @@ public:
     struct ReadPlaylistEntry
     {
         std::function<Track(const Track& filepath)> readTrack;
+        std::function<bool(const Track& track)> canLoadTrack;
         bool cancel{false};
     };
 
@@ -44,23 +47,20 @@ public:
         Relative
     };
 
-    explicit PlaylistParser(std::shared_ptr<AudioLoader> audioLoader);
     virtual ~PlaylistParser() = default;
 
     [[nodiscard]] virtual QString name() const                    = 0;
     [[nodiscard]] virtual QStringList supportedExtensions() const = 0;
     [[nodiscard]] virtual bool saveIsSupported() const            = 0;
+    [[nodiscard]] virtual bool canParse(const QByteArray& data, const QString& contentType, const QUrl& url) const;
+    [[nodiscard]] virtual size_t countEntries(QIODevice* device, const QString& filepath, const QDir& dir) const;
 
     virtual TrackList readPlaylist(QIODevice* device, const QString& filepath, const QDir& dir,
-                                   const ReadPlaylistEntry& readEntry, bool skipNotFound)
-        = 0;
+                                   const ReadPlaylistEntry& readEntry, bool skipNotFound) = 0;
     virtual void savePlaylist(QIODevice* device, const QString& extension, const TrackList& tracks, const QDir& dir,
                               PathType type, bool writeMetdata);
 
     static QByteArray toUtf8(QIODevice* file);
     static QString determineTrackPath(const QUrl& url, const QDir& dir, PathType type);
-
-private:
-    std::shared_ptr<AudioLoader> m_audioLoader;
 };
 } // namespace Fooyin

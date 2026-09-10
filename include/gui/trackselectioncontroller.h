@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,9 +22,15 @@
 #include "fygui_export.h"
 
 #include <core/track.h>
+#include <utils/id.h>
 
 #include <QObject>
 
+#include <functional>
+#include <optional>
+#include <vector>
+
+class QComboBox;
 class QMenu;
 
 namespace Fooyin {
@@ -35,9 +41,22 @@ class PlaylistController;
 class TrackSelectionControllerPrivate;
 class WidgetContext;
 
+struct FYGUI_EXPORT TrackSelection
+{
+    TrackList tracks;
+    std::optional<UId> playlistId;
+    std::vector<int> playlistIndexes;
+    std::vector<UId> playlistEntryIds;
+    std::optional<int> primaryPlaylistIndex;
+    bool playbackOnSend{false};
+    bool playlistBacked{false};
+
+    bool operator==(const TrackSelection& other) const = default;
+};
+
 enum class TrackAction
 {
-    None,
+    None = 0,
     AddCurrentPlaylist,
     AddActivePlaylist,
     SendCurrentPlaylist,
@@ -45,17 +64,43 @@ enum class TrackAction
     Play,
     AddToQueue,
     SendToQueue,
-    QueueNext
+    QueueNext,
+    AddCurrentPlaylistAndPlayIfStopped
 };
+
+enum class TrackContextMenuArea : uint8_t
+{
+    Track = 0,
+    Queue,
+    Playlist
+};
+
+struct FYGUI_EXPORT TrackContextMenuNodeInfo
+{
+    Id id;
+    std::optional<Id> parentId;
+    QString title;
+    TrackContextMenuArea area{TrackContextMenuArea::Track};
+    bool isSeparator{false};
+    bool isSubmenu{false};
+};
+
+enum class ActionGroup : uint8_t
+{
+    Playlist = 1 << 0,
+    Queue    = 1 << 1,
+    All      = Playlist | Queue
+};
+Q_DECLARE_FLAGS(ActionGroups, ActionGroup)
 
 namespace PlaylistAction {
 enum ActionOption : uint8_t
 {
-    None          = 0,
-    Switch        = 1 << 0,
-    KeepActive    = 1 << 1,
-    StartPlayback = 1 << 2,
-    TempPlaylist  = 1 << 3
+    None                     = 0,
+    Switch                   = 1 << 0,
+    PreservePlaybackPlaylist = 1 << 1,
+    StartPlayback            = 1 << 2,
+    TempPlaylist             = 1 << 3
 };
 Q_DECLARE_FLAGS(ActionOptions, ActionOption)
 } // namespace PlaylistAction
@@ -65,34 +110,67 @@ class FYGUI_EXPORT TrackSelectionController : public QObject
     Q_OBJECT
 
 public:
+    using TrackContextMenuRenderer = std::function<void(QMenu* menu, const TrackSelection& selection)>;
+
     TrackSelectionController(ActionManager* actionManager, AudioLoader* audioLoader, SettingsManager* settings,
                              PlaylistController* playlistController, QObject* parent = nullptr);
     ~TrackSelectionController() override;
 
+    //! Focus-sensitive selection used by track actions.
     [[nodiscard]] bool hasTracks() const;
-
+    [[nodiscard]] const TrackSelection* selectedSelection() const;
     [[nodiscard]] Track selectedTrack() const;
     [[nodiscard]] TrackList selectedTracks() const;
     [[nodiscard]] int selectedTrackCount() const;
-    void changeSelectedTracks(WidgetContext* context, int index, const TrackList& tracks);
-    void changeSelectedTracks(WidgetContext* context, const TrackList& tracks);
-    void changeSelectedTracks(const TrackList& tracks);
+
+    //! Last selection provided by a track-selection context, retained when focus moves to a non-selection widget.
+    [[nodiscard]] const TrackSelection* displaySelection() const;
+    [[nodiscard]] Track displayTrack() const;
+    [[nodiscard]] TrackList displayTracks() const;
+    [[nodiscard]] bool hasDisplayTracks() const;
+
+    void changeSelectedTracks(WidgetContext* context, const TrackSelection& selection);
     void changePlaybackOnSend(WidgetContext* context, bool enabled);
 
     void addTrackContextMenu(QMenu* menu) const;
+    void addTrackContextMenu(QMenu* menu, WidgetContext* context) const;
+    void addTrackContextMenu(QMenu* menu, const TrackSelection& selection) const;
     void addTrackQueueContextMenu(QMenu* menu) const;
     void addTrackPlaylistContextMenu(QMenu* menu) const;
+    void addTrackAddToPlaylistContextMenu(QMenu* menu) const;
+    void addTrackAddToPlaylistContextMenu(QMenu* menu, WidgetContext* context) const;
+    void addTrackAddToOtherPlaylistContextMenu(QMenu* menu) const;
+    void addTrackAddToOtherPlaylistContextMenu(QMenu* menu, WidgetContext* context) const;
+
+    bool registerTrackContextSubmenu(QObject* owner, TrackContextMenuArea area, const Id& parentId, const Id& id,
+                                     const QString& title, const Id& beforeId = {});
+    bool registerTrackContextAction(QObject* owner, TrackContextMenuArea area, const Id& parentId, const Id& id,
+                                    const QString& title, const TrackContextMenuRenderer& renderer,
+                                    const Id& beforeId = {});
+    bool registerTrackContextSeparator(QObject* owner, TrackContextMenuArea area, const Id& parentId, const Id& id,
+                                       const Id& beforeId = {});
+    bool registerTrackContextDynamicSubmenu(QObject* owner, TrackContextMenuArea area, const Id& parentId, const Id& id,
+                                            const QString& title, const TrackContextMenuRenderer& renderer,
+                                            const Id& beforeId = {});
+    [[nodiscard]] std::vector<TrackContextMenuNodeInfo> trackContextMenuNodes() const;
+
+    static void addAction(QComboBox* box, const QString& text, TrackAction action);
+    static void addStandardActions(QComboBox* box, ActionGroups groups = ActionGroup::All);
+    static bool setCurrentAction(QComboBox* box, int actionValue);
+
     void executeAction(TrackAction action, PlaylistAction::ActionOptions options = {},
                        const QString& playlistName = {});
 
-signals:
-    void actionExecuted(TrackAction action);
+Q_SIGNALS:
+    void actionExecuted(Fooyin::TrackAction action);
     void selectionChanged();
-    void requestPropertiesDialog();
+    void displaySelectionChanged();
+    void requestPropertiesDialog(const Fooyin::TrackList& tracks);
     void requestArtworkSearch(const Fooyin::TrackList& tracks, bool quick);
+    void requestArtworkAttach(const Fooyin::TrackList& tracks, Fooyin::Track::Cover type, const QString& filepath);
     void requestArtworkRemoval(const Fooyin::TrackList& tracks);
 
-public slots:
+public Q_SLOTS:
     void tracksUpdated(const Fooyin::TrackList& tracks);
     void tracksRemoved(const Fooyin::TrackList& tracks);
 
@@ -101,4 +179,5 @@ private:
 };
 } // namespace Fooyin
 
+Q_DECLARE_OPERATORS_FOR_FLAGS(Fooyin::ActionGroups)
 Q_DECLARE_OPERATORS_FOR_FLAGS(Fooyin::PlaylistAction::ActionOptions)

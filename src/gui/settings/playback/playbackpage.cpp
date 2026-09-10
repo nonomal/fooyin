@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,8 +19,6 @@
 
 #include "playbackpage.h"
 
-#include "widgets/spacer.h"
-
 #include <core/coresettings.h>
 #include <core/internalcoresettings.h>
 #include <gui/guiconstants.h>
@@ -36,6 +34,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QSlider>
+#include <QSpacerItem>
 
 using namespace Qt::StringLiterals;
 
@@ -52,6 +51,8 @@ public:
     void reset() override;
 
 private:
+    void updateWidgetState();
+
     SettingsManager* m_settings;
 
     QCheckBox* m_restoreActivePlaylistState;
@@ -64,6 +65,8 @@ private:
     QCheckBox* m_resetStopAfterCurrent;
 
     QCheckBox* m_followPlaybackQueue;
+    QCheckBox* m_stopWhenQueueFinished;
+    QCheckBox* m_clearQueueOnExit;
 
     QCheckBox* m_rewindPrevious;
     QCheckBox* m_skipUnavailable;
@@ -74,6 +77,7 @@ private:
     QDoubleSpinBox* m_volumeStep;
 
     SliderEditor* m_playedSlider;
+    SliderEditor* m_playedTimeSlider;
     ScriptLineEdit* m_shuffleAlbumsGroup;
     ScriptLineEdit* m_shuffleAlbumsSort;
 };
@@ -87,13 +91,16 @@ PlaybackPageWidget::PlaybackPageWidget(SettingsManager* settings)
     , m_stopAfterCurrent{new QCheckBox(tr("Stop playback after the current track"), this)}
     , m_resetStopAfterCurrent{new QCheckBox(tr("Reset the above after stopping"), this)}
     , m_followPlaybackQueue{new QCheckBox(tr("Follow last playback queue track"), this)}
+    , m_stopWhenQueueFinished{new QCheckBox(tr("Stop playback after queue finishes"), this)}
+    , m_clearQueueOnExit{new QCheckBox(tr("Clear queue on exit"), this)}
     , m_rewindPrevious{new QCheckBox(tr("Rewind track on previous"), this)}
     , m_skipUnavailable{new QCheckBox(tr("Skip unavailable tracks"), this)}
     , m_stopIfActiveDeleted{new QCheckBox(tr("Stop playback if the active playlist is deleted"), this)}
     , m_seekStep{new QSpinBox(this)}
     , m_seekStepLarge{new QSpinBox(this)}
     , m_volumeStep{new QDoubleSpinBox(this)}
-    , m_playedSlider{new SliderEditor(tr("Played threshold"), this)}
+    , m_playedSlider{new SliderEditor(tr("Played threshold (%)"), this)}
+    , m_playedTimeSlider{new SliderEditor(tr("Played threshold (time)"), this)}
     , m_shuffleAlbumsGroup{new ScriptLineEdit(this)}
     , m_shuffleAlbumsSort{new ScriptLineEdit(this)}
 {
@@ -102,45 +109,56 @@ PlaybackPageWidget::PlaybackPageWidget(SettingsManager* settings)
     m_restoreActivePlaylistState->setToolTip(tr("Save active playlist state on exit and restore it on next startup"));
     m_restorePlaybackState->setToolTip(tr("Save playback state on exit and restore it on next startup"));
     m_rewindPrevious->setToolTip(tr(
-        "If the current track has been playing for more than 5s, restart it instead of moving to the previous track"));
+        "If the current track has been playing for more than 5 s, restart it instead of moving to the previous track"));
     m_followPlaybackQueue->setToolTip(
         tr("Once the playback queue has finished, start playback from the tracks following the last queued track"));
+    m_clearQueueOnExit->setToolTip(tr("Do not restore the playback queue on next startup"));
     m_skipUnavailable->setToolTip(
         tr("If the current track in a playlist is unavailable, silently continue to the next track"));
 
-    QObject::connect(m_restoreActivePlaylistState, &QCheckBox::clicked, m_restorePlaybackState, &QWidget::setEnabled);
+    QObject::connect(m_restoreActivePlaylistState, &QCheckBox::toggled, this, &PlaybackPageWidget::updateWidgetState);
+    QObject::connect(m_stopAfterCurrent, &QCheckBox::toggled, this, &PlaybackPageWidget::updateWidgetState);
 
     auto* generalGroup       = new QGroupBox(tr("General"), this);
     auto* generalGroupLayout = new QGridLayout(generalGroup);
 
-    const auto playedToolTip
-        = tr("The percentage of a track that must be listened to before it is counted as 'played'");
+    const auto playedToolTip = tr("Track is counted as 'played' once either threshold is reached");
     m_playedSlider->setToolTip(playedToolTip);
+    m_playedTimeSlider->setToolTip(playedToolTip);
 
     m_playedSlider->setRange(0, 100);
     m_playedSlider->setSingleStep(25);
     m_playedSlider->setSuffix(u" %"_s);
 
+    m_playedTimeSlider->setRange(30, 600);
+    m_playedTimeSlider->setSingleStep(30);
+    m_playedTimeSlider->setSuffix(u" s"_s);
+
     int row{0};
-    generalGroupLayout->addWidget(m_restoreActivePlaylistState, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row, 0, 1, 1);
-    generalGroupLayout->addWidget(m_restorePlaybackState, row++, 1, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_cursorFollowsPlayback, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_playbackFollowsCursor, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_followPlaybackQueue, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_stopAfterCurrent, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row, 0, 1, 1);
-    generalGroupLayout->addWidget(m_resetStopAfterCurrent, row++, 1, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_rewindPrevious, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_skipUnavailable, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_stopIfActiveDeleted, row++, 0, 1, 2);
-    generalGroupLayout->addWidget(new Spacer(this), row++, 0, 1, 2);
-    generalGroupLayout->addWidget(m_playedSlider, row++, 0, 1, 2);
+    generalGroupLayout->addWidget(m_restoreActivePlaylistState, row, 0, 1, 2);
+    generalGroupLayout->addWidget(m_stopAfterCurrent, row++, 2, 1, 2);
+    generalGroupLayout->addItem(new QSpacerItem(10, 0), row, 0);
+    generalGroupLayout->addWidget(m_restorePlaybackState, row, 1);
+    generalGroupLayout->addItem(new QSpacerItem(10, 0), row, 2);
+    generalGroupLayout->addWidget(m_resetStopAfterCurrent, row++, 3);
+    generalGroupLayout->addWidget(m_cursorFollowsPlayback, row, 0, 1, 2);
+    generalGroupLayout->addWidget(m_rewindPrevious, row++, 2, 1, 2);
+    generalGroupLayout->addWidget(m_playbackFollowsCursor, row, 0, 1, 2);
+    generalGroupLayout->addWidget(m_skipUnavailable, row++, 2, 1, 2);
+    generalGroupLayout->addWidget(m_stopIfActiveDeleted, row++, 0, 1, 4);
+    generalGroupLayout->addWidget(m_playedSlider, row++, 0, 1, 4);
+    generalGroupLayout->addWidget(m_playedTimeSlider, row++, 0, 1, 4);
     generalGroupLayout->setColumnStretch(1, 1);
+    generalGroupLayout->setColumnStretch(3, 1);
+
+    auto* queueGroup       = new QGroupBox(tr("Queue"), this);
+    auto* queueGroupLayout = new QGridLayout(queueGroup);
+
+    row = 0;
+    queueGroupLayout->addWidget(m_followPlaybackQueue, row++, 0);
+    queueGroupLayout->addWidget(m_stopWhenQueueFinished, row++, 0);
+    queueGroupLayout->addWidget(m_clearQueueOnExit, row++, 0);
+    queueGroupLayout->setColumnStretch(1, 1);
 
     auto* controlsGroup  = new QGroupBox(tr("Controls"), this);
     auto* controlsLayout = new QGridLayout(controlsGroup);
@@ -173,10 +191,22 @@ PlaybackPageWidget::PlaybackPageWidget(SettingsManager* settings)
     shuffleGroupLayout->setColumnStretch(1, 1);
 
     row = 0;
-    layout->addWidget(generalGroup, row++, 0);
-    layout->addWidget(controlsGroup, row++, 0);
-    layout->addWidget(shuffleGroup, row++, 0);
+    layout->addWidget(generalGroup, row++, 0, 1, 2);
+    layout->addWidget(queueGroup, row, 0);
+    layout->addWidget(controlsGroup, row++, 1);
+    layout->addWidget(shuffleGroup, row++, 0, 1, 2);
+    layout->setColumnStretch(0, 1);
+    layout->setColumnStretch(1, 1);
     layout->setRowStretch(row, 1);
+
+    m_settings->subscribe<Settings::Gui::CursorFollowsPlayback>(m_cursorFollowsPlayback, &QCheckBox::setChecked);
+    m_settings->subscribe<Settings::Gui::PlaybackFollowsCursor>(m_playbackFollowsCursor, &QCheckBox::setChecked);
+    m_settings->subscribe<Settings::Core::StopAfterCurrent>(this, [this](const bool enabled) {
+        m_stopAfterCurrent->setChecked(enabled);
+        updateWidgetState();
+    });
+    m_settings->subscribe<Settings::Core::ResetStopAfterCurrent>(m_resetStopAfterCurrent, &QCheckBox::setChecked);
+    m_settings->subscribe<Settings::Core::Internal::PlaylistSkipUnavailable>(m_skipUnavailable, &QCheckBox::setChecked);
 }
 
 void PlaybackPageWidget::load()
@@ -185,16 +215,15 @@ void PlaybackPageWidget::load()
         m_settings->fileValue(Settings::Core::Internal::SaveActivePlaylistState, false).toBool());
     m_restorePlaybackState->setChecked(
         m_settings->fileValue(Settings::Core::Internal::SavePlaybackState, false).toBool());
-    m_restorePlaybackState->setEnabled(m_restoreActivePlaylistState->isChecked());
-
     m_cursorFollowsPlayback->setChecked(m_settings->value<Settings::Gui::CursorFollowsPlayback>());
     m_playbackFollowsCursor->setChecked(m_settings->value<Settings::Gui::PlaybackFollowsCursor>());
     m_followPlaybackQueue->setChecked(m_settings->value<Settings::Core::FollowPlaybackQueue>());
+    m_stopWhenQueueFinished->setChecked(m_settings->value<Settings::Core::PlaybackQueueStopWhenFinished>());
+    m_clearQueueOnExit->setChecked(m_settings->value<Settings::Core::ClearPlaybackQueueOnExit>());
     m_stopAfterCurrent->setChecked(m_settings->value<Settings::Core::StopAfterCurrent>());
     m_resetStopAfterCurrent->setChecked(m_settings->value<Settings::Core::ResetStopAfterCurrent>());
     m_rewindPrevious->setChecked(m_settings->value<Settings::Core::RewindPreviousTrack>());
-    m_skipUnavailable->setChecked(
-        m_settings->fileValue(Settings::Core::Internal::PlaylistSkipUnavailable, false).toBool());
+    m_skipUnavailable->setChecked(m_settings->value<Settings::Core::Internal::PlaylistSkipUnavailable>());
     m_stopIfActiveDeleted->setChecked(m_settings->value<Settings::Core::StopIfActivePlaylistDeleted>());
 
     m_seekStep->setValue(m_settings->value<Settings::Gui::SeekStepSmall>());
@@ -204,9 +233,12 @@ void PlaybackPageWidget::load()
     const double playedThreshold = m_settings->value<Settings::Core::PlayedThreshold>();
     const auto playedPercent     = static_cast<int>(playedThreshold * 100);
     m_playedSlider->setValue(playedPercent);
+    m_playedTimeSlider->setValue(m_settings->value<Settings::Core::PlayedThresholdTime>() / 1000);
 
     m_shuffleAlbumsGroup->setText(m_settings->value<Settings::Core::ShuffleAlbumsGroupScript>());
     m_shuffleAlbumsSort->setText(m_settings->value<Settings::Core::ShuffleAlbumsSortScript>());
+
+    updateWidgetState();
 }
 
 void PlaybackPageWidget::apply()
@@ -216,10 +248,12 @@ void PlaybackPageWidget::apply()
     m_settings->set<Settings::Gui::CursorFollowsPlayback>(m_cursorFollowsPlayback->isChecked());
     m_settings->set<Settings::Gui::PlaybackFollowsCursor>(m_playbackFollowsCursor->isChecked());
     m_settings->set<Settings::Core::FollowPlaybackQueue>(m_followPlaybackQueue->isChecked());
+    m_settings->set<Settings::Core::PlaybackQueueStopWhenFinished>(m_stopWhenQueueFinished->isChecked());
+    m_settings->set<Settings::Core::ClearPlaybackQueueOnExit>(m_clearQueueOnExit->isChecked());
     m_settings->set<Settings::Core::StopAfterCurrent>(m_stopAfterCurrent->isChecked());
     m_settings->set<Settings::Core::ResetStopAfterCurrent>(m_resetStopAfterCurrent->isChecked());
     m_settings->set<Settings::Core::RewindPreviousTrack>(m_rewindPrevious->isChecked());
-    m_settings->fileSet(Settings::Core::Internal::PlaylistSkipUnavailable, m_skipUnavailable->isChecked());
+    m_settings->set<Settings::Core::Internal::PlaylistSkipUnavailable>(m_skipUnavailable->isChecked());
     m_settings->set<Settings::Core::StopIfActivePlaylistDeleted>(m_stopIfActiveDeleted->isChecked());
 
     m_settings->set<Settings::Gui::SeekStepSmall>(m_seekStep->value());
@@ -229,6 +263,7 @@ void PlaybackPageWidget::apply()
     const int playedPercent    = m_playedSlider->value();
     const auto playedThreshold = static_cast<double>(playedPercent) / 100;
     m_settings->set<Settings::Core::PlayedThreshold>(playedThreshold);
+    m_settings->set<Settings::Core::PlayedThresholdTime>(m_playedTimeSlider->value() * 1000);
 
     m_settings->set<Settings::Core::ShuffleAlbumsGroupScript>(m_shuffleAlbumsGroup->text());
     m_settings->set<Settings::Core::ShuffleAlbumsSortScript>(m_shuffleAlbumsSort->text());
@@ -240,18 +275,27 @@ void PlaybackPageWidget::reset()
     m_settings->fileRemove(Settings::Core::Internal::SavePlaybackState);
     m_settings->reset<Settings::Gui::CursorFollowsPlayback>();
     m_settings->reset<Settings::Gui::PlaybackFollowsCursor>();
+    m_settings->reset<Settings::Core::FollowPlaybackQueue>();
+    m_settings->reset<Settings::Core::PlaybackQueueStopWhenFinished>();
+    m_settings->reset<Settings::Core::ClearPlaybackQueueOnExit>();
     m_settings->reset<Settings::Core::StopAfterCurrent>();
     m_settings->reset<Settings::Core::ResetStopAfterCurrent>();
     m_settings->reset<Settings::Core::RewindPreviousTrack>();
-    m_settings->reset<Settings::Core::RewindPreviousTrack>();
-    m_settings->fileRemove(Settings::Core::Internal::PlaylistSkipUnavailable);
+    m_settings->reset<Settings::Core::Internal::PlaylistSkipUnavailable>();
     m_settings->reset<Settings::Core::StopIfActivePlaylistDeleted>();
     m_settings->reset<Settings::Gui::SeekStepSmall>();
     m_settings->reset<Settings::Gui::SeekStepLarge>();
     m_settings->reset<Settings::Gui::VolumeStep>();
     m_settings->reset<Settings::Core::PlayedThreshold>();
+    m_settings->reset<Settings::Core::PlayedThresholdTime>();
     m_settings->reset<Settings::Core::ShuffleAlbumsGroupScript>();
     m_settings->reset<Settings::Core::ShuffleAlbumsSortScript>();
+}
+
+void PlaybackPageWidget::updateWidgetState()
+{
+    m_restorePlaybackState->setEnabled(m_restoreActivePlaylistState->isChecked());
+    m_resetStopAfterCurrent->setEnabled(m_stopAfterCurrent->isChecked());
 }
 
 PlaybackPage::PlaybackPage(SettingsManager* settings, QObject* parent)

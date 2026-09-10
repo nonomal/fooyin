@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,13 +21,18 @@
 
 #include "dialog/autoplaylistdialog.h"
 #include "playlist/playlistcontroller.h"
-#include "playlist/playlistinteractor.h"
+#include "playlistorganiserconfigwidget.h"
 #include "playlistorganiserdelegate.h"
 #include "playlistorganisermodel.h"
 
 #include <core/library/musiclibrary.h>
+#include <core/playlist/playlist.h>
 #include <core/playlist/playlisthandler.h>
+#include <core/track.h>
 #include <gui/guiconstants.h>
+#include <gui/guisettings.h>
+#include <gui/iconloader.h>
+#include <gui/playlist/playlistinteractor.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
 #include <utils/actions/widgetcontext.h>
@@ -35,18 +40,29 @@
 #include <utils/settings/settingsmanager.h>
 #include <utils/utils.h>
 
+#include <QApplication>
 #include <QContextMenuEvent>
+#include <QFileInfo>
+#include <QJsonObject>
 #include <QMainWindow>
 #include <QMenu>
+#include <QMouseEvent>
+#include <QSignalBlocker>
 #include <QTreeView>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <ranges>
 #include <stack>
 
 using namespace Qt::StringLiterals;
 
-constexpr auto OrganiserModel = "PlaylistOrganiser/Model";
-constexpr auto OrganiserState = "PlaylistOrganiser/State";
+constexpr auto OrganiserModel                   = "PlaylistOrganiser/Model";
+constexpr auto OrganiserState                   = "PlaylistOrganiser/State";
+constexpr auto OrganiserLeftScript              = "PlaylistOrganiser/LeftScript";
+constexpr auto OrganiserRightScript             = "PlaylistOrganiser/RightScript";
+constexpr auto OrganiserPlayingTextColour       = "PlaylistOrganiser/PlayingTextColour";
+constexpr auto OrganiserPlayingBackgroundColour = "PlaylistOrganiser/PlayingBackgroundColour";
 
 namespace {
 QByteArray saveExpandedState(QTreeView* view, QAbstractItemModel* model)
@@ -109,6 +125,54 @@ void restoreExpandedState(QTreeView* view, QAbstractItemModel* model, QByteArray
         }
     }
 }
+
+class OrganiserTreeView : public QTreeView
+{
+public:
+    explicit OrganiserTreeView(QWidget* parent = nullptr)
+        : QTreeView(parent)
+    { }
+
+protected:
+    void mousePressEvent(QMouseEvent* event) override
+    {
+        if(event->button() > Qt::LeftButton) {
+            event->ignore();
+            return;
+        }
+        QTreeView::mousePressEvent(event);
+    }
+};
+
+bool isPlaylistUrl(const QUrl& url)
+{
+    if(!url.isLocalFile()) {
+        return false;
+    }
+
+    static const QStringList extensions = [] {
+        QStringList values = Fooyin::Playlist::supportedPlaylistExtensions();
+        std::ranges::transform(values, values.begin(), [](const QString& ext) { return ext.toLower(); });
+        return values;
+    }();
+
+    const QString extension = QFileInfo(url.toLocalFile()).suffix().toLower();
+    return extensions.contains(extension);
+}
+
+QString normaliseColour(const QString& colour)
+{
+    const QColor parsedColour{colour};
+    return parsedColour.isValid() ? parsedColour.name(QColor::HexArgb) : QString{};
+}
+
+QColor defaultPlayingBackgroundColour()
+{
+    QColor colour = QApplication::palette().highlight().color();
+    colour.setAlpha(90);
+    return colour;
+}
+
 } // namespace
 
 namespace Fooyin {
@@ -119,7 +183,7 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     , m_settings{settings}
     , m_playlistInteractor{playlistInteractor}
     , m_playerController{playlistInteractor->playlistController()->playerController()}
-    , m_organiserTree{new QTreeView(this)}
+    , m_organiserTree{new OrganiserTreeView(this)}
     , m_model{new PlaylistOrganiserModel(playlistInteractor->handler(), m_playerController)}
     , m_context{new WidgetContext(this, Context{Id{"Context.PlaylistOrganiser."}.append(Utils::generateUniqueHash())},
                                   this)}
@@ -136,15 +200,23 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     , m_newAutoPlaylistCmd{actionManager->registerAction(m_newAutoPlaylist, Constants::Actions::NewAutoPlaylist,
                                                          m_context->context())}
     , m_editAutoPlaylist{new QAction(tr("Edit autoplaylist"), this)}
-    , m_editAutoPlaylistCmd{
-          actionManager->registerAction(m_editAutoPlaylist, Constants::Actions::EditAutoPlaylist, m_context->context())}
+    , m_editAutoPlaylistCmd{actionManager->registerAction(m_editAutoPlaylist, Constants::Actions::EditAutoPlaylist,
+                                                          m_context->context())}
+
+    , m_sortAllPlaylists{new QAction(tr("Sort all playlists"), this)}
+    , m_sortAllPlaylistsCmd{actionManager->registerAction(m_sortAllPlaylists, "PlaylistOrganiser.SortAllPlaylists",
+                                                          m_context->context())}
+
+    , m_sortGroupPlaylists{new QAction(tr("Sort playlists in group"), this)}
+    , m_sortGroupPlaylistsCmd{actionManager->registerAction(
+          m_sortGroupPlaylists, "PlaylistOrganiser.SortGroupPlaylists", m_context->context())}
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_organiserTree);
 
     m_organiserTree->setHeaderHidden(true);
-    m_organiserTree->setUniformRowHeights(true);
+    m_organiserTree->setUniformRowHeights(false);
     m_organiserTree->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_organiserTree->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_organiserTree->setDragEnabled(true);
@@ -155,7 +227,7 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     m_organiserTree->setAllColumnsShowFocus(true);
 
     m_organiserTree->setModel(m_model);
-    m_organiserTree->setItemDelegate(new PlaylistOrganiserDelegate(this));
+    m_organiserTree->setItemDelegate(new PlaylistOrganiserDelegate(m_organiserTree));
 
     actionManager->addContextObject(m_context);
 
@@ -174,28 +246,31 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     m_newGroupCmd->setAttribute(ProxyAction::UpdateText);
     m_newGroupCmd->setDefaultShortcut(QKeySequence::AddTab);
 
-    QAction::connect(m_newGroup, &QAction::triggered, this, [this]() {
-        const auto indexes = m_organiserTree->selectionModel()->selectedIndexes();
-        createGroup(indexes.empty() ? QModelIndex{} : indexes.front());
+    m_sortAllPlaylistsCmd->setCategories(organiserCategory);
+    m_sortAllPlaylists->setStatusTip(tr("Sort all playlists alphabetically"));
+    m_sortGroupPlaylistsCmd->setCategories(organiserCategory);
+    m_sortGroupPlaylists->setStatusTip(tr("Sort playlists in the selected group alphabetically"));
+
+    const auto sortAndRestoreState = [this](auto&& sortFn) {
+        const QByteArray state = saveExpandedState(m_organiserTree, m_model);
+        sortFn();
+        restoreExpandedState(m_organiserTree, m_model, state);
+    };
+
+    QAction::connect(m_newGroup, &QAction::triggered, this, [this]() { createGroup(actionIndex()); });
+    QAction::connect(m_sortAllPlaylists, &QAction::triggered, this, [this, sortAndRestoreState]() {
+        sortAndRestoreState([this]() { m_model->sortAllPlaylists(PlaylistOrganiserModel::SortOrder::Ascending); });
     });
-    QObject::connect(m_removePlaylist, &QAction::triggered, this,
-                     [this]() { m_model->removeItems(m_organiserTree->selectionModel()->selectedIndexes()); });
-    QObject::connect(m_renamePlaylist, &QAction::triggered, this, [this]() {
-        const auto indexes = m_organiserTree->selectionModel()->selectedIndexes();
-        m_organiserTree->edit(indexes.empty() ? QModelIndex{} : indexes.front());
+    QAction::connect(m_sortGroupPlaylists, &QAction::triggered, this, [this, sortAndRestoreState]() {
+        const auto indexes = actionIndexes();
+        sortAndRestoreState(
+            [this, indexes]() { m_model->sortGroupPlaylists(indexes, PlaylistOrganiserModel::SortOrder::Ascending); });
     });
-    QObject::connect(m_newPlaylist, &QAction::triggered, this, [this]() {
-        const auto indexes = m_organiserTree->selectionModel()->selectedIndexes();
-        createPlaylist(indexes.empty() ? QModelIndex{} : indexes.front(), false);
-    });
-    QObject::connect(m_newAutoPlaylist, &QAction::triggered, this, [this]() {
-        const auto indexes = m_organiserTree->selectionModel()->selectedIndexes();
-        createPlaylist(indexes.empty() ? QModelIndex{} : indexes.front(), true);
-    });
-    QObject::connect(m_editAutoPlaylist, &QAction::triggered, this, [this]() {
-        const auto indexes = m_organiserTree->selectionModel()->selectedIndexes();
-        editAutoPlaylist(indexes.empty() ? QModelIndex{} : indexes.front());
-    });
+    QObject::connect(m_removePlaylist, &QAction::triggered, this, [this]() { m_model->removeItems(actionIndexes()); });
+    QObject::connect(m_renamePlaylist, &QAction::triggered, this, [this]() { m_organiserTree->edit(actionIndex()); });
+    QObject::connect(m_newPlaylist, &QAction::triggered, this, [this]() { createPlaylist(actionIndex(), false); });
+    QObject::connect(m_newAutoPlaylist, &QAction::triggered, this, [this]() { createPlaylist(actionIndex(), true); });
+    QObject::connect(m_editAutoPlaylist, &QAction::triggered, this, [this]() { editAutoPlaylist(actionIndex()); });
 
     QObject::connect(m_model, &QAbstractItemModel::rowsMoved, this,
                      [this](const QModelIndex& /*source*/, int /*first*/, int /*last*/, const QModelIndex& target) {
@@ -234,6 +309,12 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     QObject::connect(m_playlistInteractor->playlistController(), &PlaylistController::playlistsLoaded, this,
                      [this]() { selectCurrentPlaylist(); });
 
+    m_settings->subscribe<Settings::Gui::ResolvedAppStyle>(this, [this]() {
+        applyConfig(m_config);
+        m_organiserTree->doItemsLayout();
+        m_organiserTree->viewport()->update();
+    });
+
     if(m_model->restoreModel(m_settings->fileValue(OrganiserModel).toByteArray())) {
         const auto state = m_settings->fileValue(OrganiserState).toByteArray();
         restoreExpandedState(m_organiserTree, m_model, state);
@@ -242,6 +323,9 @@ PlaylistOrganiser::PlaylistOrganiser(ActionManager* actionManager, PlaylistInter
     else {
         m_model->populate();
     }
+
+    m_config = defaultConfig();
+    applyConfig(m_config);
 
     selectCurrentPlaylist();
 }
@@ -262,25 +346,100 @@ QString PlaylistOrganiser::layoutName() const
     return u"PlaylistOrganiser"_s;
 }
 
+void PlaylistOrganiser::saveLayoutData(QJsonObject& layout)
+{
+    saveConfigToLayout(m_config, layout);
+}
+
+void PlaylistOrganiser::loadLayoutData(const QJsonObject& layout)
+{
+    applyConfig(configFromLayout(layout));
+}
+
+PlaylistOrganiser::ConfigData PlaylistOrganiser::factoryConfig() const
+{
+    return {
+        .leftScript              = PlaylistOrganiserModel::defaultLeftDisplayScript(),
+        .rightScript             = PlaylistOrganiserModel::defaultRightDisplayScript(),
+        .playingTextColour       = {},
+        .playingBackgroundColour = {},
+    };
+}
+
+PlaylistOrganiser::ConfigData PlaylistOrganiser::defaultConfig() const
+{
+    auto config{factoryConfig()};
+
+    config.leftScript  = m_settings->fileValue(OrganiserLeftScript, config.leftScript).toString();
+    config.rightScript = m_settings->fileValue(OrganiserRightScript, config.rightScript).toString();
+
+    config.playingTextColour = normaliseColour(m_settings->fileValue(OrganiserPlayingTextColour, {}).toString());
+    config.playingBackgroundColour
+        = normaliseColour(m_settings->fileValue(OrganiserPlayingBackgroundColour, {}).toString());
+
+    return config;
+}
+
+const PlaylistOrganiser::ConfigData& PlaylistOrganiser::currentConfig() const
+{
+    return m_config;
+}
+
+void PlaylistOrganiser::saveDefaults(const ConfigData& config) const
+{
+    m_settings->fileSet(OrganiserLeftScript, config.leftScript);
+    m_settings->fileSet(OrganiserRightScript, config.rightScript);
+    m_settings->fileSet(OrganiserPlayingTextColour, normaliseColour(config.playingTextColour));
+    m_settings->fileSet(OrganiserPlayingBackgroundColour, normaliseColour(config.playingBackgroundColour));
+}
+
+void PlaylistOrganiser::clearSavedDefaults() const
+{
+    m_settings->fileRemove(OrganiserLeftScript);
+    m_settings->fileRemove(OrganiserRightScript);
+    m_settings->fileRemove(OrganiserPlayingTextColour);
+    m_settings->fileRemove(OrganiserPlayingBackgroundColour);
+}
+
+void PlaylistOrganiser::applyConfig(const ConfigData& config)
+{
+    m_config.leftScript              = config.leftScript;
+    m_config.rightScript             = config.rightScript;
+    m_config.playingTextColour       = normaliseColour(config.playingTextColour);
+    m_config.playingBackgroundColour = normaliseColour(config.playingBackgroundColour);
+
+    const QColor playingTextColour{m_config.playingTextColour};
+    QColor playingBackgroundColour{m_config.playingBackgroundColour};
+    if(!playingBackgroundColour.isValid()) {
+        playingBackgroundColour = defaultPlayingBackgroundColour();
+    }
+
+    m_model->setDisplayScripts(m_config.leftScript, m_config.rightScript);
+    m_model->setColours(playingTextColour, playingBackgroundColour);
+}
+
 void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
 {
     auto* menu = new QMenu(this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
+    Utils::forwardMenuStatusTips(menu);
 
     QObject::connect(menu, &QObject::destroyed, this, [this]() {
+        m_contextMenuIndex = QPersistentModelIndex{};
         m_removePlaylist->setEnabled(true);
         m_renamePlaylist->setEnabled(true);
     });
 
     const QPoint point      = m_organiserTree->viewport()->mapFrom(this, event->pos());
     const QModelIndex index = m_organiserTree->indexAt(point);
+    m_contextMenuIndex      = index;
 
     int playlistCount{0};
     int groupCount{0};
 
-    const auto selected = m_organiserTree->selectionModel()->selectedRows();
-    for(const auto& selectedIndex : selected) {
-        if(selectedIndex.data(PlaylistOrganiserItem::ItemType).toInt() == PlaylistOrganiserItem::PlaylistItem) {
+    const auto actionRows = actionIndexes();
+    for(const auto& actionIndex : actionRows) {
+        if(actionIndex.data(PlaylistOrganiserItem::ItemType).toInt() == PlaylistOrganiserItem::PlaylistItem) {
             ++playlistCount;
         }
         else {
@@ -301,11 +460,35 @@ void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
     }
 
     m_removePlaylist->setEnabled(index.isValid());
-    m_renamePlaylist->setEnabled(selected.size() == 1 && index.isValid());
+    m_renamePlaylist->setEnabled(actionRows.size() == 1 && index.isValid());
 
     menu->addAction(m_newPlaylistCmd->action());
     menu->addAction(m_newAutoPlaylistCmd->action());
     menu->addAction(m_newGroupCmd->action());
+
+    const auto removedPlaylists = m_playlistInteractor->handler()->removedPlaylists();
+    if(!removedPlaylists.empty()) {
+        auto* restoreMenu = new QMenu(tr("Restore deleted playlist"), menu);
+        for(const auto* removedPlaylist : removedPlaylists) {
+            const UId removedPlaylistId = removedPlaylist->id();
+            auto* restoreAction         = new QAction(removedPlaylist->name(), restoreMenu);
+            QObject::connect(restoreAction, &QAction::triggered, this, [this, removedPlaylistId]() {
+                m_playlistInteractor->handler()->restorePlaylist(removedPlaylistId);
+            });
+            restoreMenu->addAction(restoreAction);
+        }
+
+        menu->addMenu(restoreMenu);
+    }
+
+    menu->addSeparator();
+
+    menu->addAction(m_sortAllPlaylistsCmd->action());
+    menu->addAction(m_sortGroupPlaylistsCmd->action());
+    m_sortGroupPlaylists->setEnabled(groupCount == 1 && playlistCount == 0); // only enable if a group is selected
+
+    menu->addSeparator();
+    addConfigureAction(menu, false);
 
     if(index.data(PlaylistOrganiserItem::ItemType).toInt() == PlaylistOrganiserItem::PlaylistItem) {
         if(auto* savePlaylist = m_actionManager->command(Constants::Actions::SavePlaylist)) {
@@ -317,9 +500,19 @@ void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
     menu->addSeparator();
 
     if(playlistCount == 1) {
-        if(auto* playlist = index.data(PlaylistOrganiserItem::PlaylistData).value<Playlist*>()) {
+        if(auto* playlist = actionIndex().data(PlaylistOrganiserItem::PlaylistData).value<Playlist*>()) {
             if(playlist->isAutoPlaylist()) {
                 menu->addAction(m_editAutoPlaylistCmd->action());
+            }
+            if(!playlist->isAutoPlaylist()) {
+                auto* lockAction
+                    = new QAction(Gui::iconFromTheme(Constants::Icons::ReadOnly), tr("Lock playlist"), menu);
+                lockAction->setCheckable(true);
+                lockAction->setChecked(playlist->isLocked());
+                QObject::connect(lockAction, &QAction::toggled, this, [this, id = playlist->id()](bool locked) {
+                    m_playlistInteractor->handler()->setPlaylistLocked(id, locked);
+                });
+                menu->addAction(lockAction);
             }
         }
     }
@@ -328,6 +521,25 @@ void PlaylistOrganiser::contextMenuEvent(QContextMenuEvent* event)
     menu->addAction(m_removeCmd->action());
 
     menu->popup(event->globalPos());
+}
+
+QModelIndex PlaylistOrganiser::actionIndex() const
+{
+    if(m_contextMenuIndex.isValid()) {
+        return m_contextMenuIndex;
+    }
+
+    const auto indexes = actionIndexes();
+    return indexes.empty() ? QModelIndex{} : indexes.front();
+}
+
+QModelIndexList PlaylistOrganiser::actionIndexes() const
+{
+    if(m_contextMenuIndex.isValid()) {
+        return {m_contextMenuIndex};
+    }
+
+    return m_organiserTree->selectionModel()->selectedIndexes();
 }
 
 void PlaylistOrganiser::selectionChanged()
@@ -392,12 +604,14 @@ void PlaylistOrganiser::createPlaylist(const QModelIndex& index, bool autoPlayli
         auto* autoDialog = new AutoPlaylistDialog(Utils::getMainWindow());
         autoDialog->setAttribute(Qt::WA_DeleteOnClose);
         QObject::connect(autoDialog, &QDialog::finished, this, [this]() { m_creatingPlaylist = false; });
-        QObject::connect(autoDialog, &AutoPlaylistDialog::playlistEdited, this,
-                         [this, addToModel](const QString& name, const QString& query) {
-                             if(auto* playlist = m_playlistInteractor->handler()->createNewAutoPlaylist(name, query)) {
-                                 addToModel(playlist);
-                             }
-                         });
+        QObject::connect(
+            autoDialog, &AutoPlaylistDialog::playlistEdited, this,
+            [this, addToModel](const QString& name, const QString& query, const QString& sortQuery, bool forceSorted) {
+                if(auto* playlist
+                   = m_playlistInteractor->handler()->createNewAutoPlaylist(name, query, sortQuery, forceSorted)) {
+                    addToModel(playlist);
+                }
+            });
         autoDialog->show();
         return;
     }
@@ -441,13 +655,90 @@ void PlaylistOrganiser::filesToGroup(const QList<QUrl>& urls, const QString& gro
         return;
     }
 
-    m_playlistInteractor->filesToTracks(urls, [this, group, index](const TrackList& tracks) {
+    filesToGroupOrdered(urls, group, index);
+}
+
+void PlaylistOrganiser::filesToGroupOrdered(const QList<QUrl>& urls, const QString& group, int index)
+{
+    if(urls.empty()) {
+        return;
+    }
+
+    const QUrl& firstUrl  = urls.constFirst();
+    const int insertIndex = index < 0 ? -1 : index;
+    QList remainingUrls{urls};
+
+    if(isPlaylistUrl(firstUrl)) {
+        remainingUrls.pop_front();
+
+        const QString name = QFileInfo{firstUrl.toLocalFile()}.completeBaseName();
+        m_playlistInteractor->playlistFilesToTracks(
+            {firstUrl}, [this, group, name, insertIndex, remainingUrls](const TrackList& tracks) {
+                int nextIndex = insertIndex;
+
+                const QSignalBlocker block{m_playlistInteractor->handler()};
+                if(auto* playlist = m_playlistInteractor->handler()->createNewPlaylist(name, tracks)) {
+                    m_model->playlistInserted(playlist, group, insertIndex);
+                    if(insertIndex >= 0) {
+                        nextIndex = insertIndex + 1;
+                    }
+                }
+
+                filesToGroupOrdered(remainingUrls, group, nextIndex);
+            });
+        return;
+    }
+
+    QList<QUrl> trackUrls;
+    while(!remainingUrls.empty() && !isPlaylistUrl(remainingUrls.constFirst())) {
+        trackUrls.append(remainingUrls.constFirst());
+        remainingUrls.pop_front();
+    }
+
+    m_playlistInteractor->filesToTracks(trackUrls, [this, group, insertIndex, remainingUrls](const TrackList& tracks) {
+        int nextIndex{insertIndex};
+
         const QSignalBlocker block{m_playlistInteractor->handler()};
         const QString name = Track::findCommonField(tracks);
+
         if(auto* playlist = m_playlistInteractor->handler()->createNewPlaylist(name, tracks)) {
-            m_model->playlistInserted(playlist, group, index);
+            m_model->playlistInserted(playlist, group, insertIndex);
+            if(insertIndex >= 0) {
+                nextIndex = insertIndex + 1;
+            }
         }
+
+        filesToGroupOrdered(remainingUrls, group, nextIndex);
     });
+}
+
+void PlaylistOrganiser::importPlaylists(const QList<QUrl>& urls, const QString& group, int index)
+{
+    if(urls.empty()) {
+        return;
+    }
+
+    const QUrl& url       = urls.constFirst();
+    const QString name    = QFileInfo{url.toLocalFile()}.completeBaseName();
+    const int insertIndex = index < 0 ? -1 : index;
+
+    QList remainingUrls{urls};
+    remainingUrls.pop_front();
+
+    m_playlistInteractor->playlistFilesToTracks(
+        {url}, [this, group, name, insertIndex, remainingUrls](const TrackList& tracks) {
+            int nextIndex = insertIndex;
+
+            const QSignalBlocker block{m_playlistInteractor->handler()};
+            if(auto* playlist = m_playlistInteractor->handler()->createNewPlaylist(name, tracks)) {
+                m_model->playlistInserted(playlist, group, insertIndex);
+                if(insertIndex >= 0) {
+                    nextIndex = insertIndex + 1;
+                }
+            }
+
+            importPlaylists(remainingUrls, group, nextIndex);
+        });
 }
 
 void PlaylistOrganiser::tracksToPlaylist(const std::vector<int>& trackIds, const UId& id)
@@ -475,6 +766,39 @@ void PlaylistOrganiser::tracksToGroup(const std::vector<int>& trackIds, const QS
     if(auto* playlist = m_playlistInteractor->handler()->createNewPlaylist(name, tracks)) {
         m_model->playlistInserted(playlist, group, index);
     }
+}
+
+PlaylistOrganiser::ConfigData PlaylistOrganiser::configFromLayout(const QJsonObject& layout) const
+{
+    ConfigData config{defaultConfig()};
+
+    if(layout.contains("LeftScript"_L1)) {
+        config.leftScript = layout.value("LeftScript"_L1).toString();
+    }
+    if(layout.contains("RightScript"_L1)) {
+        config.rightScript = layout.value("RightScript"_L1).toString();
+    }
+    if(layout.contains("PlayingTextColour"_L1)) {
+        config.playingTextColour = normaliseColour(layout.value("PlayingTextColour"_L1).toString());
+    }
+    if(layout.contains("PlayingBackgroundColour"_L1)) {
+        config.playingBackgroundColour = normaliseColour(layout.value("PlayingBackgroundColour"_L1).toString());
+    }
+
+    return config;
+}
+
+void PlaylistOrganiser::saveConfigToLayout(const ConfigData& config, QJsonObject& layout)
+{
+    layout["LeftScript"_L1]              = config.leftScript;
+    layout["RightScript"_L1]             = config.rightScript;
+    layout["PlayingTextColour"_L1]       = normaliseColour(config.playingTextColour);
+    layout["PlayingBackgroundColour"_L1] = normaliseColour(config.playingBackgroundColour);
+}
+
+void PlaylistOrganiser::openConfigDialog()
+{
+    showConfigDialog(new PlaylistOrganiserConfigDialog(this, this), Qt::NonModal);
 }
 } // namespace Fooyin
 

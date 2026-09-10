@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,37 +22,42 @@
 #include "lyrics.h"
 #include "settings/lyricssettings.h"
 
-#include <core/engine/audioengine.h>
-#include <core/player/playerdefs.h>
+#include <core/engine/enginedefs.h>
 #include <core/scripting/scriptparser.h>
 #include <gui/fywidget.h>
 
 #include <QBasicTimer>
+#include <QMargins>
 #include <QPointer>
+#include <QVariant>
 
+class QJsonObject;
 class QPropertyAnimation;
-class QScrollArea;
-class QTextEdit;
 
 namespace Fooyin {
 class EngineController;
+class GuiStyleProvider;
 class PlayerController;
+class PlaylistHandler;
 class SettingsManager;
 class Track;
+struct RichText;
 
 namespace Lyrics {
-class LyricsArea;
+class LyricsView;
+class LyricsDelegate;
 class LyricsFinder;
+class LyricsModel;
 class LyricsSaver;
-class LyricsScrollArea;
 
 class LyricsWidget : public FyWidget
 {
     Q_OBJECT
 
 public:
-    explicit LyricsWidget(PlayerController* playerController, EngineController* engine, LyricsFinder* lyricsFinder,
-                          LyricsSaver* lyricsSaver, SettingsManager* settings, QWidget* parent = nullptr);
+    explicit LyricsWidget(PlayerController* playerController, PlaylistHandler* playlistHandler,
+                          LyricsFinder* lyricsFinder, LyricsSaver* lyricsSaver, SettingsManager* settings,
+                          GuiStyleProvider* styleProvider, QWidget* parent = nullptr);
 
     static QString defaultNoLyricsScript();
 
@@ -60,40 +65,100 @@ public:
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
+    void saveLayoutData(QJsonObject& layout) override;
+    void loadLayoutData(const QJsonObject& layout) override;
+
+    struct ConfigData
+    {
+        bool seekOnClick{true};
+        QString noLyricsScript{defaultNoLyricsScript()};
+        int scrollDuration{500};
+        int scrollMode{static_cast<int>(ScrollMode::Synced)};
+        int edgeFadeMode{static_cast<int>(EdgeFadeMode::Off)};
+        int edgeFadeSize{10};
+        bool showScrollbar{true};
+        int alignment{Qt::AlignCenter};
+        int lineSpacing{5};
+        bool centreFirstLine{false};
+        bool centreLastLine{true};
+        int progressMode{static_cast<int>(ProgressMode::Off)};
+        QMargins margins{Defaults::margins()};
+        QVariant colours;
+        QString baseFont;
+        QString lineFont;
+        QString wordLineFont;
+        QString wordFont;
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
+
+Q_SIGNALS:
+    void configChanged();
 
 protected:
     void timerEvent(QTimerEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
 
+    void openConfigDialog() override;
+
 private:
     void loadLyrics(const Lyrics& lyrics);
-    void changeLyrics(const Lyrics& lyrics);
+    void handleLyricsSearchFinished(const Track& track, bool foundAny);
+    void handleSavedLyrics(const Track& track, const Lyrics& lyrics);
+    void changeLyrics(const Lyrics& lyrics, const Track* sourceTrack = nullptr);
     void openEditor(const Lyrics& lyrics);
-    void playStateChanged(AudioEngine::PlaybackState state);
+    void openSearchDialog();
 
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    void saveConfigToLayout(const ConfigData& config, QJsonObject& layout) const;
+
+    void playStateChanged(Player::PlayState state);
+
+    void setCurrentTime(uint64_t time);
+    [[nodiscard]] RichText noLyricsDisplayText(const Track& track);
+    void updateViewportPadding();
+    void seekTo(const QModelIndex& index, const QPoint& pos);
+
+    void highlightCurrentLine();
     void scrollToCurrentLine(int scrollValue);
     void updateScrollMode(ScrollMode mode);
 
-    void checkStartAutoScrollPos(uint64_t pos);
-    void checkStartAutoScroll(int startValue = -1);
-    void updateAutoScroll(int startValue);
+    void syncAutoScroll(uint64_t position);
+    void resumeAutoScroll();
+    void startAutoScroll(uint64_t position, bool syncPosition);
+    void stopAutoScroll();
+
+    void updateEdgeFadeState();
+    [[nodiscard]] bool shouldEnableEdgeFade() const;
 
     PlayerController* m_playerController;
-    EngineController* m_engine;
+    PlaylistHandler* m_playlistHandler;
     SettingsManager* m_settings;
+    GuiStyleProvider* m_styleProvider;
 
-    LyricsScrollArea* m_scrollArea;
-    LyricsArea* m_lyricsArea;
+    LyricsView* m_lyricsView;
+    LyricsModel* m_model;
+    LyricsDelegate* m_delegate;
 
     LyricsFinder* m_lyricsFinder;
     LyricsSaver* m_lyricsSaver;
 
-    Lyrics::Type m_type;
+    Lyrics m_currentLyrics;
+    uint64_t m_currentTime;
+    int m_currentLineStart;
+    int m_currentLineEnd;
+
     Track m_currentTrack;
     std::vector<Lyrics> m_lyrics;
     QMetaObject::Connection m_finderConnection;
     ScriptParser m_parser;
 
+    ConfigData m_config;
     ScrollMode m_scrollMode;
     QPointer<QPropertyAnimation> m_scrollAnim;
     bool m_isUserScrolling;

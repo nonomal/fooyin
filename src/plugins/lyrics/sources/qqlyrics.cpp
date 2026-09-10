@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "qqlyrics.h"
 
 #include <core/network/networkaccessmanager.h>
+#include <core/network/networkutils.h>
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -33,16 +34,16 @@ using namespace Qt::StringLiterals;
 constexpr auto SearchUrl = "https://c.y.qq.com/splcloud/fcgi-bin/smartbox_new.fcg";
 constexpr auto LyricUrl  = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg";
 
+namespace Fooyin::Lyrics {
 namespace {
 QNetworkRequest setupRequest(const char* url)
 {
-    QNetworkRequest req{QString::fromLatin1(url)};
+    QNetworkRequest req = makeNetworkRequest(QString::fromLatin1(url));
     req.setRawHeader("Referer", "https://y.qq.com/portal/player.html");
     return req;
 }
 } // namespace
 
-namespace Fooyin::Lyrics {
 QString QQLyrics::name() const
 {
     return u"QQ Music"_s;
@@ -70,7 +71,7 @@ void QQLyrics::handleSearchReply()
 {
     QJsonObject obj;
     if(!getJsonFromReply(reply(), &obj)) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         resetReply();
         return;
     }
@@ -82,7 +83,7 @@ void QQLyrics::handleSearchReply()
     const QJsonArray songArray = songObj.value("itemlist"_L1).toArray();
 
     if(songArray.isEmpty()) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         return;
     }
 
@@ -99,7 +100,7 @@ void QQLyrics::handleSearchReply()
     }
 
     if(m_data.empty()) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         return;
     }
 
@@ -140,7 +141,7 @@ void QQLyrics::handleLyricReply()
     ++m_currentData;
 
     if(m_currentData == m_data.end()) {
-        emit searchResult(m_data);
+        Q_EMIT searchResult(m_data);
         m_data.clear();
     }
     else {

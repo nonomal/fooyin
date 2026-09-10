@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,22 +22,23 @@
 #include "internalguisettings.h"
 #include "quicksetup/quicksetupdialog.h"
 
-#include <core/internalcoresettings.h>
 #include <gui/editablelayout.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
-#include <gui/widgets/scriptlineedit.h>
+#include <gui/guiutils.h>
+#include <gui/layoutprovider.h>
+#include <gui/theme/fytheme.h>
+#include <gui/theme/themeregistry.h>
+#include <playlist/playlistwidget.h>
+#include <playlist/presetregistry.h>
 #include <utils/settings/settingsmanager.h>
-#include <utils/utils.h>
 
-#include <QApplication>
-#include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QFileDialog>
+#include <QGridLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
-#include <QProxyStyle>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSpinBox>
@@ -56,6 +57,7 @@ class GuiGeneralPageWidget : public SettingsPageWidget
 
 public:
     explicit GuiGeneralPageWidget(LayoutProvider* layoutProvider, EditableLayout* editableLayout,
+                                  ThemeRegistry* themeRegistry, PresetRegistry* presetRegistry,
                                   SettingsManager* settings);
 
     void load() override;
@@ -67,11 +69,21 @@ private:
     void importLayout();
     void exportLayout();
 
+#ifdef Q_OS_WIN
+    void updateDarkModeState();
+#endif
+
     LayoutProvider* m_layoutProvider;
     EditableLayout* m_editableLayout;
+    ThemeRegistry* m_themeRegistry;
+    PresetRegistry* m_presetRegistry;
     SettingsManager* m_settings;
 
     QComboBox* m_styles;
+
+#ifdef Q_OS_WIN
+    QCheckBox* m_darkMode;
+#endif
 
     QRadioButton* m_detectIconTheme;
     QRadioButton* m_lightTheme;
@@ -85,29 +97,26 @@ private:
 
     QCheckBox* m_splitterHandles;
     QCheckBox* m_lockSplitters;
+    QCheckBox* m_lockedWidgetsResizeAdjacentOnly;
     QCheckBox* m_overrideSplitterHandle;
     QSpinBox* m_splitterHandleGap;
 
-    QSpinBox* m_allocationSize;
-
     QCheckBox* m_buttonRaise;
     QCheckBox* m_buttonStretch;
-
-    ScriptLineEdit* m_titleScript;
-    QSpinBox* m_vbrInterval;
-
-    QRadioButton* m_preferPlaying;
-    QRadioButton* m_preferSelection;
-
-    QSpinBox* m_starRatingSize;
 };
 
 GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, EditableLayout* editableLayout,
+                                           ThemeRegistry* themeRegistry, PresetRegistry* presetRegistry,
                                            SettingsManager* settings)
     : m_layoutProvider{layoutProvider}
     , m_editableLayout{editableLayout}
+    , m_themeRegistry{themeRegistry}
+    , m_presetRegistry{presetRegistry}
     , m_settings{settings}
     , m_styles{new QComboBox(this)}
+#ifdef Q_OS_WIN
+    , m_darkMode{new QCheckBox(tr("Dark mode"), this)}
+#endif
     , m_detectIconTheme{new QRadioButton(tr("Auto-detect theme"), this)}
     , m_lightTheme{new QRadioButton(tr("Light"), this)}
     , m_darkTheme{new QRadioButton(tr("Dark"), this)}
@@ -117,18 +126,13 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     , m_editableLayoutMargin{new QSpinBox(this)}
     , m_splitterHandles{new QCheckBox(tr("Show splitter handles"), this)}
     , m_lockSplitters{new QCheckBox(tr("Lock splitters"), this)}
+    , m_lockedWidgetsResizeAdjacentOnly{new QCheckBox(tr("Only resize locked widgets using adjacent handles"), this)}
     , m_overrideSplitterHandle{new QCheckBox(tr("Override splitter handle size") + u":"_s, this)}
     , m_splitterHandleGap{new QSpinBox(this)}
-    , m_allocationSize{new QSpinBox(this)}
     , m_buttonRaise{new QCheckBox(tr("Raise"), this)}
     , m_buttonStretch{new QCheckBox(tr("Stretch"), this)}
-    , m_titleScript{new ScriptLineEdit(this)}
-    , m_vbrInterval{new QSpinBox(this)}
-    , m_preferPlaying{new QRadioButton(tr("Prefer currently playing track"), this)}
-    , m_preferSelection{new QRadioButton(tr("Prefer current selection"), this)}
-    , m_starRatingSize{new QSpinBox(this)}
 {
-    auto* setupBox        = new QGroupBox(tr("Setup"));
+    auto* setupBox        = new QGroupBox(tr("Setup"), this);
     auto* setupBoxLayout  = new QHBoxLayout(setupBox);
     auto* quickSetup      = new QPushButton(tr("Quick Setup"), this);
     auto* importLayoutBtn = new QPushButton(tr("Import Layout"), this);
@@ -138,10 +142,10 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     setupBoxLayout->addWidget(importLayoutBtn);
     setupBoxLayout->addWidget(exportLayoutBtn);
 
-    auto* themeBox       = new QGroupBox(tr("Theme"), this);
-    auto* themeBoxLayout = new QGridLayout(themeBox);
+    auto* appearanceGroup       = new QGroupBox(tr("Appearance"), this);
+    auto* appearanceGroupLayout = new QGridLayout(appearanceGroup);
 
-    auto* iconThemeBox       = new QGroupBox(tr("Icons"), themeBox);
+    auto* iconThemeBox       = new QGroupBox(tr("Icons"), appearanceGroup);
     auto* iconThemeBoxLayout = new QGridLayout(iconThemeBox);
 
     int row{0};
@@ -152,10 +156,13 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     iconThemeBoxLayout->setColumnStretch(2, 1);
 
     row = 0;
-    themeBoxLayout->addWidget(new QLabel(tr("Style") + ":"_L1, this), row, 0);
-    themeBoxLayout->addWidget(m_styles, row++, 1);
-    themeBoxLayout->addWidget(iconThemeBox, row++, 0, 1, 3);
-    themeBoxLayout->setColumnStretch(2, 1);
+    appearanceGroupLayout->addWidget(new QLabel(tr("Style") + u":"_s, appearanceGroup), row, 0);
+    appearanceGroupLayout->addWidget(m_styles, row++, 1);
+#ifdef Q_OS_WIN
+    appearanceGroupLayout->addWidget(m_darkMode, row++, 0, 1, 2);
+#endif
+    appearanceGroupLayout->addWidget(iconThemeBox, row++, 0, 1, 2);
+    appearanceGroupLayout->setColumnStretch(1, 1);
 
     auto* layoutGroup       = new QGroupBox(tr("Layout"), this);
     auto* layoutGroupLayout = new QGridLayout(layoutGroup);
@@ -164,6 +171,7 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     layoutGroupLayout->addWidget(m_showMenuBar, row++, 0, 1, 3);
     layoutGroupLayout->addWidget(m_splitterHandles, row++, 0, 1, 3);
     layoutGroupLayout->addWidget(m_lockSplitters, row++, 0, 1, 3);
+    layoutGroupLayout->addWidget(m_lockedWidgetsResizeAdjacentOnly, row++, 0, 1, 3);
     layoutGroupLayout->addWidget(m_overrideSplitterHandle, row, 0);
     layoutGroupLayout->addWidget(m_splitterHandleGap, row++, 1);
     layoutGroupLayout->addWidget(m_overrideMargin, row, 0);
@@ -171,10 +179,13 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     layoutGroupLayout->setColumnStretch(2, 1);
 
     m_editableLayoutMargin->setRange(0, 20);
-    m_editableLayoutMargin->setSuffix(u"px"_s);
+    m_editableLayoutMargin->setSuffix(u" px"_s);
 
     m_splitterHandleGap->setRange(0, 20);
-    m_splitterHandleGap->setSuffix(u"px"_s);
+    m_splitterHandleGap->setSuffix(u" px"_s);
+
+    m_lockedWidgetsResizeAdjacentOnly->setToolTip(
+        tr("Prevent other splitter handles and parent splitters from changing the size of a locked widget."));
 
     auto* toolButtonGroup       = new QGroupBox(tr("Tool Buttons"), this);
     auto* toolButtonGroupLayout = new QVBoxLayout(toolButtonGroup);
@@ -182,67 +193,13 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
     toolButtonGroupLayout->addWidget(m_buttonRaise);
     toolButtonGroupLayout->addWidget(m_buttonStretch);
 
-    auto* imagesGroupBox       = new QGroupBox(tr("Images"), this);
-    auto* imagesGroupBoxLayout = new QGridLayout(imagesGroupBox);
-
-    auto* allocationSizeLabel = new QLabel(tr("Image allocation limit") + u":"_s, this);
-    auto* allocationSizeHint  = new QLabel(u"🛈 "_s + tr("Set to '0' to disable the limit."), this);
-
-    m_allocationSize->setMinimum(0);
-    m_allocationSize->setMaximum(1024);
-    m_allocationSize->setSuffix(u" MB"_s);
-
-    imagesGroupBoxLayout->addWidget(allocationSizeLabel, row, 0);
-    imagesGroupBoxLayout->addWidget(m_allocationSize, row++, 1);
-    imagesGroupBoxLayout->addWidget(allocationSizeHint, row++, 0, 1, 2);
-    imagesGroupBoxLayout->setColumnStretch(2, 1);
-
-    auto* playbackGroup       = new QGroupBox(tr("Playback"), this);
-    auto* playbackGroupLayout = new QGridLayout(playbackGroup);
-
-    m_vbrInterval->setRange(100, 300000);
-    m_vbrInterval->setSingleStep(250);
-    m_vbrInterval->setSuffix(u" ms"_s);
-
-    row = 0;
-    playbackGroupLayout->addWidget(new QLabel(tr("Window title") + u":"_s, this), row, 0);
-    playbackGroupLayout->addWidget(m_titleScript, row++, 1, 1, 2);
-    playbackGroupLayout->addWidget(new QLabel(tr("VBR update interval") + u":"_s, this), row, 0);
-    playbackGroupLayout->addWidget(m_vbrInterval, row++, 1);
-    playbackGroupLayout->setColumnStretch(2, 1);
-
-    auto* selectionGroupBox    = new QGroupBox(tr("Selection Info"), this);
-    auto* selectionGroup       = new QButtonGroup(this);
-    auto* selectionGroupLayout = new QVBoxLayout(selectionGroupBox);
-
-    selectionGroup->addButton(m_preferPlaying);
-    selectionGroup->addButton(m_preferSelection);
-
-    selectionGroupLayout->addWidget(m_preferPlaying);
-    selectionGroupLayout->addWidget(m_preferSelection);
-
-    auto* ratingGroupBox    = new QGroupBox(tr("Rating"), this);
-    auto* ratingGroupLayout = new QGridLayout(ratingGroupBox);
-
-    m_starRatingSize->setRange(5, 30);
-    m_starRatingSize->setSuffix(u"px"_s);
-
-    ratingGroupLayout->addWidget(new QLabel(tr("Star size"), this), 0, 0);
-    ratingGroupLayout->addWidget(m_starRatingSize, 0, 1);
-    ratingGroupLayout->setColumnStretch(2, 1);
-
     auto* mainLayout = new QGridLayout(this);
 
     row = 0;
     mainLayout->addWidget(setupBox, row++, 0, 1, 2);
-    mainLayout->addWidget(themeBox, row++, 0, 1, 2);
+    mainLayout->addWidget(appearanceGroup, row++, 0, 1, 2);
     mainLayout->addWidget(layoutGroup, row++, 0, 1, 2);
     mainLayout->addWidget(toolButtonGroup, row++, 0, 1, 2);
-    mainLayout->addWidget(imagesGroupBox, row++, 0, 1, 2);
-    mainLayout->addWidget(playbackGroup, row++, 0, 1, 2);
-    mainLayout->addWidget(selectionGroupBox, row++, 0, 1, 2);
-    mainLayout->addWidget(ratingGroupBox, row++, 0, 1, 2);
-
     mainLayout->setColumnStretch(1, 1);
     mainLayout->setRowStretch(mainLayout->rowCount(), 1);
 
@@ -252,38 +209,40 @@ GuiGeneralPageWidget::GuiGeneralPageWidget(LayoutProvider* layoutProvider, Edita
 
     QObject::connect(m_overrideMargin, &QCheckBox::toggled, m_editableLayoutMargin, &QWidget::setEnabled);
     QObject::connect(m_overrideSplitterHandle, &QCheckBox::toggled, m_splitterHandleGap, &QWidget::setEnabled);
+#ifdef Q_OS_WIN
+    QObject::connect(m_styles, &QComboBox::currentTextChanged, this, &GuiGeneralPageWidget::updateDarkModeState);
+#endif
+
+    m_settings->subscribe<ShowMenuBar>(m_showMenuBar, &QCheckBox::setChecked);
+    m_settings->subscribe<LockSplitterHandles>(m_lockSplitters, &QCheckBox::setChecked);
 }
 
 void GuiGeneralPageWidget::load()
 {
     m_styles->clear();
+    m_styles->addItem(tr("System default"));
+    m_styles->addItems(QStyleFactory::keys());
 
-    m_styles->addItem(u"System default"_s);
-    const QStringList keys = QStyleFactory::keys();
-    for(const QString& key : keys) {
-        m_styles->addItem(key);
-    }
-
-    const auto style = m_settings->value<Style>();
-    if(!style.isEmpty()) {
-        m_styles->setCurrentText(style);
-    }
-    else {
-        m_styles->setCurrentIndex(0);
-    }
+    const auto style     = m_settings->value<Style>();
+    const int styleIndex = m_styles->findText(style);
+    m_styles->setCurrentIndex(style.isEmpty() || styleIndex < 0 ? 0 : styleIndex);
+#ifdef Q_OS_WIN
+    m_darkMode->setChecked(m_settings->value<DarkMode>());
+    updateDarkModeState();
+#endif
 
     const auto iconTheme = static_cast<IconThemeOption>(m_settings->value<IconTheme>());
     switch(iconTheme) {
-        case(IconThemeOption::AutoDetect):
+        case IconThemeOption::AutoDetect:
             m_detectIconTheme->setChecked(true);
             break;
-        case(IconThemeOption::System):
+        case IconThemeOption::System:
             m_systemTheme->setChecked(true);
             break;
-        case(IconThemeOption::Light):
+        case IconThemeOption::Light:
             m_lightTheme->setChecked(true);
             break;
-        case(IconThemeOption::Dark):
+        case IconThemeOption::Dark:
             m_darkTheme->setChecked(true);
             break;
     }
@@ -292,6 +251,7 @@ void GuiGeneralPageWidget::load()
 
     m_splitterHandles->setChecked(m_settings->value<ShowSplitterHandles>());
     m_lockSplitters->setChecked(m_settings->value<LockSplitterHandles>());
+    m_lockedWidgetsResizeAdjacentOnly->setChecked(m_settings->value<ResizeLockedAdjacentOnly>());
 
     m_overrideMargin->setChecked(m_settings->value<EditableLayoutMargin>() >= 0);
     m_editableLayoutMargin->setValue(m_settings->value<EditableLayoutMargin>());
@@ -304,26 +264,14 @@ void GuiGeneralPageWidget::load()
     const auto buttonOptions = m_settings->value<ToolButtonStyle>();
     m_buttonRaise->setChecked(buttonOptions & Raise);
     m_buttonStretch->setChecked(buttonOptions & Stretch);
-
-    m_allocationSize->setValue(m_settings->value<Settings::Gui::Internal::ImageAllocationLimit>());
-
-    m_titleScript->setText(m_settings->value<WindowTitleTrackScript>());
-    m_vbrInterval->setValue(m_settings->value<Settings::Core::Internal::VBRUpdateInterval>());
-
-    const auto option = static_cast<SelectionDisplay>(m_settings->value<InfoDisplayPrefer>());
-    if(option == SelectionDisplay::PreferPlaying) {
-        m_preferPlaying->setChecked(true);
-    }
-    else {
-        m_preferSelection->setChecked(true);
-    }
-
-    m_starRatingSize->setValue(m_settings->value<StarRatingSize>());
 }
 
 void GuiGeneralPageWidget::apply()
 {
-    m_settings->set<Style>(m_styles->currentText());
+    m_settings->set<Style>(m_styles->currentIndex() == 0 ? QString{} : m_styles->currentText());
+#ifdef Q_OS_WIN
+    m_settings->set<DarkMode>(m_darkMode->isChecked());
+#endif
 
     IconThemeOption iconThemeOption;
     if(m_detectIconTheme->isChecked()) {
@@ -344,6 +292,7 @@ void GuiGeneralPageWidget::apply()
 
     m_settings->set<ShowSplitterHandles>(m_splitterHandles->isChecked());
     m_settings->set<LockSplitterHandles>(m_lockSplitters->isChecked());
+    m_settings->set<ResizeLockedAdjacentOnly>(m_lockedWidgetsResizeAdjacentOnly->isChecked());
 
     if(m_overrideMargin->isChecked()) {
         m_settings->set<EditableLayoutMargin>(m_editableLayoutMargin->value());
@@ -359,45 +308,45 @@ void GuiGeneralPageWidget::apply()
         m_settings->reset<SplitterHandleSize>();
     }
 
-    m_settings->set<Settings::Gui::Internal::ImageAllocationLimit>(m_allocationSize->value());
-
     ToolButtonOptions buttonOptions;
     buttonOptions.setFlag(Raise, m_buttonRaise->isChecked());
     buttonOptions.setFlag(Stretch, m_buttonStretch->isChecked());
 
     m_settings->set<ToolButtonStyle>(static_cast<int>(buttonOptions));
-
-    m_settings->set<WindowTitleTrackScript>(m_titleScript->text());
-    m_settings->set<Settings::Core::Internal::VBRUpdateInterval>(m_vbrInterval->value());
-
-    const SelectionDisplay option
-        = m_preferPlaying->isChecked() ? SelectionDisplay::PreferPlaying : SelectionDisplay::PreferSelection;
-    m_settings->set<InfoDisplayPrefer>(static_cast<int>(option));
-
-    m_settings->set<StarRatingSize>(m_starRatingSize->value());
 }
 
 void GuiGeneralPageWidget::reset()
 {
     m_settings->reset<Style>();
+#ifdef Q_OS_WIN
+    m_settings->reset<DarkMode>();
+#endif
     m_settings->reset<IconTheme>();
     m_settings->reset<ShowMenuBar>();
     m_settings->reset<ShowSplitterHandles>();
     m_settings->reset<LockSplitterHandles>();
+    m_settings->reset<ResizeLockedAdjacentOnly>();
     m_settings->reset<EditableLayoutMargin>();
     m_settings->reset<SplitterHandleSize>();
-    m_settings->reset<ImageAllocationLimit>();
-    m_settings->reset<WindowTitleTrackScript>();
-    m_settings->reset<Settings::Core::Internal::VBRUpdateInterval>();
-    m_settings->reset<InfoDisplayPrefer>();
-    m_settings->reset<StarRatingSize>();
+    m_settings->reset<ToolButtonStyle>();
 }
+
+#ifdef Q_OS_WIN
+void GuiGeneralPageWidget::updateDarkModeState()
+{
+    const QString styleName
+        = m_styles->currentIndex() == 0 ? m_settings->value<SystemStyle>() : m_styles->currentText();
+    const bool supported = Gui::styleSupportsDarkMode(styleName);
+    m_darkMode->setEnabled(supported);
+    m_darkMode->setToolTip(supported ? QString{} : tr("Dark mode is not supported by this style."));
+}
+#endif
 
 void GuiGeneralPageWidget::showQuickSetup()
 {
-    auto* quickSetup = new QuickSetupDialog(m_layoutProvider, this);
+    auto* quickSetup
+        = new QuickSetupDialog(m_layoutProvider, m_themeRegistry, m_presetRegistry, m_editableLayout, m_settings, this);
     quickSetup->setAttribute(Qt::WA_DeleteOnClose);
-    QObject::connect(quickSetup, &QuickSetupDialog::layoutChanged, m_editableLayout, &EditableLayout::changeLayout);
     quickSetup->show();
 }
 
@@ -412,14 +361,15 @@ void GuiGeneralPageWidget::exportLayout()
 }
 
 GuiGeneralPage::GuiGeneralPage(LayoutProvider* layoutProvider, EditableLayout* editableLayout,
-                               SettingsManager* settings, QObject* parent)
+                               ThemeRegistry* themeRegistry, PresetRegistry* presetRegistry, SettingsManager* settings,
+                               QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::InterfaceGeneral);
     setName(tr("General"));
     setCategory({tr("Interface")});
-    setWidgetCreator([layoutProvider, editableLayout, settings] {
-        return new GuiGeneralPageWidget(layoutProvider, editableLayout, settings);
+    setWidgetCreator([layoutProvider, editableLayout, themeRegistry, presetRegistry, settings] {
+        return new GuiGeneralPageWidget(layoutProvider, editableLayout, themeRegistry, presetRegistry, settings);
     });
 }
 } // namespace Fooyin

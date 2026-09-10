@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,7 +17,9 @@
  *
  */
 
-#include "libraryutils.h"
+#include <core/library/libraryutils.h>
+
+#include <QDir>
 
 namespace Fooyin::Utils {
 std::vector<int> updateCommonTracks(TrackList& tracks, const TrackList& updatedTracks, CommonOperation operation)
@@ -29,7 +31,7 @@ std::vector<int> updateCommonTracks(TrackList& tracks, const TrackList& updatedT
 
     for(auto trackIt{tracks.begin()}; trackIt != tracks.end(); ++trackIt) {
         auto updatedIt = std::ranges::find_if(updatedTracks, [&trackIt](const Fooyin::Track& updatedTrack) {
-            return updatedTrack.isInDatabase() && trackIt->id() == updatedTrack.id();
+            return trackIt->sameIdentityAs(updatedTrack);
         });
         if(updatedIt != updatedTracks.end()) {
             indexes.push_back(static_cast<int>(std::distance(tracks.begin(), trackIt)));
@@ -44,5 +46,20 @@ std::vector<int> updateCommonTracks(TrackList& tracks, const TrackList& updatedT
 
     tracks = result;
     return indexes;
+}
+
+std::optional<QString> physicalSourceKey(const Track& track)
+{
+    if(!track.isValid() || track.isRemote()) {
+        return {};
+    }
+
+    const QString filepath = track.isInArchive() ? track.archivePath() : track.filepath();
+    if(filepath.isEmpty()) {
+        return {};
+    }
+
+    const QString absolutePath = QDir::isAbsolutePath(filepath) ? filepath : QDir::current().absoluteFilePath(filepath);
+    return QDir::cleanPath(absolutePath);
 }
 } // namespace Fooyin::Utils

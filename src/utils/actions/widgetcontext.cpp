@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -109,7 +109,7 @@ bool WidgetContext::isEnabled() const
 void WidgetContext::setEnabled(bool enabled)
 {
     if(std::exchange(m_isEnabled, enabled) != enabled) {
-        emit isEnabledChanged();
+        Q_EMIT isEnabledChanged();
     }
 }
 } // namespace Fooyin

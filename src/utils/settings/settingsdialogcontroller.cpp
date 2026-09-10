@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,15 +23,65 @@
 
 #include <utils/id.h>
 #include <utils/settings/settingsmanager.h>
+#include <utils/settings/settingspage.h>
 
 #include <QApplication>
+#include <QDataStream>
 #include <QIODevice>
 #include <QMainWindow>
+#include <QPointer>
 #include <QSettings>
 
-constexpr auto DialogGeometry = "SettingsDialog/Geometry";
-constexpr auto DialogSize     = "SettingsDialog/Size";
-constexpr auto LastOpenPage   = "SettingsDialog/LastPage";
+#include <unordered_map>
+
+constexpr auto DialogGeometry     = "SettingsDialog/Geometry";
+constexpr auto DialogSize         = "SettingsDialog/Size";
+constexpr auto LastOpenPage       = "SettingsDialog/LastPage";
+constexpr auto ExpandedCategories = "SettingsDialog/ExpandedCategories";
+constexpr auto PageStates         = "SettingsDialog/PageStates";
+
+namespace {
+QByteArray savePageStates(const std::unordered_map<QString, QByteArray>& pageStates)
+{
+    QByteArray stateData;
+    QDataStream stream{&stateData, QIODeviceBase::WriteOnly};
+    stream.setVersion(QDataStream::Qt_6_0);
+
+    stream << static_cast<quint32>(pageStates.size());
+    for(const auto& [key, state] : pageStates) {
+        stream << key << state;
+    }
+
+    return qCompress(stateData, 9);
+}
+
+std::unordered_map<QString, QByteArray> restorePageStates(const QByteArray& state)
+{
+    if(state.isEmpty()) {
+        return {};
+    }
+
+    QByteArray stateData = qUncompress(state);
+    QDataStream stream{&stateData, QIODeviceBase::ReadOnly};
+    stream.setVersion(QDataStream::Qt_6_0);
+
+    quint32 count{0};
+    stream >> count;
+
+    std::unordered_map<QString, QByteArray> pageStates;
+    for(quint32 i{0}; i < count; ++i) {
+        QString key;
+        QByteArray pageState;
+        stream >> key >> pageState;
+
+        if(!key.isEmpty() && !pageState.isEmpty()) {
+            pageStates.emplace(std::move(key), std::move(pageState));
+        }
+    }
+
+    return pageStates;
+}
+} // namespace
 
 namespace Fooyin {
 class SettingsDialogControllerPrivate
@@ -47,9 +97,29 @@ public:
 
     QByteArray geometry;
     QSize size;
+    QByteArray expandedCategories;
+    std::unordered_map<QString, QByteArray> pageStates;
     PageList pages;
     Id lastOpenPage;
-    bool isOpen{false};
+    QPointer<SettingsDialog> dialog;
+
+    void applyPageStates() const
+    {
+        for(auto* page : pages) {
+            if(const auto it = pageStates.find(page->id().name()); it != pageStates.cend()) {
+                page->setState(it->second);
+            }
+        }
+    }
+
+    void updatePageStates()
+    {
+        for(const auto* page : pages) {
+            if(const QByteArray state = page->state(); !state.isEmpty()) {
+                pageStates.insert_or_assign(page->id().name(), state);
+            }
+        }
+    }
 };
 
 SettingsDialogController::SettingsDialogController(SettingsManager* settings, QMainWindow* mainWindow)
@@ -66,18 +136,29 @@ void SettingsDialogController::open()
 
 void SettingsDialogController::openAtPage(const Id& page)
 {
-    if(p->isOpen) {
+    if(p->dialog) {
+        p->dialog->show();
+        p->dialog->raise();
+        p->dialog->activateWindow();
+        if(page.isValid()) {
+            p->dialog->openPage(page);
+        }
         return;
     }
 
+    p->applyPageStates();
+
     auto* settingsDialog = new SettingsDialog{p->pages, p->mainWindow};
+    p->dialog            = settingsDialog;
 
     QObject::connect(settingsDialog, &QDialog::finished, this, [this, settingsDialog]() {
-        p->geometry     = settingsDialog->saveGeometry();
-        p->size         = settingsDialog->size();
-        p->lastOpenPage = settingsDialog->currentPage();
-        p->isOpen       = false;
-        emit closing();
+        p->updatePageStates();
+        p->geometry           = settingsDialog->saveGeometry();
+        p->size               = settingsDialog->size();
+        p->expandedCategories = settingsDialog->saveState();
+        p->lastOpenPage       = settingsDialog->currentPage();
+        p->dialog             = nullptr;
+        Q_EMIT closing();
         settingsDialog->deleteLater();
     });
     QObject::connect(settingsDialog, &SettingsDialog::resettingAll, this,
@@ -89,9 +170,9 @@ void SettingsDialogController::openAtPage(const Id& page)
     if(p->size.isValid()) {
         settingsDialog->resize(p->size);
     }
+    settingsDialog->restoreState(p->expandedCategories);
 
-    p->isOpen = true;
-    emit opening();
+    Q_EMIT opening();
 
     settingsDialog->openSettings();
 
@@ -109,7 +190,9 @@ void SettingsDialogController::saveState(QSettings& settings) const
 {
     settings.setValue(DialogGeometry, p->geometry);
     settings.setValue(DialogSize, p->size);
+    settings.setValue(ExpandedCategories, p->expandedCategories);
     settings.setValue(LastOpenPage, p->lastOpenPage.name());
+    settings.setValue(PageStates, savePageStates(p->pageStates));
 }
 
 void SettingsDialogController::restoreState(const QSettings& settings)
@@ -120,12 +203,20 @@ void SettingsDialogController::restoreState(const QSettings& settings)
             p->geometry = geometry;
         }
     }
-
     if(settings.contains(DialogSize)) {
         const auto size = settings.value(DialogSize).toSize();
         if(size.isValid()) {
             p->size = size;
         }
+    }
+    if(settings.contains(ExpandedCategories)) {
+        p->expandedCategories = settings.value(ExpandedCategories).toByteArray();
+    }
+
+    p->pageStates = restorePageStates(settings.value(PageStates).toByteArray());
+
+    if(!p->pageStates.empty()) {
+        p->applyPageStates();
     }
 
     if(settings.contains(LastOpenPage)) {

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -53,14 +53,14 @@ void WindowController::raise()
 bool WindowController::eventFilter(QObject* watched, QEvent* event)
 {
     if(event->type() == QEvent::WindowStateChange) {
-        emit isFullScreenChanged(m_mainWindow->windowState() & Qt::WindowMaximized);
+        Q_EMIT isFullScreenChanged(m_mainWindow->windowState() & Qt::WindowMaximized);
     }
 
     if(event->type() == QEvent::ShowToParent) {
-        emit windowShown();
+        Q_EMIT windowShown();
     }
     else if(event->type() == QEvent::Hide) {
-        emit windowHidden();
+        Q_EMIT windowHidden();
     }
 
     return QObject::eventFilter(watched, event);

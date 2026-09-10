@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -69,6 +69,7 @@ public:
     [[nodiscard]] bool multipleValues() const;
     [[nodiscard]] SummaryFunc summaryFunc() const;
 
+    void setTrack(const Track& track);
     bool setTrackGain(float value);
     bool setTrackPeak(float value);
     bool setAlbumGain(float value);
@@ -81,14 +82,19 @@ public:
     bool applyChanges();
 
 private:
+    static bool sameEditableValue(float lhs, float rhs, float invalidValue, int precision);
+
     template <typename T>
-    bool setGainOrPeak(T& currentValue, float value, float trackValue, float invalidValue)
+    bool setGainOrPeak(T& currentValue, float value, float trackValue, float invalidValue, int precision)
     {
-        if(currentValue != invalidValue && currentValue == value) {
+        if(currentValue.has_value() && sameEditableValue(currentValue.value(), value, invalidValue, precision)) {
             return false;
         }
 
-        if(value == trackValue) {
+        if(sameEditableValue(value, trackValue, invalidValue, precision)) {
+            if(!currentValue.has_value() && status() == None) {
+                return false;
+            }
             setStatus(None);
             currentValue = {};
         }

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,7 @@ LogSlider::LogSlider(Qt::Orientation type, QWidget* parent)
     , m_scale{100.0}
 {
     QObject::connect(this, &QSlider::valueChanged, this,
-                     [this](double value) { emit logValueChanged(std::pow(10, (value / m_scale))); });
+                     [this](double value) { Q_EMIT logValueChanged(std::pow(10, (value / m_scale))); });
 }
 
 double LogSlider::scale() const

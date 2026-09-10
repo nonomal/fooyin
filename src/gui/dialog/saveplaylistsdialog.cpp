@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 #include <core/coresettings.h>
 #include <core/internalcoresettings.h>
 #include <core/playlist/playlisthandler.h>
+#include <core/playlist/playlistloader.h>
 #include <core/playlist/playlistparser.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/utils.h>
@@ -68,11 +69,7 @@ void SavePlaylistsDialog::accept()
 {
     FyStateSettings stateSettings;
 
-    QString dir{QDir::homePath()};
-    if(const auto lastPath = stateSettings.value(Settings::Gui::Internal::LastFilePath).toString();
-       !lastPath.isEmpty()) {
-        dir = lastPath;
-    }
+    const QString dir = stateSettings.value(Settings::Gui::Internal::LastPlaylistPath, QDir::homePath()).toString();
 
     QLoggingCategory log{"fy.saveplaylists"};
 
@@ -84,7 +81,7 @@ void SavePlaylistsDialog::accept()
         return;
     }
 
-    stateSettings.setValue(Settings::Gui::Internal::LastFilePath, saveDir);
+    stateSettings.setValue(Settings::Gui::Internal::LastPlaylistPath, saveDir);
 
     const QString extension = m_formats->currentText();
     if(extension.isEmpty()) {

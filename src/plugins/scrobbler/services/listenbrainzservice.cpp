@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 
 #include <core/coresettings.h>
 #include <core/network/networkaccessmanager.h>
+#include <core/network/networkutils.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QCoreApplication>
@@ -29,6 +30,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QRegularExpression>
 #include <QTimerEvent>
 #include <QUrlQuery>
 
@@ -39,6 +41,34 @@ constexpr auto ApiUrl = "https://api.listenbrainz.org";
 constexpr auto MaxScrobblesPerRequest = 10;
 
 namespace {
+QString normaliseMusicBrainzId(QString value)
+{
+    value = value.trimmed();
+    if(value.isEmpty()) {
+        return {};
+    }
+
+    static const QRegularExpression mbidRegex{
+        uR"(^\{?([0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})\}?$)"_s};
+
+    const QRegularExpressionMatch match = mbidRegex.match(value);
+    if(!match.hasMatch()) {
+        return {};
+    }
+
+    return match.captured(1).toLower();
+}
+
+void insertMusicBrainzId(QJsonObject& object, const QString& key, const QString& value)
+{
+    if(const QString mbid = normaliseMusicBrainzId(value); !mbid.isEmpty()) {
+        object.insert(key, mbid);
+    }
+    else if(!value.trimmed().isEmpty()) {
+        qCDebug(SCROBBLER) << "Skipping invalid ListenBrainz MBID field" << key << value;
+    }
+}
+
 QJsonObject getTrackMetadata(const Fooyin::Scrobbler::Metadata& metadata)
 {
     QJsonObject metaObj;
@@ -59,12 +89,8 @@ QJsonObject getTrackMetadata(const Fooyin::Scrobbler::Metadata& metadata)
     if(!metadata.trackNum.isEmpty()) {
         infoObj.insert(u"tracknumber"_s, metadata.trackNum);
     }
-    if(!metadata.musicBrainzId.isEmpty()) {
-        infoObj.insert(u"recording_mbid"_s, metadata.musicBrainzId);
-    }
-    if(!metadata.musicBrainzAlbumId.isEmpty()) {
-        infoObj.insert(u"release_mbid"_s, metadata.musicBrainzAlbumId);
-    }
+    insertMusicBrainzId(infoObj, u"recording_mbid"_s, metadata.musicBrainzId);
+    insertMusicBrainzId(infoObj, u"release_mbid"_s, metadata.musicBrainzAlbumId);
 
     infoObj.insert(u"media_player"_s, QCoreApplication::applicationName());
     infoObj.insert(u"media_player_version"_s, QCoreApplication::applicationVersion());
@@ -74,6 +100,35 @@ QJsonObject getTrackMetadata(const Fooyin::Scrobbler::Metadata& metadata)
     metaObj.insert(u"additional_info"_s, infoObj);
 
     return metaObj;
+}
+
+QString previewReplyBody(const QByteArray& data)
+{
+    QString body = QString::fromUtf8(data).simplified();
+
+    static constexpr auto MaxPreviewLength = 512;
+    if(body.size() > MaxPreviewLength) {
+        body = body.left(MaxPreviewLength - 3) + "..."_L1;
+    }
+
+    return body;
+}
+
+QString describeReply(QNetworkReply* reply)
+{
+    return u"HTTP %1, network error %2 (%3)"_s.arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+        .arg(reply->errorString())
+        .arg(reply->error());
+}
+
+int replyApiErrorCode(const QJsonObject& obj)
+{
+    return obj.value("code"_L1).toInt();
+}
+
+QString replyApiErrorText(const QJsonObject& obj)
+{
+    return obj.value("error"_L1).toString();
 }
 } // namespace
 
@@ -88,12 +143,23 @@ bool ListenBrainzService::requiresAuthentication() const
     return false;
 }
 
+bool ListenBrainzService::isAuthenticated() const
+{
+    return !userToken().trimmed().isEmpty();
+}
+
+bool ListenBrainzService::supportsLoved() const
+{
+    return true;
+}
+
 void ListenBrainzService::saveSession()
 {
     FySettings settings;
     settings.beginGroup(isCustom() ? u"Scrobbler-"_s + name() : name());
 
     settings.setValue("IsEnabled", details().isEnabled);
+    settings.setValue("SubmitLoved", details().submitLoved);
     if(isCustom()) {
         settings.setValue("URL", details().url.toDisplayString());
     }
@@ -110,6 +176,7 @@ void ListenBrainzService::loadSession()
     if(settings.contains("IsEnabled")) {
         detailsRef().isEnabled = settings.value("IsEnabled").toBool();
     }
+    detailsRef().submitLoved = settings.value("SubmitLoved", false).toBool();
     if(settings.contains("URL")) {
         detailsRef().url = settings.value("URL").toString();
     }
@@ -130,6 +197,12 @@ void ListenBrainzService::deleteSession()
     settings.remove("UserToken");
 
     settings.endGroup();
+}
+
+void ListenBrainzService::logout()
+{
+    detailsRef().token.clear();
+    saveSession();
 }
 
 void ListenBrainzService::testApi()
@@ -162,8 +235,6 @@ void ListenBrainzService::updateNowPlaying()
 
 void ListenBrainzService::submit()
 {
-    qCDebug(SCROBBLER) << "Submitting scrobbles (%1)"_L1.arg(name());
-
     const CacheItemList items = cache()->items();
     CacheItemList sentItems;
 
@@ -192,6 +263,10 @@ void ListenBrainzService::submit()
         return;
     }
 
+    qCDebug(SCROBBLER) << "Preparing scrobble request for" << name() << "count" << sentItems.size() << "pending"
+                       << items.size() << "timestamps" << sentItems.front()->timestamp << "to"
+                       << sentItems.back()->timestamp;
+
     setSubmitted(true);
 
     QJsonObject object;
@@ -213,38 +288,21 @@ QString ListenBrainzService::tokenSetting() const
 
 QUrl ListenBrainzService::tokenUrl() const
 {
-    return u"https://listenbrainz.org/profile/"_s;
-}
-
-QNetworkReply* ListenBrainzService::createRequest(RequestType type, const QUrl& url, const QJsonDocument& json)
-{
-    QNetworkRequest req{url};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_s);
-    req.setRawHeader("Authorization", u"Token %1"_s.arg(userToken()).toUtf8());
-
-    switch(type) {
-        case RequestType::Get:
-            return addReply(network()->get(req));
-        case RequestType::Post:
-            return addReply(network()->post(req, json.toJson()));
-    }
-
-    return nullptr;
+    return u"https://listenbrainz.org/settings/"_s;
 }
 
 ScrobblerService::ReplyResult ListenBrainzService::getJsonFromReply(QNetworkReply* reply, QJsonObject* obj,
                                                                     QString* errorDesc)
 {
     ReplyResult replyResult{ReplyResult::ServerError};
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
     if(reply->error() == QNetworkReply::NoError) {
-        if(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
+        if(httpStatus == 200) {
             replyResult = ReplyResult::Success;
         }
         else {
-            *errorDesc
-                = u"Received HTTP code %1"_s.arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt());
+            *errorDesc = u"Received HTTP code %1"_s.arg(httpStatus);
         }
     }
     else {
@@ -253,8 +311,13 @@ ScrobblerService::ReplyResult ListenBrainzService::getJsonFromReply(QNetworkRepl
 
     if(reply->error() == QNetworkReply::NoError || reply->error() >= 200) {
         const QByteArray data = reply->readAll();
+        bool parsed{false};
 
-        if(!data.isEmpty() && extractJsonObj(data, obj, errorDesc)) {
+        if(!data.isEmpty()) {
+            parsed = extractJsonObj(data, obj, errorDesc);
+        }
+
+        if(parsed) {
             if(obj->contains("error"_L1) && obj->contains("error_description"_L1)) {
                 *errorDesc  = obj->value("error_description"_L1).toString();
                 replyResult = ReplyResult::ApiError;
@@ -270,9 +333,59 @@ ScrobblerService::ReplyResult ListenBrainzService::getJsonFromReply(QNetworkRepl
                 logout();
             }
         }
+
+        if(replyResult != ReplyResult::Success || (!data.isEmpty() && !parsed)) {
+            qCWarning(SCROBBLER) << "ListenBrainz reply details:" << describeReply(reply);
+            if(!data.isEmpty()) {
+                qCWarning(SCROBBLER) << "ListenBrainz reply body:" << previewReplyBody(data);
+            }
+        }
+    }
+    else if(replyResult != ReplyResult::Success) {
+        qCWarning(SCROBBLER) << "ListenBrainz reply details:" << describeReply(reply);
     }
 
     return replyResult;
+}
+
+void ListenBrainzService::submitLoved(const LovedItem& item)
+{
+    const QString recordingMbid = normaliseMusicBrainzId(item.metadata.musicBrainzId);
+    if(recordingMbid.isEmpty()) {
+        qCInfo(SCROBBLER) << "Unable to submit ListenBrainz Loved state without a recording MBID:"
+                          << item.metadata.artist << u"-"_s << item.metadata.title;
+        lovedUpdateFinished(item, LovedUpdateResult::Discard);
+        return;
+    }
+
+    QJsonObject object;
+    object.insert(u"recording_mbid"_s, recordingMbid);
+    object.insert(u"score"_s, item.loved ? 1 : 0);
+
+    const QUrl reqUrl{u"%1/1/feedback/recording-feedback"_s.arg(QString::fromUtf8(url().toEncoded()))};
+    QNetworkReply* reply = createRequest(RequestType::Post, reqUrl, QJsonDocument{object});
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, item]() { lovedFinished(reply, item); });
+}
+
+QNetworkReply* ListenBrainzService::createRequest(RequestType type, const QUrl& url, const QJsonDocument& json)
+{
+    QNetworkRequest req = makeNetworkRequest(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/json"_s);
+    req.setRawHeader("Authorization", u"Token %1"_s.arg(userToken()).toUtf8());
+    const QByteArray payload = json.toJson();
+
+    qCDebug(SCROBBLER) << (type == RequestType::Get ? "GET queued to network manager for"
+                                                    : "POST queued to network manager for")
+                       << name() << "url" << url.toString() << "bodyBytes" << payload.size();
+
+    switch(type) {
+        case RequestType::Get:
+            return addReply(network()->get(req));
+        case RequestType::Post:
+            return addReply(network()->post(req, payload));
+    }
+
+    return nullptr;
 }
 
 void ListenBrainzService::testFinished(QNetworkReply* reply)
@@ -298,7 +411,7 @@ void ListenBrainzService::testFinished(QNetworkReply* reply)
         handleTestError("Token could not be authenticated");
     }
     else {
-        emit testApiFinished(true);
+        Q_EMIT testApiFinished(true);
     }
 }
 
@@ -340,8 +453,21 @@ void ListenBrainzService::scrobbleFinished(QNetworkReply* reply, const CacheItem
         setSubmitError(false);
     }
     else {
+        const int apiErrorCode = replyApiErrorCode(obj);
+        const QString apiError = replyApiErrorText(obj);
+
+        if(apiErrorCode == 400 && items.size() == 1 && items.front()->hasError) {
+            qCWarning(SCROBBLER) << "Discarding cached ListenBrainz scrobble after repeated validation failure:"
+                                 << items.front()->metadata.artist << u"-"_s << items.front()->metadata.title
+                                 << "timestamp" << items.front()->timestamp << "error" << apiError;
+            cache()->flush(items);
+            setSubmitError(false);
+            doDelayedSubmit();
+            return;
+        }
+
         setSubmitError(true);
-        qCWarning(SCROBBLER) << "Unable to scrobble:" << errorStr;
+        qCWarning(SCROBBLER) << "Unable to scrobble for" << name() << "count" << items.size() << ":" << errorStr;
         std::ranges::for_each(items, [](const auto& item) {
             item->submitted = false;
             item->hasError  = true;
@@ -349,6 +475,26 @@ void ListenBrainzService::scrobbleFinished(QNetworkReply* reply, const CacheItem
     }
 
     doDelayedSubmit();
+}
+
+void ListenBrainzService::lovedFinished(QNetworkReply* reply, const LovedItem& item)
+{
+    if(!removeReply(reply)) {
+        return;
+    }
+
+    QJsonObject object;
+    QString error;
+    const ReplyResult result = getJsonFromReply(reply, &object, &error);
+    if(result == ReplyResult::Success) {
+        lovedUpdateFinished(item, LovedUpdateResult::Success);
+        return;
+    }
+
+    const int status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    qCWarning(SCROBBLER) << "Unable to update Loved state for" << name() << item.metadata.artist << u"-"_s
+                         << item.metadata.title << ':' << error;
+    lovedUpdateFinished(item, status == 400 ? LovedUpdateResult::Discard : LovedUpdateResult::Retry);
 }
 
 QString ListenBrainzService::userToken() const

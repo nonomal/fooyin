@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,13 +28,21 @@
 #include <core/playlist/playlist.h>
 #include <utils/treemodel.h>
 
+#include <QColor>
+#include <QFont>
 #include <QPixmap>
 #include <QThread>
 
+#include <array>
+#include <expected>
+#include <unordered_map>
+
 namespace Fooyin {
+class AudioLoader;
 class CoverProvider;
 class MusicLibrary;
 class Playlist;
+class GuiStyleProvider;
 class PlayerController;
 class PlaylistInteractor;
 struct PlaylistPreset;
@@ -81,16 +89,26 @@ class PlaylistModel : public TreeModel<PlaylistItem>
     Q_OBJECT
 
 public:
-    PlaylistModel(PlaylistInteractor* playlistInteractor, CoverProvider* coverProvider, SettingsManager* settings,
-                  QObject* parent = nullptr);
-    ~PlaylistModel() override;
+    enum PlaybackDependency : uint8_t
+    {
+        None          = 0,
+        Position      = 1 << 0,
+        Bitrate       = 1 << 1,
+        PlaybackState = 1 << 2,
+        All           = Position | Bitrate | PlaybackState,
+    };
+    Q_DECLARE_FLAGS(PlaybackDependencies, PlaybackDependency)
+    Q_FLAG(PlaybackDependencies)
 
-    void invalidateData() override;
+    PlaylistModel(PlaylistInteractor* playlistInteractor, AudioLoader* audioLoader, CoverProvider* coverProvider,
+                  SettingsManager* settings, GuiStyleProvider* styleProvider, QObject* parent = nullptr);
+    ~PlaylistModel() override;
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
     bool setHeaderData(int section, Qt::Orientation orientation, const QVariant& value, int role) override;
     [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role) override;
     [[nodiscard]] bool hasChildren(const QModelIndex& parent) const override;
     [[nodiscard]] QHash<int, QByteArray> roleNames() const override;
     [[nodiscard]] int columnCount(const QModelIndex& parent) const override;
@@ -106,6 +124,21 @@ public:
 
     [[nodiscard]] bool playlistIsLoaded() const;
     [[nodiscard]] bool haveTracks() const;
+    [[nodiscard]] bool shouldShowLoadingText() const;
+
+    enum class BulkEditError : uint8_t
+    {
+        InvalidRequest = 0,
+        NoChanges,
+    };
+    struct BulkEditResult
+    {
+        TrackList tracks;
+        bool ratingField{false};
+        bool loveField{false};
+    };
+    [[nodiscard]] std::expected<BulkEditResult, BulkEditError> setBulkData(const QModelIndexList& indexes,
+                                                                           const QVariant& value);
 
     MoveOperation moveTracks(const MoveOperation& operation);
 
@@ -114,9 +147,9 @@ public:
     void resetColumnAlignment(int column);
     void resetColumnAlignments();
 
-    void setFont(const QFont& font);
     void setPixmapColumnSize(int column, int size);
     void setPixmapColumnSizes(const std::vector<int>& sizes);
+    void updateColours();
 
     void reset(const PlaylistTrackList& tracks);
     void reset(const PlaylistPreset& preset, const PlaylistColumnList& columns, Playlist* playlist,
@@ -125,8 +158,10 @@ public:
 
     [[nodiscard]] PlaylistTrack playingTrack() const;
     void stopAfterTrack(const QModelIndex& index);
-    TrackIndexResult trackIndexAtPlaylistIndex(int index);
-    QModelIndex indexAtPlaylistIndex(int index, bool includeEnd = false);
+    [[nodiscard]] TrackIndexResult trackIndexAtPlaylistIndex(int index) const;
+    [[nodiscard]] QModelIndex indexAtPlaylistIndex(int index, bool includeEnd = false) const;
+    [[nodiscard]] int playlistIndexForTrackEntry(const UId& entryId) const;
+    QModelIndex indexAtTrackEntry(const UId& entryId) const;
     [[nodiscard]] QModelIndexList indexesOfTrackId(int id);
 
     void insertTracks(const TrackGroups& tracks);
@@ -144,25 +179,61 @@ public:
     void tracksAboutToBeChanged();
     void tracksChanged();
 
-signals:
+Q_SIGNALS:
+    void metadataWriteRequested(const Fooyin::TrackList& tracks);
+    void tracksLoved(const Fooyin::TrackList& tracks);
+    void tracksRated(const Fooyin::TrackList& tracks);
+    void loadingStateChanged();
     void playlistLoaded();
     void filesDropped(const QList<QUrl>& urls, int index);
     void tracksInserted(const Fooyin::TrackGroups& groups);
     void tracksMoved(const Fooyin::MoveOperation& operation);
-    void playlistTracksChanged(int index);
+    void trackGroupApplied();
 
-public slots:
+protected:
+    void invalidateData() override;
+
+public Q_SLOTS:
     void playingTrackChanged(const Fooyin::PlaylistTrack& track);
     void playStateChanged(Fooyin::Player::PlayState state);
+    void refreshPlayingTrackPositionData();
+    void refreshPlayingTrackBitrateData();
 
 private:
+    struct PlayingTrackIndexResolution
+    {
+        int index{-1};
+        bool structuralRemapPending{false};
+    };
+
+    struct EditableTrackContext
+    {
+        int column{-1};
+        QString writeField;
+        bool ratingField{false};
+        bool loveField{false};
+    };
+    [[nodiscard]] std::optional<EditableTrackContext> editableTrackContextForColumn(int column) const;
+    [[nodiscard]] std::expected<EditableTrackContext, BulkEditError>
+    editableTrackContext(const QModelIndex& index) const;
+    [[nodiscard]] bool canEditTrack(const Track& track, const EditableTrackContext& context) const;
+    [[nodiscard]] std::expected<Track, BulkEditError>
+    prepareEditedTrack(const QModelIndex& index, const EditableTrackContext& context, const QVariant& value) const;
+
     QModelIndex rightIndex(const QModelIndex& index) const;
+    [[nodiscard]] bool playingTrackMatchesPlaylistTrack(const PlaylistTrack& track, int index) const;
+    [[nodiscard]] PlaylistTrackList tracksWithPlayingTrackOverlay(const PlaylistTrackList& tracks) const;
 
     void populateModel(PendingData data);
     void populateTrackGroup(PendingData data);
     void updateModel(ItemKeyMap data);
     void updateTracks(const ItemList& tracks, const std::set<int>& columnsUpdated);
+    void notifyDataChangedForSubtree(const QModelIndex& parent, const QList<int>& roles);
     void mergeTrackParents(const TrackIdNodeMap& parents);
+    [[nodiscard]] bool tryUpdateTrackGroupInPlace(const PendingData& data);
+    [[nodiscard]] bool hasSameParentChain(const PlaylistItem* currentItem, const PlaylistItem* updatedItem) const;
+
+    [[nodiscard]] QFont playlistFont() const;
 
     QVariant trackData(PlaylistItem* item, const QModelIndex& index, int role) const;
     QVariant headerData(PlaylistItem* item, int column, int role) const;
@@ -212,10 +283,22 @@ private:
     void updateTrackIndexes(bool updateItems = true);
     void deleteNodes(PlaylistItem* node);
 
+    [[nodiscard]] static QModelIndex topLevelContainerIndex(const QModelIndex& index);
+    [[nodiscard]] QModelIndex firstLeafIndex(const QModelIndex& index) const;
+    [[nodiscard]] QModelIndex firstImageColumnTrackIndex(const QModelIndex& index) const;
     std::vector<int> pixmapColumns() const;
     std::set<int> columnsNeedUpdating() const;
+    void updateLivePlaybackDependencies();
+    void refreshTracksForDependency(const std::vector<int>& indexes, PlaybackDependency dependency);
+    void refreshTracksForDependencies(const std::vector<int>& indexes, PlaybackDependencies dependencies);
     void coverUpdated(const Track& track);
-    bool trackIsPlaying(const Track& track, int index) const;
+    [[nodiscard]] PlaylistTrack persistentTrackForIndex(const QModelIndex& index) const;
+    [[nodiscard]] bool playbackTrackMatchesPlaylistIndex(const PlaylistTrack& track, int index) const;
+    [[nodiscard]] PlayingTrackIndexResolution resolvePlayingTrackIndex(const PlaylistTrack& track) const;
+    [[nodiscard]] int resolveTrackIndex(const PlaylistTrack& track) const;
+    void syncPlayingTrackIndex();
+    void syncStopAtTrackIndex();
+    bool trackIsPlaying(const PlaylistTrack& track, int index) const;
 
     ParentChildRangesList determineRowGroups(const QModelIndexList& indexes);
 
@@ -238,8 +321,10 @@ private:
 
     TrackItemResult itemForTrackIndex(int index);
 
+    AudioLoader* m_audioLoader;
     MusicLibrary* m_library;
     SettingsManager* m_settings;
+    GuiStyleProvider* m_styleProvider;
     CoverProvider* m_coverProvider;
 
     UId m_id;
@@ -247,15 +332,18 @@ private:
     QString m_headerText;
 
     QColor m_playingColour;
+    QVariant m_playingFont;
     QColor m_disabledColour;
 
     QThread m_populatorThread;
     PlaylistPopulator m_populator;
 
     bool m_playlistLoaded;
+    bool m_loadingTextPending;
     ItemKeyMap m_nodes;
     TrackIdNodeMap m_trackParents;
     std::map<int, UId> m_trackIndexes;
+    std::unordered_map<UId, UId, UId::UIdHash> m_trackEntryIndexes;
 
     PlaylistPreset m_currentPreset;
     PlaylistColumnList m_columns;
@@ -265,12 +353,27 @@ private:
     int m_pixmapPadding;
     int m_pixmapPaddingTop;
     int m_starRatingSize;
+    int m_loveHeartSize;
+    std::array<QColor, 5> m_ratingStarColours;
+    QColor m_unratedStarColour;
+    QColor m_loveHeartColour;
+    QColor m_unlovedHeartColour;
+
+    std::set<int> m_positionColumns;
+    std::set<int> m_bitrateColumns;
+    std::set<int> m_playbackStateColumns;
+    bool m_singleColumnHasPositionDependency;
+    bool m_singleColumnHasBitrateDependency;
+    bool m_singleColumnHasPlaybackStateDependency;
 
     Playlist* m_currentPlaylist;
     Player::PlayState m_currentPlayState;
     PlaylistTrack m_playingTrack;
+    PlaylistTrack m_stopAtTrack;
     QPersistentModelIndex m_playingIndex;
     QPersistentModelIndex m_stopAtIndex;
     QModelIndexList m_indexesPendingRemoval;
 };
 } // namespace Fooyin
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(Fooyin::PlaylistModel::PlaybackDependencies)

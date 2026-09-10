@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,8 @@
 
 #include <QFutureWatcher>
 
+#include <atomic>
+
 class QGridLayout;
 class QLabel;
 class QPushButton;
@@ -31,38 +33,52 @@ class QPushButton;
 namespace Fooyin {
 class ArtworkRow;
 class AudioLoader;
+class CoverRepository;
+struct ArtworkLoadResult;
 class MusicLibrary;
+class PendingTrackCoverProvider;
+class SettingsManager;
 
 class ArtworkProperties : public PropertiesTabWidget
 {
     Q_OBJECT
 
 public:
-    ArtworkProperties(AudioLoader* loader, MusicLibrary* library, TrackList tracks, bool readOnly,
-                      QWidget* parent = nullptr);
+    ArtworkProperties(AudioLoader* loader, MusicLibrary* library, CoverRepository* coverRepository,
+                      SettingsManager* settings, TrackList tracks, bool readOnly, QWidget* parent = nullptr);
     ~ArtworkProperties() override;
 
     void loadTrackArtwork();
 
-    [[nodiscard]] QString name() const override;
-    [[nodiscard]] QString layoutName() const override;
-
+    void load() override;
     void apply() override;
+
+    void setTrackScope(const TrackList& tracks) override;
+    bool commitPendingChanges() override;
+    void updateTracks(const TrackList& tracks) override;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
 private:
+    static QString exportStatusMessage(int written, int failed, bool includeEmptyMessage = false);
+    static QString writeStatusMessage(const WriteResult& result);
+
     AudioLoader* m_audioLoader;
     MusicLibrary* m_library;
+    PendingTrackCoverProvider* m_pendingCoverProvider;
+    CoverRepository* m_coverRepository;
+    SettingsManager* m_settings;
 
     TrackList m_tracks;
-    QFutureWatcher<void>* m_watcher;
+    QFutureWatcher<std::shared_ptr<ArtworkLoadResult>>* m_watcher;
+    std::shared_ptr<std::atomic_bool> m_cancelLoading;
+    bool m_loaded;
     bool m_loading;
     bool m_writing;
 
     QWidget* m_artworkWidget;
     std::array<ArtworkRow*, 3> m_rows;
-    std::optional<WriteRequest> m_writeRequest;
 };
 } // namespace Fooyin

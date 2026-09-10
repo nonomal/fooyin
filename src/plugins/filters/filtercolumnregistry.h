@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,7 +34,7 @@ class FilterColumnRegistry : public ItemRegistry<FilterColumn>
 public:
     explicit FilterColumnRegistry(SettingsManager* settings, QObject* parent = nullptr);
 
-signals:
+Q_SIGNALS:
     void columnChanged(const Fooyin::Filters::FilterColumn& field);
 
 protected:

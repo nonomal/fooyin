@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -46,6 +46,7 @@ public:
     void removeImage();
 
     void loadImage(const QByteArray& imageData, bool replace = false);
+    void setLoadedState(const QByteArray& imageData, int imageCount, int trackCount, bool multipleImages);
     void finalise(int trackCount);
     void reset();
 
@@ -53,6 +54,10 @@ public:
     [[nodiscard]] Status status() const;
     [[nodiscard]] QString mimeType() const;
     [[nodiscard]] QByteArray image() const;
+
+Q_SIGNALS:
+    void requestExtract();
+    void requestExtractAs();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;

@@ -1,0 +1,115 @@
+/*
+ * Fooyin
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#pragma once
+
+#include "lyrics.h"
+#include "lyricscolours.h"
+#include "settings/lyricssettings.h"
+
+#include <gui/scripting/richtext.h>
+
+#include <QAbstractListModel>
+#include <QMargins>
+
+namespace Fooyin {
+class GuiStyleProvider;
+
+namespace Lyrics {
+class LyricsModel : public QAbstractListModel
+{
+    Q_OBJECT
+
+public:
+    enum Role
+    {
+        RichTextRole = Qt::UserRole,
+        TimestampRole,
+        DurationRole,
+        WordsRole,
+        IsPaddingRole,
+        MarginsRole,
+        LineSpacingRole,
+        CurrentTimeRole,
+        LyricsTypeRole,
+        ProgressColourRole,
+        ProgressBaseColourRole
+    };
+
+    explicit LyricsModel(GuiStyleProvider* styleProvider, QObject* parent = nullptr);
+
+    void setLyrics(const Lyrics& lyrics);
+    void setTrackDuration(uint64_t duration);
+    [[nodiscard]] Lyrics lyrics() const;
+
+    void setMargins(const QMargins& margins);
+    void setViewportPadding(int topPadding, int bottomPadding);
+    void setAlignment(Qt::Alignment alignment);
+    void setLineSpacing(int spacing);
+    void setColours(const Colours& colours);
+    [[nodiscard]] QColor backgroundColour(const QPalette& palette) const;
+    void setFonts(const QString& baseFont, const QString& lineFont, const QString& wordLineFont,
+                  const QString& wordFont);
+    void setProgressMode(ProgressMode mode);
+
+    void setCurrentTime(uint64_t time);
+    [[nodiscard]] uint64_t currentTime() const;
+
+    [[nodiscard]] int currentLineIndex() const;
+    [[nodiscard]] int currentLineLastIndex() const;
+
+    [[nodiscard]] int rowCount(const QModelIndex& parent) const override;
+    [[nodiscard]] QVariant data(const QModelIndex& index, int role) const override;
+
+private:
+    void updateCurrentLine();
+
+    [[nodiscard]] bool isLineHighlighted(const ParsedLine& line) const;
+    [[nodiscard]] RichText textForLine(const ParsedLine& line) const;
+    [[nodiscard]] std::vector<ParsedLine>::const_iterator lineForTimestamp(uint64_t timestamp) const;
+    [[nodiscard]] std::vector<ParsedWord>::const_iterator wordForTimestamp(const ParsedLine& line,
+                                                                           uint64_t timestamp) const;
+    [[nodiscard]] bool shouldFillLineProgress() const;
+    [[nodiscard]] bool shouldFillWordProgress() const;
+    [[nodiscard]] bool shouldFillProgress() const;
+
+    Lyrics m_lyrics;
+    QMargins m_margins;
+    int m_topViewportPadding;
+    int m_bottomViewportPadding;
+    Qt::Alignment m_alignment;
+    int m_lineSpacing;
+    uint64_t m_currentTime;
+    uint64_t m_lastProgressUpdateTime;
+    int m_currentLine;
+    int m_currentLineEnd;
+    int m_currentWord;
+
+    std::vector<RichText> m_text;
+
+    Colours m_colours;
+    GuiStyleProvider* m_styleProvider;
+    QFont m_baseFont;
+    QFont m_lineFont;
+    QFont m_wordLineFont;
+    QFont m_wordFont;
+    ProgressMode m_progressMode;
+};
+} // namespace Lyrics
+} // namespace Fooyin

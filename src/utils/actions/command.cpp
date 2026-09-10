@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,6 +28,8 @@
 #include <QLoggingCategory>
 #include <QPointer>
 
+Q_LOGGING_CATEGORY(COMMAND, "fy.command")
+
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
@@ -39,7 +41,7 @@ public:
     CommandPrivate(Command* self, const Id& id)
         : m_self{self}
         , m_id{id}
-        , m_action{new ProxyAction(m_self)}
+        , m_action{new ProxyAction(this)}
     {
         m_action->setShortcutVisibleInToolTip(true);
         QObject::connect(m_action, &QAction::changed, this, &CommandPrivate::updateActiveState);
@@ -50,28 +52,32 @@ public:
     void setActive(bool state);
     void updateActiveState();
 
-    void removeOverrideAction(QAction* actionToRemove);
+    bool removeOverrideAction(QAction* actionToRemove);
 
     Command* m_self;
 
     Id m_id;
     Context m_context;
     ShortcutList m_defaultKeys;
+    ShortcutList m_globalKeys;
     QString m_defaultText;
     QStringList m_categories;
 
     bool m_active{false};
     bool m_shortcutIsInitialised{false};
+    bool m_globalShortcutRegistered{false};
 
     std::map<Id, QPointer<QAction>> m_contextActionMap;
     ProxyAction* m_action{nullptr};
 };
 
-void CommandPrivate::removeOverrideAction(QAction* actionToRemove)
+bool CommandPrivate::removeOverrideAction(QAction* actionToRemove)
 {
-    std::erase_if(m_contextActionMap,
-                  [actionToRemove](const auto& pair) { return !pair.second || pair.second == actionToRemove; });
+    const bool removed = std::erase_if(m_contextActionMap, [actionToRemove](const auto& pair) {
+        return !pair.second || pair.second == actionToRemove;
+    });
     m_self->setCurrentContext(m_context);
+    return removed;
 }
 
 [[nodiscard]] bool CommandPrivate::isEmpty() const
@@ -140,11 +146,37 @@ bool Command::isActive() const
     return p->m_active;
 }
 
+bool Command::hasOverrideActions() const
+{
+    return !p->isEmpty();
+}
+
 void Command::setShortcut(const ShortcutList& keys)
 {
     p->m_shortcutIsInitialised = true;
     p->m_action->setShortcuts(keys);
-    emit shortcutChanged();
+    Q_EMIT shortcutChanged();
+}
+
+void Command::setGlobalShortcuts(const ShortcutList& keys)
+{
+    ShortcutList globalKeys;
+    if(!keys.empty()) {
+        globalKeys.append(keys.front());
+    }
+
+    if(std::exchange(p->m_globalKeys, globalKeys) == globalKeys) {
+        return;
+    }
+
+    Q_EMIT globalShortcutsChanged();
+}
+
+void Command::setGlobalShortcutRegistered(bool registered)
+{
+    if(std::exchange(p->m_globalShortcutRegistered, registered) != registered) {
+        Q_EMIT globalShortcutRegistrationChanged();
+    }
 }
 
 QString Command::stringWithShortcut(const QString& str) const
@@ -185,6 +217,16 @@ ShortcutList Command::defaultShortcuts() const
 ShortcutList Command::shortcuts() const
 {
     return p->m_action->shortcuts();
+}
+
+ShortcutList Command::globalShortcuts() const
+{
+    return p->m_globalKeys;
+}
+
+bool Command::isGlobalShortcutRegistered() const
+{
+    return p->m_globalShortcutRegistered;
 }
 
 QKeySequence Command::shortcut() const
@@ -228,17 +270,20 @@ void Command::setCurrentContext(const Context& context)
     p->m_context = context;
 
     QAction* currentAction{nullptr};
-    for(const Id& contextId : std::as_const(p->m_context)) {
-        if(p->m_contextActionMap.contains(contextId)) {
-            if(QAction* contextAction = p->m_contextActionMap.at(contextId)) {
-                currentAction = contextAction;
-                break;
-            }
+    if(p->m_context.empty()) {
+        if(p->m_contextActionMap.contains(Constants::Context::Global)) {
+            currentAction = p->m_contextActionMap.at(Constants::Context::Global);
         }
     }
-
-    if(!currentAction) {
-        return;
+    else {
+        for(const Id& contextId : std::as_const(p->m_context)) {
+            if(p->m_contextActionMap.contains(contextId)) {
+                if(QAction* contextAction = p->m_contextActionMap.at(contextId)) {
+                    currentAction = contextAction;
+                    break;
+                }
+            }
+        }
     }
 
     p->m_action->setAction(currentAction);
@@ -258,23 +303,57 @@ void Command::addOverrideAction(QAction* action, const Context& context, bool ch
     QObject::connect(action, &QObject::destroyed, this, [this, action]() { p->removeOverrideAction(action); });
 
     if(context.empty()) {
-        p->m_contextActionMap.emplace(Constants::Context::Global, action);
+        if(auto it = p->m_contextActionMap.find(Constants::Context::Global); it != p->m_contextActionMap.end()) {
+            qCWarning(COMMAND) << "Replacing action" << it->second << "with" << action << "for context"
+                               << Constants::Context::Global;
+            it->second = action;
+        }
+        else {
+            p->m_contextActionMap.emplace(Constants::Context::Global, action);
+        }
     }
     else {
         for(const Id& contextId : context) {
-            if(p->m_contextActionMap.contains(contextId)) {
-                if(auto contextAction = p->m_contextActionMap.at(contextId)) {
-                    QLoggingCategory log{"Actions"};
-                    qCDebug(log) << "Context" << contextId.name() << "already added for" << contextAction;
-                }
+            if(auto it = p->m_contextActionMap.find(contextId); it != p->m_contextActionMap.end()) {
+                qCWarning(COMMAND) << "Replacing action" << it->second << "with" << action << "for context"
+                                   << contextId.name();
+                it->second = action;
             }
-            p->m_contextActionMap.emplace(contextId, action);
+            else {
+                p->m_contextActionMap.emplace(contextId, action);
+            }
         }
     }
 
     if(changeContext) {
         setCurrentContext(context);
     }
+}
+
+bool Command::removeOverrideAction(QAction* action, const Context& context)
+{
+    bool removed{false};
+
+    if(context.empty()) {
+        removed = std::erase_if(p->m_contextActionMap,
+                                [action](const auto& pair) { return !pair.second || pair.second == action; })
+                > 0;
+    }
+    else {
+        for(const Id& contextId : context) {
+            auto it = p->m_contextActionMap.find(contextId);
+            if(it != p->m_contextActionMap.end() && (!it->second || it->second == action)) {
+                p->m_contextActionMap.erase(it);
+                removed = true;
+            }
+        }
+    }
+
+    if(removed) {
+        setCurrentContext(p->m_context);
+    }
+
+    return removed;
 }
 } // namespace Fooyin
 

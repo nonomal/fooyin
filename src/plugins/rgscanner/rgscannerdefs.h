@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,8 +22,10 @@
 namespace Fooyin::RGScanner {
 constexpr auto ScannerPage = "Fooyin.Page.Playback.ReplayGain.Calculating";
 
-constexpr auto ScannerOption           = "RGScanner/Scanner";
-constexpr auto TruePeakSetting         = "RGScanner/TruePeak";
-constexpr auto AlbumGroupScriptSetting = "RGScanner/AlbumGroupScript";
-constexpr auto DefaultAlbumGroupScript = "%albumartist% - %date% - %album%";
+constexpr auto ScannerOption                 = "RGScanner/Scanner";
+constexpr auto TruePeakSetting               = "RGScanner/TruePeak";
+constexpr auto AlbumGroupScriptSetting       = "RGScanner/AlbumGroupScript";
+constexpr auto OpusHeaderTargetVolumeSetting = "RGScanner/OpusHeaderTargetVolume";
+constexpr auto OpusHeaderLouderOnlySetting   = "RGScanner/OpusHeaderLouderOnly";
+constexpr auto DefaultAlbumGroupScript       = "%albumartist% - %date% - %album%";
 } // namespace Fooyin::RGScanner

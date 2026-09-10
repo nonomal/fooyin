@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,8 +25,12 @@
 #include <QObject>
 
 namespace Fooyin {
+class ActionManager;
+class CoverRepository;
+class CurrentPlaylistController;
 struct CorePluginContext;
 class EditableLayout;
+class GuiStyleProvider;
 class MusicLibrary;
 class SettingsManager;
 class TagLoader;
@@ -42,6 +46,7 @@ struct FilterGroup
     Id id;
     std::vector<FilterWidget*> filters;
     TrackList filteredTracks;
+    bool hasActiveFilters{false};
     int updateCount{0};
 };
 
@@ -53,8 +58,10 @@ class FilterController : public QObject
     Q_OBJECT
 
 public:
-    FilterController(const CorePluginContext& core, TrackSelectionController* trackSelection,
-                     EditableLayout* editableLayout, SettingsManager* settings, QObject* parent = nullptr);
+    FilterController(ActionManager* actionManager, const CorePluginContext& core,
+                     CurrentPlaylistController* playlistController, TrackSelectionController* trackSelection,
+                     EditableLayout* editableLayout, CoverRepository* coverRepository, SettingsManager* settings,
+                     GuiStyleProvider* styleProvider, QObject* parent = nullptr);
     ~FilterController() override;
 
     [[nodiscard]] FilterColumnRegistry* columnRegistry() const;
@@ -72,11 +79,7 @@ public:
     void addFilterToGroup(FilterWidget* widget, const Id& groupId);
     bool removeFilter(FilterWidget* widget);
 
-signals:
-    void tracksRemoved(const Fooyin::TrackList& tracks);
-    void tracksChanged(const Fooyin::TrackList& tracks);
-    void tracksUpdated(const Fooyin::TrackList& tracks);
-
+Q_SIGNALS:
 private:
     std::unique_ptr<FilterControllerPrivate> p;
 };

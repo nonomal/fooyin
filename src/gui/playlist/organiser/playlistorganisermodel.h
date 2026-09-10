@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,9 @@
 
 #include "playlistorganiseritem.h"
 
-#include <core/track.h>
+#include <core/scripting/scriptparser.h>
+#include <gui/scripting/richtext.h>
+#include <gui/scripting/scriptformatter.h>
 #include <utils/id.h>
 #include <utils/treemodel.h>
 
@@ -39,12 +41,26 @@ class PlaylistOrganiserModel : public TreeModel<PlaylistOrganiserItem>
     Q_OBJECT
 
 public:
+    enum SortOrder : uint8_t
+    {
+        Ascending,
+        Descending
+    };
+
     explicit PlaylistOrganiserModel(PlaylistHandler* playlistHandler, PlayerController* playerController);
+
+    [[nodiscard]] static QString defaultLeftDisplayScript();
+    [[nodiscard]] static QString defaultRightDisplayScript();
 
     void populate();
     void populateMissing();
     QByteArray saveModel();
     bool restoreModel(QByteArray data);
+    void setDisplayScripts(const QString& leftScript, const QString& rightScript);
+    void setColours(const QColor& playingTextColour, const QColor& playingBackgroundColour);
+
+    [[nodiscard]] QString leftDisplayScript() const;
+    [[nodiscard]] QString rightDisplayScript() const;
 
     QModelIndex createGroup(const QModelIndex& parent);
     QModelIndex createPlaylist(Playlist* playlist, const QModelIndex& parent);
@@ -53,6 +69,9 @@ public:
     void playlistInserted(Playlist* playlist, const QString& group, int index);
     void playlistRenamed(Playlist* playlist);
     void playlistRemoved(Playlist* playlist);
+
+    void sortAllPlaylists(const SortOrder order);
+    void sortGroupPlaylists(const QModelIndexList& indexes, const SortOrder order);
 
     QModelIndex indexForPlaylist(Playlist* playlist);
 
@@ -72,13 +91,20 @@ public:
 
     void removeItems(const QModelIndexList& indexes);
 
-signals:
+Q_SIGNALS:
     void filesDroppedOnPlaylist(const QList<QUrl>& urls, const Fooyin::UId& id);
     void filesDroppedOnGroup(const QList<QUrl>& urls, const QString& group, int index);
     void tracksDroppedOnPlaylist(const std::vector<int>& trackIds, const Fooyin::UId& id);
     void tracksDroppedOnGroup(const std::vector<int>& trackIds, const QString& group, int index);
 
 private:
+    void refreshData(const QList<int>& roles, PlaylistOrganiserItem* parent = nullptr);
+    void refreshPlaylist(Playlist* playlist, const QList<int>& roles = {});
+    void sortPlaylists(PlaylistOrganiserItem* parent, SortOrder order);
+    [[nodiscard]] QString evaluateScript(const ParsedScript& script, const PlaylistOrganiserItem* item) const;
+    [[nodiscard]] RichText evaluateRichScript(const ParsedScript& script, const PlaylistOrganiserItem* item) const;
+    [[nodiscard]] RichText leftRichText(const PlaylistOrganiserItem* item) const;
+    [[nodiscard]] RichText rightRichText(const PlaylistOrganiserItem* item) const;
     QByteArray saveIndexes(const QModelIndexList& indexes) const;
     QModelIndexList restoreIndexes(QByteArray data);
     void recurseSaveModel(QDataStream& stream, PlaylistOrganiserItem* parent);
@@ -92,6 +118,14 @@ private:
     std::unordered_map<QString, PlaylistOrganiserItem> m_nodes;
 
     QString m_activePlaylistKey;
+    QColor m_playingTextColour;
     QColor m_playingColour;
+
+    mutable ScriptParser m_scriptParser;
+    mutable ScriptFormatter m_scriptFormatter;
+    QString m_leftScriptText;
+    QString m_rightScriptText;
+    ParsedScript m_leftScript;
+    ParsedScript m_rightScript;
 };
 } // namespace Fooyin

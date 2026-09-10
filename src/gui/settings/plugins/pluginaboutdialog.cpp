@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,7 +43,7 @@ PluginAboutDialog::PluginAboutDialog(PluginInfo* plugin, QWidget* parent)
     auto* descLabel      = new QLabel(tr("Description") + u":"_s, this);
     auto* urlLabel       = new QLabel(tr("URL") + u":"_s, this);
     auto* copyrightLabel = new QLabel(tr("Copyright") + u":"_s, this);
-    auto* licenseLabel   = new QLabel(tr("License") + u":"_s, this);
+    auto* licenseLabel   = new QLabel(tr("Licence") + u":"_s, this);
 
     auto* name      = new QLabel(plugin->name(), this);
     auto* version   = new QLabel(plugin->version(), this);

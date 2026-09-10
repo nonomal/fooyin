@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +20,22 @@
 #include "pipewireplugin.h"
 
 #include "pipewireoutput.h"
+#include "pipewiresettings.h"
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Pipewire {
+namespace {
+class PipewirePluginSettingsProvider : public PluginSettingsProvider
+{
+protected:
+    QDialog* createSettings(QWidget* parent) override
+    {
+        return new PipewireSettings(parent);
+    }
+};
+} // namespace
+
 QString PipeWirePlugin::name() const
 {
     return u"PipeWire"_s;
@@ -34,6 +46,11 @@ OutputCreator PipeWirePlugin::creator() const
     return []() {
         return std::make_unique<PipeWireOutput>();
     };
+}
+
+std::unique_ptr<PluginSettingsProvider> PipeWirePlugin::settingsProvider() const
+{
+    return std::make_unique<PipewirePluginSettingsProvider>();
 }
 } // namespace Fooyin::Pipewire
 

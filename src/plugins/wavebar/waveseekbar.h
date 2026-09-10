@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,28 +26,40 @@
 #include <core/player/playerdefs.h>
 #include <gui/widgets/tooltip.h>
 
+#include <QImage>
 #include <QPointer>
 #include <QWidget>
 
-namespace Fooyin {
-class SettingsManager;
-
-namespace WaveBar {
+namespace Fooyin::WaveBar {
 class WaveSeekBar : public QWidget
 {
     Q_OBJECT
 
 public:
-    explicit WaveSeekBar(SettingsManager* settings, QWidget* parent = nullptr);
+    explicit WaveSeekBar(QWidget* parent = nullptr);
 
     void processData(const WaveformData<float>& waveData);
 
     void setPlayState(Player::PlayState state);
+    void setSeekable(bool seekable);
     void setPosition(uint64_t pos);
+    void setShowCursor(bool show);
+    void setCursorWidth(int width);
+    void setChannelScale(double scale);
+    void setBarWidth(int width);
+    void setBarGap(int gap);
+    void setMaxScale(double scale);
+    void setCentreGap(int gap);
+    void setMode(WaveModes mode);
+    void setColours(const Colours& colours);
+    void refreshStyleColours();
+    void setSupersampleFactor(int factor);
+    void setMouseFocusEnabled(bool enabled);
+
     [[nodiscard]] bool isSeeking() const;
     void stopSeeking();
 
-signals:
+Q_SIGNALS:
     void sliderMoved(uint64_t pos);
     void seekForward();
     void seekBackward();
@@ -61,18 +73,38 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
-    [[nodiscard]] int positionFromValue(uint64_t value) const;
+    enum class PlaybackColourMode : uint8_t
+    {
+        Position = 0,
+        Unplayed,
+        Played
+    };
+
+    [[nodiscard]] double positionFromValue(double value) const;
+    [[nodiscard]] double positionFromValue(double value, double renderWidth) const;
     [[nodiscard]] uint64_t valueFromPosition(int pos) const;
     void updateMousePosition(const QPoint& pos);
-    void updateRange(int first, int last);
+    void updateRange(double first, double last);
 
-    void drawChannel(QPainter& painter, int channel, double height, int first, int last, int y);
-    void drawSilence(QPainter& painter, int first, int last, double y);
+    void invalidateWaveformCache();
+    void ensureWaveformCache();
+    [[nodiscard]] int cachedRenderWidth() const;
+    void drawCachedWaveform(QPainter& painter, const QRect& dirtyRect);
+    void drawCachedSlice(QPainter& painter, const QImage& image, const QRectF& targetRect) const;
+    void drawCachedTransition(QPainter& painter, double positionX, const QRect& targetRect);
+    void drawCursors(QPainter& painter);
+    void paintWaveform(QPainter& painter, const QRect& rect, double renderWidth,
+                       PlaybackColourMode colourMode = PlaybackColourMode::Position);
+    void drawChannel(QPainter& painter, int channel, double height, int first, int last, int y, double renderWidth,
+                     PlaybackColourMode colourMode);
+    void drawSilence(QPainter& painter, double first, double last, double y, double currentPosition,
+                     PlaybackColourMode colourMode);
     void drawSeekTip();
 
-    SettingsManager* m_settings;
+    void invalidate();
 
     Player::PlayState m_playState;
+    bool m_seekable;
     WaveformData<float> m_data;
     double m_scale;
     uint64_t m_position;
@@ -86,11 +118,17 @@ private:
     int m_barWidth;
     int m_barGap;
     int m_sampleWidth;
+    int m_supersampleFactor;
     double m_maxScale;
     int m_centreGap;
 
     WaveModes m_mode;
     Colours m_colours;
+
+    QImage m_unplayedWaveformCache;
+    QImage m_playedWaveformCache;
+    QSize m_waveformCacheSize;
+    int m_waveformCacheRenderWidth;
+    bool m_waveformCacheDirty;
 };
-} // namespace WaveBar
-} // namespace Fooyin
+} // namespace Fooyin::WaveBar

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,7 +49,7 @@ PluginInfo::PluginInfo(QString filepath, const QJsonObject& allMetadata)
 void PluginInfo::load()
 {
     if(!m_loader.load()) {
-        m_error  = u"Plugin (%1) couldn't be loaded: %2"_s.arg(m_name, m_error);
+        m_error  = u"Plugin (%1) couldn't be loaded: %2"_s.arg(m_name, m_loader.errorString());
         m_status = Status::Invalid;
         return;
     }

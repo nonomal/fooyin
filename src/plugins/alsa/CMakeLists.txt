@@ -7,6 +7,7 @@ endif()
 create_fooyin_plugin_internal(
     alsa
     DEPENDS Fooyin::Core
+            Fooyin::Gui
             ${ALSA_LIBRARIES}
     SOURCES alsaoutput.cpp
             alsaoutput.h
@@ -16,6 +17,4 @@ create_fooyin_plugin_internal(
             alsasettings.h
 )
 
-target_include_directories(
-    alsa PRIVATE ${ALSA_INCLUDE_DIRS}
-)
+target_include_directories(alsa PRIVATE ${ALSA_INCLUDE_DIRS})

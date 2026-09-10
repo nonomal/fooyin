@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,13 @@ class FYGUI_EXPORT ExpandingComboBox : public QComboBox
 public:
     explicit ExpandingComboBox(QWidget* parent = nullptr);
 
+    [[nodiscard]] bool resizeToCurrentEnabled() const;
+    void setResizeToCurrentEnabled(bool enabled);
+    void invalidateSizeHint();
     void resizeToFitCurrent();
     void resizeDropDown();
+
+private:
+    bool m_resizeToCurrentEnabled;
 };
 } // namespace Fooyin

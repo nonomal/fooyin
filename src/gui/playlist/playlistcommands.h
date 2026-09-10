@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,67 +22,65 @@
 #include "playlistmodel.h"
 
 #include <core/playlist/playlist.h>
-#include <core/track.h>
+#include <core/playlist/playlisthandler.h>
 
 #include <QUndoCommand>
 
 namespace Fooyin {
-class PlayerController;
-
 class PlaylistCommand : public QUndoCommand
 {
 public:
-    PlaylistCommand(PlayerController* playerController, PlaylistModel* model, const UId& playlistId);
+    PlaylistCommand(PlaylistHandler* handler, const UId& playlistId);
 
 protected:
-    PlayerController* m_playerController;
-    PlaylistModel* m_model;
+    PlaylistHandler* m_handler;
     UId m_playlistId;
 };
 
 class InsertTracks : public PlaylistCommand
 {
 public:
-    InsertTracks(PlayerController* playerController, PlaylistModel* model, const UId& playlistId, TrackGroups groups);
+    InsertTracks(PlaylistHandler* handler, const UId& playlistId, TrackGroups groups);
 
     void undo() override;
     void redo() override;
 
 private:
-    TrackGroups m_trackGroups;
+    PlaylistTrackList m_oldTracks;
+    PlaylistTrackList m_newTracks;
 };
 
 class RemoveTracks : public PlaylistCommand
 {
 public:
-    RemoveTracks(PlayerController* playerController, PlaylistModel* model, const UId& playlistId, TrackGroups groups);
+    RemoveTracks(PlaylistHandler* handler, const UId& playlistId, std::vector<int> indexes);
 
     void undo() override;
     void redo() override;
 
 private:
-    TrackGroups m_trackGroups;
+    PlaylistTrackList m_oldTracks;
+    PlaylistTrackList m_newTracks;
 };
 
 class MoveTracks : public PlaylistCommand
 {
 public:
-    MoveTracks(PlayerController* playerController, PlaylistModel* model, const UId& playlistId,
-               MoveOperation operation);
+    MoveTracks(PlaylistHandler* handler, const UId& playlistId, MoveOperation operation);
 
     void undo() override;
     void redo() override;
 
 private:
-    MoveOperation m_operation;
-    MoveOperation m_undoOperation;
+    PlaylistTrackList m_oldTracks;
+    PlaylistTrackList m_newTracks;
 };
 
 class ResetTracks : public PlaylistCommand
 {
 public:
-    ResetTracks(PlayerController* playerController, PlaylistModel* model, const UId& playlistId,
-                PlaylistTrackList oldTracks, PlaylistTrackList newTracks);
+    ResetTracks(PlaylistHandler* handler, const UId& playlistId, PlaylistTrackList oldTracks,
+                const PlaylistTrackList& newTracks);
 
     void undo() override;
     void redo() override;

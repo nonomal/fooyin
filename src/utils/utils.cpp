@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,27 +19,47 @@
 
 #include <utils/utils.h>
 
+#include <QAction>
 #include <QApplication>
 #include <QHeaderView>
-#include <QIcon>
 #include <QLabel>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMessageBox>
 #include <QPixmap>
-#include <QPixmapCache>
+#include <QPointer>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScreen>
 #include <QSettings>
+#include <QStatusTipEvent>
 #include <QWidget>
 #include <QWindow>
 
 using namespace Qt::StringLiterals;
 
-constexpr auto DefaultIconSize = 20;
-constexpr std::array<const char*, 6> DateFormats{"yyyy-MM-dd hh:mm:ss", "yyyy-MM-dd hh:mm", "yyyy-MM-dd hh",
-                                                 "yyyy-MM-dd",          "yyyy-MM",          "yyyy"};
+constexpr auto StatusTipsForwardedProp = "fooyin_statusTipsForwarded";
+
+namespace {
+std::optional<int> parseDigits(QStringView value, qsizetype position, qsizetype count)
+{
+    const auto end = position + count;
+
+    if(end > value.size()) {
+        return {};
+    }
+
+    int result{0};
+    for(qsizetype i{position}; i < end; ++i) {
+        const char16_t character = value.at(i).unicode();
+        if(character < u'0' || character > u'9') {
+            return {};
+        }
+        result = (result * 10) + (character - u'0');
+    }
+    return result;
+}
+} // namespace
 
 namespace Fooyin::Utils {
 int randomNumber(int min, int max)
@@ -68,21 +88,67 @@ QString formatTimeMs(uint64_t time)
     return formattedDateTime;
 }
 
-std::array<const char*, 6> dateFormats()
+std::optional<ParsedDateTime> parseDateTime(QStringView value)
 {
-    return DateFormats;
+    const auto size = value.size();
+
+    DateTimePrecision precision;
+    switch(size) {
+        case 4:
+            precision = DateTimePrecision::Year;
+            break;
+        case 7:
+            precision = DateTimePrecision::Month;
+            break;
+        case 10:
+            precision = DateTimePrecision::Day;
+            break;
+        case 13:
+            precision = DateTimePrecision::Hour;
+            break;
+        case 16:
+            precision = DateTimePrecision::Minute;
+            break;
+        case 19:
+            precision = DateTimePrecision::Second;
+            break;
+        default:
+            return {};
+    }
+
+    // clang-format off
+    if((size >= 7 && value.at(4) != '-'_L1) ||
+       (size >= 10 && value.at(7) != '-'_L1) ||
+       (size >= 13 && value.at(10) != ' '_L1) ||
+       (size >= 16 && value.at(13) != ':'_L1) ||
+       (size >= 19 && value.at(16) != ':'_L1)) {
+        return {};
+    }
+    // clang-format on
+
+    const auto year   = parseDigits(value, 0, 4);
+    const auto month  = size >= 7 ? parseDigits(value, 5, 2) : 1;
+    const auto day    = size >= 10 ? parseDigits(value, 8, 2) : 1;
+    const auto hour   = size >= 13 ? parseDigits(value, 11, 2) : 0;
+    const auto minute = size >= 16 ? parseDigits(value, 14, 2) : 0;
+    const auto second = size >= 19 ? parseDigits(value, 17, 2) : 0;
+    if(!year || !month || !day || !hour || !minute || !second) {
+        return {};
+    }
+
+    const QDate date{*year, *month, *day};
+    const QTime time{*hour, *minute, *second};
+    if(!date.isValid() || !time.isValid()) {
+        return {};
+    }
+
+    return ParsedDateTime{.date = date, .time = time, .precision = precision};
 }
 
 QDateTime dateStringToDate(const QString& str)
 {
-    for(const auto& format : DateFormats) {
-        const QDateTime date = QDateTime::fromString(str, QLatin1String{format});
-        if(date.isValid()) {
-            return date;
-        }
-    }
-
-    return {};
+    const auto parsed = parseDateTime(str);
+    return parsed ? parsed->toDateTime() : QDateTime{};
 }
 
 std::optional<int64_t> dateStringToMs(const QString& str)
@@ -258,6 +324,34 @@ void appendMenuActions(QMenu* originalMenu, QMenu* menu)
     }
 }
 
+void forwardMenuStatusTips(QMenu* menu, QWidget* target)
+{
+    if(!menu || menu->property(StatusTipsForwardedProp).toBool()) {
+        return;
+    }
+    menu->setProperty(StatusTipsForwardedProp, true);
+
+    QObject::connect(menu, &QMenu::hovered, menu, [target = QPointer{target}](QAction* action) {
+        if(action) {
+            action->showStatusText(target ? target.data() : getMainWindow());
+        }
+    });
+    QObject::connect(menu, &QMenu::aboutToHide, menu, [target = QPointer{target}]() {
+        QStatusTipEvent event{QString{}};
+        QApplication::sendEvent(target ? target.data() : getMainWindow(), &event);
+    });
+}
+
+QAction* cloneMenuAction(QMenu* menu, const QAction* source, const std::function<void()>& handler)
+{
+    auto* action = new QAction(source->icon(), source->text(), menu);
+    action->setStatusTip(source->statusTip());
+    action->setEnabled(source->isEnabled());
+    action->setVisible(source->isVisible());
+    QObject::connect(action, &QAction::triggered, menu, handler);
+    return action;
+}
+
 int visibleSectionCount(const QHeaderView* headerView)
 {
     int visibleCount{0};
@@ -329,6 +423,11 @@ void saveState(QWidget* widget, QSettings& settings, const QString& name)
 
     settings.setValue(geometryKey, widget->saveGeometry());
     settings.setValue(sizeKey, widget->size());
+
+    if(auto* window = qobject_cast<QMainWindow*>(widget)) {
+        const QString stateKey = QStringLiteral("%1/State").arg(keyGroup);
+        settings.setValue(stateKey, window->saveState());
+    }
 }
 
 void restoreState(QWidget* widget, const QSettings& settings, const QString& name)
@@ -337,13 +436,25 @@ void restoreState(QWidget* widget, const QSettings& settings, const QString& nam
     const QString geometryKey = QStringLiteral("%1/Geometry").arg(keyGroup);
     const QString sizeKey     = QStringLiteral("%1/Size").arg(keyGroup);
 
-    const QByteArray geometry = settings.value(geometryKey).toByteArray();
-    if(!geometry.isEmpty()) {
-        widget->restoreGeometry(geometry);
+    if(settings.contains(geometryKey)) {
+        if(const QByteArray geometry = settings.value(geometryKey).toByteArray(); !geometry.isEmpty()) {
+            widget->restoreGeometry(geometry);
+        }
     }
 
-    const QSize size = settings.value(sizeKey).toSize();
-    widget->resize(size.isValid() ? size : widget->sizeHint());
+    if(auto* window = qobject_cast<QMainWindow*>(widget)) {
+        const QString stateKey = QStringLiteral("%1/State").arg(keyGroup);
+        const QByteArray state = settings.value(stateKey).toByteArray();
+        if(!state.isEmpty()) {
+            window->restoreState(state);
+        }
+    }
+
+    if(settings.contains(sizeKey)) {
+        if(const QSize size = settings.value(sizeKey).toSize(); size.isValid()) {
+            widget->resize(size);
+        }
+    }
 }
 
 bool isDarkMode()
@@ -359,33 +470,4 @@ bool isDarkMode()
     return isDark;
 }
 
-QIcon iconFromTheme(const QString& icon)
-{
-    return QIcon::fromTheme(icon);
-}
-
-QIcon iconFromTheme(const char* icon)
-{
-    return iconFromTheme(QString::fromLatin1(icon));
-}
-
-QPixmap pixmapFromTheme(const char* icon)
-{
-    return pixmapFromTheme(icon, {DefaultIconSize, DefaultIconSize});
-}
-
-QPixmap pixmapFromTheme(const char* icon, const QSize& size)
-{
-    const QString key = u"ThemeIcon|%1|%2x%3"_s.arg(QLatin1String{icon}).arg(size.width(), size.height());
-
-    QPixmap pixmap;
-    if(QPixmapCache::find(key, &pixmap)) {
-        return pixmap;
-    }
-
-    pixmap = QIcon::fromTheme(QString::fromLatin1(icon)).pixmap(size);
-    QPixmapCache::insert(key, pixmap);
-
-    return pixmap;
-}
 } // namespace Fooyin::Utils

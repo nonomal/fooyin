@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -43,43 +43,56 @@ public:
 namespace Settings::Core {
 Q_NAMESPACE_EXPORT(FYCORE_EXPORT)
 
-const auto PlayModeKey = "Player/PlayMode";
+const auto PlayModeKey     = "Player/PlayMode";
+const auto SearchModeKey   = "Searching/SearchMode";
+const auto SearchScriptKey = "Searching/SearchScript";
 
 enum CoreSettings : uint32_t
 {
-    Version                     = 1 | Type::String,
-    FirstRun                    = 2 | Type::Bool,
-    PlayMode                    = 3 | Type::Int,
-    AutoRefresh                 = 4 | Type::Bool,
-    LibrarySortScript           = 5 | Type::String,
-    AudioOutput                 = 6 | Type::String,
-    OutputVolume                = 7 | Type::Double,
-    RewindPreviousTrack         = 8 | Type::Bool,
-    GaplessPlayback             = 9 | Type::Bool,
-    Language                    = 10 | Type::String,
-    BufferLength                = 11 | Type::Int,
-    OpenFilesPlaylist           = 12 | Type::String,
-    OpenFilesSendTo             = 13 | Type::Bool,
-    SaveRatingToMetadata        = 14 | Type::Bool,
-    SavePlaycountToMetadata     = 15 | Type::Bool,
-    PlayedThreshold             = 16 | Type::Double,
-    ExternalSortScript          = 17 | Type::String,
-    Shutdown                    = 18 | Type::Bool,
-    StopAfterCurrent            = 19 | Type::Bool,
-    RGMode                      = 20 | Type::Int,
-    RGType                      = 21 | Type::Int,
-    RGPreAmp                    = 22 | Type::Float,
-    NonRGPreAmp                 = 23 | Type::Float,
-    UseVariousForCompilations   = 24 | Type::Bool,
-    ShuffleAlbumsGroupScript    = 25 | Type::String,
-    ShuffleAlbumsSortScript     = 26 | Type::String,
-    ActiveTrack                 = 27 | Type::Variant,
-    ActiveTrackId               = 28 | Type::Int,
-    FollowPlaybackQueue         = 29 | Type::Bool,
-    StopIfActivePlaylistDeleted = 30 | Type::Bool,
-    ResetStopAfterCurrent       = 31 | Type::Bool,
-    PreserveTimestamps          = 32 | Type::Bool,
-    PlaylistSkipMissing         = 33 | Type::Bool,
+    Version                       = 1 | Type::String,
+    FirstRun                      = 2 | Type::Bool,
+    PlayMode                      = 3 | Type::Int,
+    AutoRefresh                   = 4 | Type::Bool,
+    LibrarySortScript             = 5 | Type::String,
+    AudioOutput                   = 6 | Type::String,
+    OutputVolume                  = 7 | Type::Double,
+    RewindPreviousTrack           = 8 | Type::Bool,
+    GaplessPlayback               = 9 | Type::Bool,
+    Language                      = 10 | Type::String,
+    BufferLength                  = 11 | Type::Int,
+    OpenFilesPlaylist             = 12 | Type::String,
+    OpenFilesSendTo               = 13 | Type::Bool,
+    SaveRatingToMetadata          = 14 | Type::Bool,
+    SavePlaycountToMetadata       = 15 | Type::Bool,
+    PlayedThreshold               = 16 | Type::Double,
+    ExternalSortScript            = 17 | Type::String,
+    Shutdown                      = 18 | Type::Bool,
+    StopAfterCurrent              = 19 | Type::Bool,
+    RGMode                        = 20 | Type::Int,
+    RGType                        = 21 | Type::Int,
+    RGPreAmp                      = 22 | Type::Float,
+    NonRGPreAmp                   = 23 | Type::Float,
+    UseVariousForCompilations     = 24 | Type::Bool,
+    ShuffleAlbumsGroupScript      = 25 | Type::String,
+    ShuffleAlbumsSortScript       = 26 | Type::String,
+    ActiveTrack                   = 27 | Type::Variant,
+    ActiveTrackId                 = 28 | Type::Int,
+    FollowPlaybackQueue           = 29 | Type::Bool,
+    StopIfActivePlaylistDeleted   = 30 | Type::Bool,
+    ResetStopAfterCurrent         = 31 | Type::Bool,
+    PreserveTimestamps            = 32 | Type::Bool,
+    PlaylistSkipMissing           = 33 | Type::Bool,
+    PlaybackQueueStopWhenFinished = 34 | Type::Bool,
+    OutputBitDepth                = 35 | Type::Int,
+    OutputDither                  = 36 | Type::Bool,
+    ClearPlaybackQueueOnExit      = 37 | Type::Bool,
+    LibraryViewPlaylistSortScript = 38 | Type::String,
+    OverwriteRatingOnReload       = 39 | Type::Bool,
+    OverwritePlaycountOnReload    = 40 | Type::Bool,
+    OpenFileAddDirectory          = 41 | Type::Bool,
+    AddFoldersIgnorePlaylists     = 42 | Type::Bool,
+    PlaylistPreventDuplicates     = 43 | Type::Bool,
+    PlayedThresholdTime           = 44 | Type::Int,
 };
 Q_ENUM_NS(CoreSettings)
 } // namespace Settings::Core

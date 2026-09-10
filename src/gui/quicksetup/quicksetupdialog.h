@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,37 +19,55 @@
 
 #pragma once
 
-#include "gui/layoutprovider.h"
-
 #include <QDialog>
-#include <QItemSelection>
 
-class QListView;
+class QListWidget;
 class QPushButton;
+class QGroupBox;
 
 namespace Fooyin {
-class QuickSetupModel;
+class EditableLayout;
+class LayoutProvider;
+class PresetRegistry;
+class SettingsManager;
+class ThemeRegistry;
 
 class QuickSetupDialog : public QDialog
 {
     Q_OBJECT
 
 public:
-    explicit QuickSetupDialog(LayoutProvider* layoutProvider, QWidget* parent = nullptr);
+    explicit QuickSetupDialog(LayoutProvider* layoutProvider, ThemeRegistry* themeRegistry,
+                              PresetRegistry* presetRegistry, EditableLayout* editableLayout, SettingsManager* settings,
+                              QWidget* parent = nullptr);
 
     [[nodiscard]] QSize sizeHint() const override;
 
-signals:
-    void layoutChanged(const Fooyin::FyLayout& layout);
-
-protected:
-    void showEvent(QShowEvent* event) override;
-
 private:
-    void changeLayout(const QItemSelection& selected, const QItemSelection& deselected);
+    enum ItemRole
+    {
+        Id = Qt::UserRole
+    };
 
-    QListView* m_layoutList;
-    QuickSetupModel* m_model;
+    void populateLayouts() const;
+    void populateThemes() const;
+    void populatePlaylistPresets() const;
+    void selectCurrentPlaylistPreset() const;
+    void changeLayout();
+    void changeTheme();
+    void changePlaylistPreset();
+
+    LayoutProvider* m_layoutProvider;
+    ThemeRegistry* m_themeRegistry;
+    PresetRegistry* m_presetRegistry;
+    EditableLayout* m_editableLayout;
+    SettingsManager* m_settings;
+    bool m_useNativeDarkMode;
+
+    QListWidget* m_layoutList;
+    QListWidget* m_themeList;
+    QListWidget* m_playlistPresetList;
+    QGroupBox* m_playlistPresetGroup;
     QPushButton* m_accept;
 };
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 
 #include "infoitem.h"
 
+#include <optional>
 #include <utility>
 
 using namespace Qt::StringLiterals;
@@ -82,6 +83,36 @@ uint64_t getMax(const QStringList& values)
     }
 
     return max;
+};
+
+double getMinFloat(const QStringList& values)
+{
+    std::optional<double> min;
+
+    for(const QString& str : values) {
+        bool ok{false};
+        const double value = str.toDouble(&ok);
+        if(ok) {
+            min = min ? std::min(*min, value) : value;
+        }
+    }
+
+    return min.value_or(0.0);
+};
+
+uint64_t getMin(const QStringList& values)
+{
+    std::optional<uint64_t> min;
+
+    for(const QString& str : values) {
+        bool ok{false};
+        const uint64_t value = str.toULongLong(&ok);
+        if(ok) {
+            min = min ? std::min(*min, value) : value;
+        }
+    }
+
+    return min.value_or(0);
 };
 
 QString formatPercentage(const QStringList& values)
@@ -158,6 +189,24 @@ QString calculateTotal(const QStringList& values, const Fooyin::InfoItem::Format
         format);
 }
 
+QString calculateMin(const QStringList& values, const Fooyin::InfoItem::FormatFunc& format, bool isFloat)
+{
+    return std::visit(
+        [&values, isFloat](const auto& func) -> QString {
+            if(func) {
+                if(isFloat) {
+                    return func(getMinFloat(values));
+                }
+                return func(getMin(values));
+            }
+            if(isFloat) {
+                return QString::number(getMinFloat(values));
+            }
+            return QString::number(getMin(values));
+        },
+        format);
+}
+
 QString calculateMax(const QStringList& values, const Fooyin::InfoItem::FormatFunc& format, bool isFloat)
 {
     return std::visit(
@@ -194,8 +243,6 @@ InfoItem::InfoItem(ItemType type, QString name, InfoItem* parent, ValueType valu
     , m_name{std::move(name)}
     , m_formatNum{formatFunc}
 { }
-
-InfoItem::InfoItem(const InfoItem& other) = default;
 
 bool InfoItem::operator<(const InfoItem& other) const
 {
@@ -255,6 +302,12 @@ QVariant InfoItem::value() const
         case(ValueType::Total): {
             if(m_value.isEmpty() && !m_values.empty()) {
                 m_value = calculateTotal(m_values, m_formatNum, m_isFloat);
+            }
+            return m_value;
+        }
+        case(ValueType::Min): {
+            if(m_value.isEmpty() && !m_values.empty()) {
+                m_value = calculateMin(m_values, m_formatNum, m_isFloat);
             }
             return m_value;
         }

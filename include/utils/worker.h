@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,10 @@
 #include "fyutils_export.h"
 
 #include <QObject>
+
+#include <atomic>
+#include <mutex>
+#include <stop_token>
 
 namespace Fooyin {
 class FYUTILS_EXPORT Worker : public QObject
@@ -48,12 +52,20 @@ public:
 
     [[nodiscard]] bool mayRun() const;
     [[nodiscard]] bool closing() const;
+    [[nodiscard]] std::stop_token stopToken() const;
+    [[nodiscard]] bool stopRequested() const;
 
-signals:
+Q_SIGNALS:
     void finished();
+
+protected:
+    void resetStopSource();
+    void requestStop();
 
 private:
     std::atomic<State> m_state;
     std::atomic<bool> m_closing;
+    mutable std::mutex m_stopSourceMutex;
+    std::stop_source m_stopSource;
 };
 } // namespace Fooyin

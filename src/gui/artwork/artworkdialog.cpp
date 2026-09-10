@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,17 +20,17 @@
 #include "artworkdialog.h"
 
 #include "artwork/artworkdelegate.h"
+#include "artwork/artworksaveutils.h"
 #include "artworkfinder.h"
 #include "artworkmodel.h"
 #include "internalguisettings.h"
 
 #include <core/library/musiclibrary.h>
-#include <gui/coverprovider.h>
+#include <gui/coverrepository.h>
 #include <gui/guisettings.h>
 #include <gui/widgets/expandedtreeview.h>
 #include <utils/fileutils.h>
 #include <utils/settings/settingsmanager.h>
-#include <utils/utils.h>
 
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -40,18 +40,19 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListView>
-#include <QMimeDatabase>
 #include <QPushButton>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 ArtworkDialog::ArtworkDialog(std::shared_ptr<NetworkAccessManager> networkManager, MusicLibrary* library,
-                             SettingsManager* settings, TrackList tracks, Track::Cover type, QWidget* parent)
+                             SettingsManager* settings, CoverRepository* coverRepository, TrackList tracks,
+                             Track::Cover type, QWidget* parent)
     : QDialog{parent}
     , m_networkManager{std::move(networkManager)}
     , m_library{library}
     , m_settings{settings}
+    , m_coverRepository{coverRepository}
     , m_tracks{std::move(tracks)}
     , m_type{type}
     , m_artworkFinder{new ArtworkFinder(m_networkManager, m_settings, this)}
@@ -154,33 +155,30 @@ void ArtworkDialog::accept()
         return;
     }
 
-    QPixmap cover;
-    cover.loadFromData(result.image);
-    cover.setDevicePixelRatio(Utils::windowDpr());
-
-    const auto& method = m_saveMethods.value(m_type);
+    const auto& method    = m_saveMethods.value(m_type);
+    const auto saveResult = prepareArtworkForSave(result, method.format, method.quality);
 
     if(method.method == ArtworkSaveMethod::Embedded) {
         TrackCoverData coverData;
         coverData.tracks = m_tracks;
-        coverData.coverData.emplace(Track::Cover::Front, CoverImage{.mimeType = result.mimeType, .data = result.image});
-        m_library->writeTrackCovers(coverData);
-        QObject::connect(
-            m_library, &MusicLibrary::tracksMetadataChanged, this,
-            [this]() { std::ranges::for_each(m_tracks, &CoverProvider::removeFromCache); }, Qt::SingleShotConnection);
+        coverData.coverData.emplace(m_type, CoverImage{.mimeType = saveResult.mimeType, .data = saveResult.image});
+        m_library->writeTrackCovers(coverData).finished.then(
+            this, [this, tracks = m_tracks](const WriteResult& /*result*/) {
+                for(const Track& track : tracks) {
+                    m_coverRepository->removeFromCache(track, *m_settings);
+                }
+            });
     }
     else {
-        const QMimeDatabase mimeDb;
-        const QString suffix = mimeDb.mimeTypeForData(result.image).preferredSuffix().toLower();
-
         const QString path
-            = m_parser.evaluate(u"%1/%2.%3"_s.arg(method.dir, method.filename, suffix), m_tracks.front());
+            = m_parser.evaluate(u"%1/%2.%3"_s.arg(method.dir, method.filename, saveResult.suffix), m_tracks.front());
         const QString cleanPath = QDir::cleanPath(path);
 
         QFile file{cleanPath};
-        if(file.open(QIODevice::WriteOnly)) {
-            cover.save(&file, nullptr, -1);
-            std::ranges::for_each(m_tracks, CoverProvider::removeFromCache);
+        if(file.open(QIODevice::WriteOnly) && file.write(saveResult.image) == saveResult.image.size()) {
+            for(const Track& track : m_tracks) {
+                m_coverRepository->removeFromCache(track, *m_settings);
+            }
         }
     }
 

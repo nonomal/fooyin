@@ -1,0 +1,239 @@
+/*
+ * Fooyin
+ * Copyright © 2026, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#include <core/scripting/scripttrackwriter.h>
+
+#include "scriptbinder.h"
+
+#include <cmath>
+#include <functional>
+#include <limits>
+#include <type_traits>
+
+using namespace Qt::StringLiterals;
+
+namespace Fooyin {
+namespace {
+template <auto Func>
+void invokeTrackSetter(Track& track, const ScriptFieldValue& arg)
+{
+    std::visit(
+        [&]<typename Param>(Param&& value) {
+            if constexpr(std::is_invocable_v<decltype(Func), Track&, Param>) {
+                std::invoke(Func, track, value);
+            }
+        },
+        arg);
+}
+
+template <auto Func>
+void invokeTrackListSetter(Track& track, const ScriptFieldValue& arg)
+{
+    std::visit(
+        [&]<typename Param>(Param&& value) {
+            if constexpr(std::is_same_v<std::decay_t<Param>, QString>) {
+                std::invoke(Func, track, QStringList{value});
+            }
+            else if constexpr(std::is_invocable_v<decltype(Func), Track&, Param>) {
+                std::invoke(Func, track, value);
+            }
+        },
+        arg);
+}
+
+void setNormalizedRating(Track& track, const ScriptFieldValue& value)
+{
+    std::visit(
+        [&track](const auto& val) {
+            if constexpr(std::is_arithmetic_v<std::decay_t<decltype(val)>>) {
+                track.setRating(static_cast<float>(val));
+            }
+            else if constexpr(std::is_same_v<std::decay_t<decltype(val)>, QString>) {
+                track.setRating(val.toFloat());
+            }
+        },
+        value);
+}
+
+void setStarRating(Track& track, const ScriptFieldValue& value)
+{
+    std::visit(
+        [&track](const auto& val) {
+            if constexpr(std::is_arithmetic_v<std::decay_t<decltype(val)>>) {
+                track.setRating(static_cast<float>(val) / 5.0F);
+            }
+            else if constexpr(std::is_same_v<std::decay_t<decltype(val)>, QString>) {
+                track.setRating(val.toFloat() / 5.0F);
+            }
+        },
+        value);
+}
+
+void setEditorRating(Track& track, const ScriptFieldValue& value)
+{
+    std::visit(
+        [&track](const auto& val) {
+            if constexpr(std::is_arithmetic_v<std::decay_t<decltype(val)>>) {
+                track.setRatingStars(static_cast<int>(val));
+            }
+            else if constexpr(std::is_same_v<std::decay_t<decltype(val)>, QString>) {
+                track.setRatingStars(val.toInt());
+            }
+        },
+        value);
+}
+
+void setLoved(Track& track, const ScriptFieldValue& value)
+{
+    std::visit(
+        [&track](const auto& val) {
+            if constexpr(std::is_same_v<std::decay_t<decltype(val)>, QString>) {
+                const auto text = val.trimmed();
+                track.setLoved(text == "1"_L1 || text.compare("true"_L1, Qt::CaseInsensitive) == 0);
+            }
+            else if constexpr(std::is_arithmetic_v<std::decay_t<decltype(val)>>) {
+                track.setLoved(val != 0);
+            }
+        },
+        value);
+}
+
+void setPlayCount(Track& track, const ScriptFieldValue& value)
+{
+    std::visit(
+        [&track](const auto& val) {
+            if constexpr(std::is_arithmetic_v<std::decay_t<decltype(val)>>) {
+                const auto count = static_cast<long double>(val);
+                if(std::isnan(count)) {
+                    return;
+                }
+
+                static constexpr long double Min = std::numeric_limits<int>::min();
+                static constexpr long double Max = std::numeric_limits<int>::max();
+                track.setPlayCount(static_cast<int>(std::clamp(count, Min, Max)));
+            }
+        },
+        value);
+}
+
+bool setBuiltInTrackValue(const VariableKind kind, const ScriptFieldValue& value, Track& track)
+{
+    switch(kind) {
+        case VariableKind::Title:
+            invokeTrackSetter<&Track::setTitle>(track, value);
+            return true;
+        case VariableKind::Artist:
+            invokeTrackListSetter<&Track::setArtists>(track, value);
+            return true;
+        case VariableKind::Album:
+            invokeTrackSetter<&Track::setAlbum>(track, value);
+            return true;
+        case VariableKind::AlbumArtist:
+            invokeTrackListSetter<&Track::setAlbumArtists>(track, value);
+            return true;
+        case VariableKind::Track:
+            invokeTrackSetter<&Track::setTrackNumber>(track, value);
+            return true;
+        case VariableKind::TrackTotal:
+            invokeTrackSetter<&Track::setTrackTotal>(track, value);
+            return true;
+        case VariableKind::Disc:
+            invokeTrackSetter<&Track::setDiscNumber>(track, value);
+            return true;
+        case VariableKind::DiscTotal:
+            invokeTrackSetter<&Track::setDiscTotal>(track, value);
+            return true;
+        case VariableKind::Genre:
+        case VariableKind::Genres:
+            invokeTrackListSetter<&Track::setGenres>(track, value);
+            return true;
+        case VariableKind::Composer:
+            invokeTrackListSetter<&Track::setComposers>(track, value);
+            return true;
+        case VariableKind::Performer:
+            invokeTrackListSetter<&Track::setPerformers>(track, value);
+            return true;
+        case VariableKind::Duration:
+            invokeTrackSetter<&Track::setDuration>(track, value);
+            return true;
+        case VariableKind::Comment:
+            invokeTrackSetter<&Track::setComment>(track, value);
+            return true;
+        case VariableKind::Date:
+            invokeTrackSetter<&Track::setDate>(track, value);
+            return true;
+        case VariableKind::RatingNormalized:
+        case VariableKind::RatingEditor:
+            setNormalizedRating(track, value);
+            return true;
+        case VariableKind::RatingStars:
+        case VariableKind::RatingStarsPadded:
+            setEditorRating(track, value);
+            return true;
+        case VariableKind::Rating:
+        case VariableKind::Stars:
+            setStarRating(track, value);
+            return true;
+        case VariableKind::Loved:
+        case VariableKind::LoveEditor:
+            setLoved(track, value);
+            return true;
+        case VariableKind::PlayCount:
+            setPlayCount(track, value);
+            return true;
+        case VariableKind::FirstPlayed:
+            invokeTrackSetter<&Track::setFirstPlayed>(track, value);
+            return true;
+        case VariableKind::LastPlayed:
+            invokeTrackSetter<&Track::setLastPlayed>(track, value);
+            return true;
+        default:
+            return false;
+    }
+}
+} // namespace
+
+void setTrackScriptValue(const QString& var, const ScriptFieldValue& value, Track& track)
+{
+    if(var.isEmpty()) {
+        return;
+    }
+
+    const QString tag = var.toUpper();
+    if(setBuiltInTrackValue(resolveBuiltInVariableKind(tag), value, track)) {
+        return;
+    }
+
+    const auto setOrAddTag = [&](const auto& val) {
+        if(track.hasExtraTag(tag)) {
+            track.replaceExtraTag(tag, val);
+        }
+        else {
+            track.addExtraTag(tag, val);
+        }
+    };
+
+    if(const auto* strVal = std::get_if<QString>(&value)) {
+        setOrAddTag(*strVal);
+    }
+    else if(const auto* listVal = std::get_if<QStringList>(&value)) {
+        setOrAddTag(*listVal);
+    }
+}
+} // namespace Fooyin

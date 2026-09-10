@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,12 +20,13 @@
 #pragma once
 
 #include <core/scripting/scriptparser.h>
-#include <core/track.h>
 
 #include <QBasicTimer>
 #include <QObject>
 
-namespace Fooyin::Scrobbler {
+namespace Fooyin {
+class Track;
+namespace Scrobbler {
 class Metadata
 {
 public:
@@ -86,4 +87,5 @@ private:
     QBasicTimer m_writeTimer;
     CacheItemUPtrList m_items;
 };
-} // namespace Fooyin::Scrobbler
+} // namespace Scrobbler
+} // namespace Fooyin

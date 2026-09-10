@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 
 namespace Fooyin {
 class PluginManager;
+class PluginSettingsRegistry;
 class SettingsManager;
 
 class PluginPage : public SettingsPage
@@ -30,6 +31,7 @@ class PluginPage : public SettingsPage
     Q_OBJECT
 
 public:
-    PluginPage(PluginManager* pluginManager, SettingsManager* settings, QObject* parent = nullptr);
+    PluginPage(PluginManager* pluginManager, PluginSettingsRegistry* pluginSettingsRegistry, SettingsManager* settings,
+               QObject* parent = nullptr);
 };
 } // namespace Fooyin

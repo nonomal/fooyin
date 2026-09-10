@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@
 namespace Fooyin {
 class PlayerController;
 class PlaylistPopulatorPrivate;
+class SettingsManager;
 struct PlaylistPreset;
 
 using ItemList       = std::vector<PlaylistItem>;
@@ -39,10 +40,18 @@ using NodeKeyMap     = std::unordered_map<UId, std::vector<UId>, UId::UIdHash>;
 using TrackIdNodeMap = std::unordered_map<int, std::vector<UId>>;
 using IndexGroupMap  = std::map<int, std::vector<UId>>;
 
+struct HeaderUpdateRequest
+{
+    PlaylistItem item;
+    TrackList tracks;
+};
+using HeaderUpdateList = std::vector<HeaderUpdateRequest>;
+
 struct PendingData
 {
     UId playlistId;
     ItemKeyMap items;
+    ItemKeyMap updatedItems;
     NodeKeyMap nodes;
     std::vector<UId> containerOrder;
     TrackIdNodeMap trackParents;
@@ -56,6 +65,7 @@ struct PendingData
     {
         playlistId = {};
         items.clear();
+        updatedItems.clear();
         nodes.clear();
         containerOrder.clear();
         trackParents.clear();
@@ -69,7 +79,8 @@ class PlaylistPopulator : public Worker
     Q_OBJECT
 
 public:
-    explicit PlaylistPopulator(PlayerController* playerController, QObject* parent = nullptr);
+    explicit PlaylistPopulator(PlayerController* playerController, SettingsManager* settings,
+                               QObject* parent = nullptr);
     ~PlaylistPopulator() override;
 
     void setFont(const QFont& font);
@@ -82,9 +93,9 @@ public:
                    const std::map<int, PlaylistTrackList>& tracks);
     void updateTracks(Playlist* playlist, const PlaylistPreset& preset, const PlaylistColumnList& columns,
                       const std::set<int>& columnsToUpdate, const TrackItemMap& tracks);
-    void updateHeaders(const ItemList& headers);
+    void updateHeaders(Playlist* playlist, const PlaylistPreset& preset, const HeaderUpdateList& headers);
 
-signals:
+Q_SIGNALS:
     void populated(const Fooyin::PendingData& data);
     void populatedTrackGroup(const Fooyin::PendingData& data);
     void tracksUpdated(const Fooyin::ItemList& tracks, const std::set<int>& columnsUpdated);

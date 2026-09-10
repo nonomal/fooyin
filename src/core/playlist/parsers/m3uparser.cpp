@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,14 @@
 
 #include "m3uparser.h"
 
+#include "cueparser.h"
+
 #include <core/track.h>
 
 #include <QBuffer>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLoggingCategory>
 #include <QRegularExpression>
 #include <QTextStream>
@@ -32,6 +35,9 @@ Q_LOGGING_CATEGORY(M3U, "fy.m3u")
 
 using namespace Qt::StringLiterals;
 
+constexpr auto HlsProbeBytes = 32 * 1024;
+
+namespace Fooyin {
 namespace {
 enum class Type
 {
@@ -74,6 +80,12 @@ bool processMetadata(const QString& line, Metadata& metadata)
     return true;
 }
 
+bool looksLikeHlsPlaylist(const QByteArray& data)
+{
+    const QByteArray probe = data.left(HlsProbeBytes).toUpper();
+    return probe.startsWith("#EXTM3U") && probe.contains("#EXT-X-");
+}
+
 int endingSubsong(QString* filepath)
 {
     static const QRegularExpression regex{uR"(#(\d+)$)"_s};
@@ -85,9 +97,72 @@ int endingSubsong(QString* filepath)
     }
     return -1;
 }
+
+bool isCuePath(const QString& path)
+{
+    return QFileInfo{path}.suffix().compare(u"cue"_s, Qt::CaseInsensitive) == 0;
+}
+
+QString resolvePlaylistEntryPath(const QString& playlistPath, const QString& entry, const QDir& dir)
+{
+    if(Track::isArchivePath(entry) || Track::isRemotePath(entry) || Track::isVirtualPath(entry)) {
+        return entry;
+    }
+
+    const QUrl playlistUrl{playlistPath};
+
+    if(Track::isRemotePath(playlistUrl.toString())) {
+        const QUrl resolved = playlistUrl.resolved(QUrl{entry});
+        if(resolved.isValid() && !resolved.scheme().isEmpty()) {
+            return resolved.toString();
+        }
+    }
+
+    const QString localEntry = QDir::fromNativeSeparators(entry);
+    if(dir.exists() && !QDir::isAbsolutePath(localEntry)) {
+        return QDir::cleanPath(dir.absoluteFilePath(localEntry));
+    }
+
+    return localEntry;
+}
+
+TrackList readCuePlaylist(const QString& path, const PlaylistParser::ReadPlaylistEntry& readEntry, bool skipNotFound)
+{
+    QFile cueFile{path};
+    if(!cueFile.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+
+    QDir cueDir{path};
+    cueDir.cdUp();
+
+    CueParser parser;
+    return parser.readPlaylist(&cueFile, path, cueDir, readEntry, skipNotFound);
+}
+
+TrackList readEmbeddedCueTracks(const Track& track, const PlaylistParser::ReadPlaylistEntry& readEntry)
+{
+    const auto cueSheet = track.extraTag(u"CUESHEET"_s);
+    if(cueSheet.empty()) {
+        return {};
+    }
+
+    QByteArray bytes{cueSheet.front().toUtf8()};
+    QBuffer buffer{&bytes};
+    if(!buffer.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+
+    CueParser parser;
+    return parser.readPlaylist(&buffer, track.filepath(), {}, readEntry, false);
+}
+
+QString cueExportPath(const Track& track)
+{
+    return track.hasEmbeddedCue() ? track.filepath() : track.cuePath();
+}
 } // namespace
 
-namespace Fooyin {
 QString M3uParser::name() const
 {
     return u"M3U"_s;
@@ -104,13 +179,60 @@ bool M3uParser::saveIsSupported() const
     return true;
 }
 
-TrackList M3uParser::readPlaylist(QIODevice* device, const QString& /*filepath*/, const QDir& dir,
+bool M3uParser::canParse(const QByteArray& data, const QString& contentType, const QUrl& url) const
+{
+    if(looksLikeHlsPlaylist(data)) {
+        return false;
+    }
+
+    const QString type = contentType.toLower();
+    if(type.contains(u"mpegurl"_s) || type.contains(u"application/vnd.apple.mpegurl"_s)) {
+        return true;
+    }
+
+    const QByteArray trimmed = data.left(HlsProbeBytes).trimmed();
+    if(trimmed.startsWith("#EXTM3U")) {
+        return true;
+    }
+
+    return PlaylistParser::canParse(data, contentType, url);
+}
+
+size_t M3uParser::countEntries(QIODevice* device, const QString& /*filepath*/, const QDir& /*dir*/) const
+{
+    QByteArray m3u = toUtf8(device);
+    if(looksLikeHlsPlaylist(m3u)) {
+        return 0;
+    }
+
+    QBuffer buffer{&m3u};
+    if(!buffer.open(QIODevice::ReadOnly)) {
+        return 0;
+    }
+
+    size_t entries{0};
+
+    while(!buffer.atEnd()) {
+        const QString line = QString::fromUtf8(buffer.readLine()).trimmed();
+        if(!line.isEmpty() && !line.startsWith(u'#')) {
+            ++entries;
+        }
+    }
+
+    return entries;
+}
+
+TrackList M3uParser::readPlaylist(QIODevice* device, const QString& filepath, const QDir& dir,
                                   const ReadPlaylistEntry& readEntry, bool skipNotFound)
 {
     Type type{Type::Standard};
     Metadata metadata;
 
     QByteArray m3u = toUtf8(device);
+    if(looksLikeHlsPlaylist(m3u)) {
+        return {};
+    }
+
     QBuffer buffer{&m3u};
     if(!buffer.open(QIODevice::ReadOnly)) {
         return {};
@@ -134,40 +256,48 @@ TrackList M3uParser::readPlaylist(QIODevice* device, const QString& /*filepath*/
             }
         }
         else if(!line.isEmpty()) {
-            QString path;
-            const bool isArchive = Track::isArchivePath(path);
-
-            if(dir.exists()) {
-                if(QDir::isAbsolutePath(line) || isArchive) {
-                    path = line;
-                }
-                else {
-                    path = QDir::cleanPath(dir.absoluteFilePath(line));
-                }
-            }
+            QString path{resolvePlaylistEntryPath(filepath, line, dir)};
 
             const int subsong = endingSubsong(&path);
+            if(isCuePath(path)) {
+                const auto cueTracks = readCuePlaylist(path, readEntry, skipNotFound);
+                tracks.insert(tracks.end(), cueTracks.cbegin(), cueTracks.cend());
+                metadata = {};
+                continue;
+            }
+
             Track track{path};
 
             if(subsong > 0) {
                 track.setSubsong(subsong);
             }
 
-            if(!isArchive && !QFile::exists(path)) {
+            if(!Track::isArchivePath(path) && !Track::isRemotePath(path) && !Track::isVirtualPath(path)
+               && !QFile::exists(path)) {
                 // Handle potential windows filepath
                 track.setFilePath(path.replace(u'\\', u'/'));
             }
 
             track = readEntry.readTrack(track);
+            if(track.hasExtraTag(u"CUESHEET"_s)) {
+                if(const auto cueTracks = readEmbeddedCueTracks(track, readEntry); !cueTracks.empty()) {
+                    tracks.insert(tracks.end(), cueTracks.cbegin(), cueTracks.cend());
+                    metadata = {};
+                    continue;
+                }
+            }
+
             if(track.isValid() || !skipNotFound) {
                 if(track.title().isEmpty() && !metadata.title.isEmpty()) {
                     track.setTitle(metadata.title);
                 }
-                if(track.artists().empty() && !metadata.artist.isEmpty()) {
+                if(!track.hasArtists() && !metadata.artist.isEmpty()) {
                     track.setArtists({metadata.artist});
                 }
                 tracks.push_back(track);
             }
+
+            metadata = {};
         }
     }
 
@@ -188,15 +318,34 @@ void M3uParser::savePlaylist(QIODevice* device, const QString& extension, const 
         stream << "#EXTM3U\n";
     }
 
+    QString previousCueExportPath;
+
     for(const Track& track : tracks) {
+        if(track.hasCue()) {
+            const QString exportPath = cueExportPath(track);
+            if(exportPath == previousCueExportPath) {
+                continue;
+            }
+
+            previousCueExportPath = exportPath;
+            stream << PlaylistParser::determineTrackPath(QUrl::fromLocalFile(exportPath), dir, type) << "\n";
+            continue;
+        }
+
+        previousCueExportPath.clear();
+
         if(writeMetdata) {
             stream << u"#EXTINF:%1,%2 - %3\n"_s.arg(track.duration() / 1000).arg(track.artist(), track.title());
         }
+
         QString path = track.filepath();
         if(track.subsong() > 0) {
             path += u"#%1"_s.arg(track.subsong());
         }
-        stream << PlaylistParser::determineTrackPath(QUrl::fromLocalFile(path), dir, type) << "\n";
+
+        const QUrl trackUrl
+            = track.isRemote() || track.isVirtual() ? QUrl{path, QUrl::StrictMode} : QUrl::fromLocalFile(path);
+        stream << determineTrackPath(trackUrl, dir, type) << "\n";
     }
 }
 } // namespace Fooyin

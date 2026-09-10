@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +21,9 @@
 
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/plugin.h>
-#include <core/track.h>
 #include <gui/plugins/guiplugin.h>
+
+#include "rgscanresults.h"
 
 class QDialog;
 
@@ -41,12 +42,6 @@ public:
     void initialise(const GuiPluginContext& context) override;
 
 private:
-    enum class RGScanType : uint8_t
-    {
-        Track = 0,
-        SingleAlbum,
-        Album
-    };
     void calculateReplayGain(RGScanType type);
     void setupReplayGainMenu();
     static QDialog* createRemoveDialog();

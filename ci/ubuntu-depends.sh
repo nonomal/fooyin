@@ -8,12 +8,16 @@ $SUDO apt-get update -qq
 $SUDO apt-get install -y \
         g++ \
         git \
+        zstd \
+        bison \
+        flex \
         cmake \
         pkg-config \
         ninja-build \
         debhelper \
         lsb-release \
         libicu-dev \
+        libglm-dev \
         libglu1-mesa-dev \
         libxkbcommon-dev \
         dpkg-dev \
@@ -21,8 +25,11 @@ $SUDO apt-get install -y \
         zlib1g-dev \
         libasound2-dev \
         libpipewire-0.3-dev \
+        libpulse-dev \
         libsdl2-dev \
         qt6-base-dev \
+        libqt6sql6-sqlite \
+        libqt6opengl6-dev \
         libqt6svg6-dev \
         qt6-tools-dev \
         qt6-tools-dev-tools \
@@ -37,6 +44,10 @@ $SUDO apt-get install -y \
         libarchive-dev \
         libsndfile1-dev \
         libebur128-dev \
+        libcdio-dev \
+        libcdio-paranoia-dev \
+        libsoundtouch-dev \
+        libsoxr-dev \
         libgtest-dev
 
 CODENAME=$(lsb_release -sc)

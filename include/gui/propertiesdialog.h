@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,28 +21,74 @@
 
 #include "fygui_export.h"
 
+#include <core/library/musiclibrary.h>
 #include <core/track.h>
-#include <gui/fywidget.h>
 
 #include <QPointer>
+#include <QWidget>
+
+#include <set>
+
+class QWidget;
 
 namespace Fooyin {
+class ActionManager;
 class SettingsManager;
+class FYGUI_EXPORT PropertiesDialogSession
+{
+public:
+    void reset(const TrackList& tracks);
 
-class FYGUI_EXPORT PropertiesTabWidget : public FyWidget
+    [[nodiscard]] const TrackList& originalTracks() const;
+    [[nodiscard]] const TrackList& workingTracks() const;
+    [[nodiscard]] TrackList activeTracks() const;
+
+    [[nodiscard]] const std::set<int>& activeTrackIndexes() const;
+    [[nodiscard]] bool isAllTracksScope() const;
+    bool setActiveTrackIndexes(std::set<int> trackIndexes);
+
+    void updateTracks(const TrackList& tracks);
+    void acceptChanges();
+
+    [[nodiscard]] bool hasChanges() const;
+    [[nodiscard]] bool hasOnlyStatChanges() const;
+    [[nodiscard]] int trackRevision(int index) const;
+
+private:
+    TrackList m_originalTracks;
+    TrackList m_workingTracks;
+    std::set<int> m_activeTrackIndexes;
+    std::vector<int> m_pendingRevisions;
+    qsizetype m_pendingCount{0};
+};
+
+class FYGUI_EXPORT PropertiesTabWidget : public QWidget
 {
     Q_OBJECT
 
 public:
     explicit PropertiesTabWidget(QWidget* parent)
-        : FyWidget{parent}
+        : QWidget{parent}
     { }
 
     [[nodiscard]] virtual bool canApply() const;
-    [[nodiscard]] virtual bool hasTools() const;
 
+    virtual void load();
     virtual void apply();
-    virtual void addTools(QMenu* menu);
+    virtual void finish();
+
+    virtual void setSession(PropertiesDialogSession* session);
+    virtual void setTrackScope(const TrackList& tracks);
+    virtual void updateTracks(const TrackList& tracks);
+
+    [[nodiscard]] virtual bool isAvailableForScope(const TrackList& tracks) const;
+    [[nodiscard]] virtual bool hasPendingScopeChanges() const;
+    [[nodiscard]] virtual bool commitPendingChanges();
+
+Q_SIGNALS:
+    void pendingChangesStateChanged();
+    void tracksChanged(const Fooyin::TrackList& tracks);
+    void writeRequestStarted(Fooyin::WriteRequest request);
 };
 
 using WidgetBuilder = std::function<PropertiesTabWidget*(const TrackList& tracks)>;
@@ -58,6 +104,7 @@ public:
     [[nodiscard]] PropertiesTabWidget* widget(const TrackList& tracks) const;
     [[nodiscard]] bool hasVisited() const;
 
+    void load(const TrackList& tracks);
     void updateIndex(int index);
     void setVisited(bool visited);
 
@@ -69,6 +116,7 @@ private:
     QString m_title;
     WidgetBuilder m_widgetBuilder;
     mutable QPointer<PropertiesTabWidget> m_widget;
+    bool m_loaded;
     bool m_visited;
 };
 
@@ -79,7 +127,7 @@ class FYGUI_EXPORT PropertiesDialog : public QObject
 public:
     using TabList = std::vector<PropertiesTab>;
 
-    explicit PropertiesDialog(QObject* parent = nullptr);
+    explicit PropertiesDialog(ActionManager* actionManager, SettingsManager* settings, QObject* parent = nullptr);
     ~PropertiesDialog() override;
 
     void addTab(const QString& title, const WidgetBuilder& widgetBuilder);
@@ -89,6 +137,11 @@ public:
     void show(const TrackList& tracks);
 
 private:
+    ActionManager* m_actionManager;
+    SettingsManager* m_settings;
+    QAction* m_toggleScopeAction;
+    QAction* m_previousTrackAction;
+    QAction* m_nextTrackAction;
     TabList m_tabs;
 };
 } // namespace Fooyin

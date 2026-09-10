@@ -1,0 +1,51 @@
+/*
+ * Fooyin
+ * Copyright © 2026, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#pragma once
+
+#include <QPointer>
+#include <QTreeView>
+
+namespace Fooyin {
+class MessageBanner;
+
+namespace RadioBrowser {
+class RadioGuideView : public QTreeView
+{
+    Q_OBJECT
+
+public:
+    explicit RadioGuideView(QWidget* parent = nullptr);
+
+    void setStatusText(const QString& text);
+    void clearStatusText();
+    void setErrorText(const QString& text);
+    void clearErrorText();
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    [[nodiscard]] MessageBanner* ensureErrorBanner();
+
+    QString m_statusText;
+    QPointer<MessageBanner> m_errorBanner;
+};
+} // namespace RadioBrowser
+} // namespace Fooyin

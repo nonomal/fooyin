@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 
 #include "lyricsource.h"
 
+#include <core/coresettings.h>
 #include <utils/stringutils.h>
 
 #include <QIODevice>
@@ -32,6 +33,15 @@ Q_LOGGING_CATEGORY(LYRICS, "fy.lyrics")
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Lyrics {
+namespace {
+Utils::DetectEncodingOptions detectEncodingOptions()
+{
+    const FySettings settings;
+    return {.preferredFallbackEncoding
+            = settings.value(QString::fromLatin1(Utils::PreferredFallbackEncodingSetting)).toString().toLatin1()};
+}
+} // namespace
+
 LyricSource::LyricSource(NetworkAccessManager* network, SettingsManager* settings, int index, bool enabled,
                          QObject* parent)
     : QObject{parent}
@@ -54,6 +64,11 @@ bool LyricSource::enabled() const
 bool LyricSource::isLocal() const
 {
     return false;
+}
+
+void LyricSource::cancel()
+{
+    resetReply();
 }
 
 void LyricSource::setIndex(int index)
@@ -90,7 +105,7 @@ QString LyricSource::toUtf8(QIODevice* file)
         toUtf16 = QStringDecoder{encoding.value()};
     }
     else {
-        const auto encodingName = Utils::detectEncoding(data);
+        const auto encodingName = Utils::detectEncoding(data, detectEncodingOptions());
         if(encodingName.isEmpty()) {
             return {};
         }
@@ -177,7 +192,8 @@ void LyricSource::setReply(QNetworkReply* reply)
 void LyricSource::resetReply()
 {
     if(m_reply) {
-        QObject::disconnect(m_reply);
+        QObject::disconnect(m_reply, nullptr, nullptr, nullptr);
+        m_reply->abort();
         m_reply->deleteLater();
     }
 }

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,8 +20,8 @@
 #include <gui/widgets/extendabletableview.h>
 
 #include <gui/guiconstants.h>
-#include <utils/actions/actionmanager.h>
-#include <utils/actions/command.h>
+#include <gui/iconloader.h>
+#include <utils/actions/widgetcontext.h>
 #include <utils/crypto.h>
 #include <utils/modelutils.h>
 #include <utils/utils.h>
@@ -100,8 +100,7 @@ void ExtendableTableModel::invalidateData()
 class ExtendableTableViewPrivate
 {
 public:
-    ExtendableTableViewPrivate(ExtendableTableView* self, ActionManager* actionManager,
-                               const ExtendableTableView::Tools& tools);
+    ExtendableTableViewPrivate(ExtendableTableView* self, const ExtendableTableView::Tools& tools);
 
     void updateToolArea() const;
     void updateTools();
@@ -112,12 +111,11 @@ public:
     void handleMoveDown() const;
 
     ExtendableTableView* m_self;
-    ActionManager* m_actionManager;
 
     ExtendableTableModel* m_model{nullptr};
     int m_column{0};
     ExtendableTableView::Tools m_tools;
-    WidgetContext* m_context;
+    Context m_context;
     ExtendableToolArea* m_toolArea;
 
     QAction* m_add;
@@ -125,41 +123,40 @@ public:
     QPointer<QAction> m_moveUp;
     QPointer<QAction> m_moveDown;
 
-    Command* m_addCommand;
-    Command* m_removeCommand;
-
     QToolButton* m_addButton;
     QToolButton* m_removeButton;
     QPointer<QToolButton> m_moveUpButton;
     QPointer<QToolButton> m_moveDownButton;
 };
 
-ExtendableTableViewPrivate::ExtendableTableViewPrivate(ExtendableTableView* self, ActionManager* actionManager,
+ExtendableTableViewPrivate::ExtendableTableViewPrivate(ExtendableTableView* self,
                                                        const ExtendableTableView::Tools& tools)
     : m_self{self}
-    , m_actionManager{actionManager}
     , m_tools{tools}
-    , m_context{new WidgetContext(
-          m_self, Context{Id{"Context.ExtendableTableView."}.append(Utils::generateUniqueHash())}, m_self)}
+    , m_context{Id{"Context.ExtendableTableView."}.append(Utils::generateUniqueHash())}
     , m_toolArea{new ExtendableToolArea(m_self)}
-    , m_add{new QAction(Utils::iconFromTheme(Constants::Icons::Add), ExtendableTableView::tr("Add"), m_self)}
-    , m_remove{new QAction(Utils::iconFromTheme(Constants::Icons::Remove), ExtendableTableView::tr("Remove"), m_self)}
-    , m_addCommand{m_actionManager->registerAction(m_add, Constants::Actions::New, m_context->context())}
-    , m_removeCommand{m_actionManager->registerAction(m_remove, Constants::Actions::Remove, m_context->context())}
+    , m_add{new QAction(ExtendableTableView::tr("Add"), m_self)}
+    , m_remove{new QAction(ExtendableTableView::tr("Remove"), m_self)}
     , m_addButton{new QToolButton(m_self)}
     , m_removeButton{new QToolButton(m_self)}
 {
-    m_actionManager->addContextObject(m_context);
+    Gui::setThemeIcon(m_add, Constants::Icons::Add);
+    Gui::setThemeIcon(m_remove, Constants::Icons::Remove);
 
-    m_addCommand->setDefaultShortcut(QKeySequence::New);
-    m_removeCommand->setDefaultShortcut(QKeySequence::Delete);
+    m_add->setShortcut(QKeySequence::New);
+    m_add->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    m_remove->setShortcut(QKeySequence::Delete);
+    m_remove->setShortcutContext(Qt::WidgetWithChildrenShortcut);
 
     QObject::connect(m_add, &QAction::triggered, m_self, [this]() { handleNewRow(); });
     QObject::connect(m_remove, &QAction::triggered, m_self, [this]() { handleRemoveRow(); });
 
-    m_addButton->setDefaultAction(m_addCommand->action());
+    m_self->addAction(m_add);
+    m_self->addAction(m_remove);
+
+    m_addButton->setDefaultAction(m_add);
     m_toolArea->addTool(m_addButton);
-    m_removeButton->setDefaultAction(m_removeCommand->action());
+    m_removeButton->setDefaultAction(m_remove);
     m_toolArea->addTool(m_removeButton);
 
     updateTools();
@@ -182,8 +179,8 @@ void ExtendableTableViewPrivate::updateTools()
 {
     if(m_tools & ExtendableTableView::Move) {
         if(!m_moveUp) {
-            m_moveUp
-                = new QAction(Utils::iconFromTheme(Constants::Icons::Up), ExtendableTableView::tr("Move Up"), m_self);
+            m_moveUp = new QAction(ExtendableTableView::tr("Move Up"), m_self);
+            Gui::setThemeIcon(m_moveUp, Constants::Icons::Up);
             QObject::connect(m_moveUp, &QAction::triggered, m_self, [this]() { handleMoveUp(); });
 
             m_moveUpButton = new QToolButton(m_self);
@@ -191,8 +188,8 @@ void ExtendableTableViewPrivate::updateTools()
             m_toolArea->addTool(m_moveUpButton);
         }
         if(!m_moveDown) {
-            m_moveDown = new QAction(Utils::iconFromTheme(Constants::Icons::Down), ExtendableTableView::tr("Move Down"),
-                                     m_self);
+            m_moveDown = new QAction(ExtendableTableView::tr("Move Down"), m_self);
+            Gui::setThemeIcon(m_moveDown, Constants::Icons::Down);
             QObject::connect(m_moveDown, &QAction::triggered, m_self, [this]() { handleMoveDown(); });
 
             m_moveDownButton = new QToolButton(m_self);
@@ -228,6 +225,7 @@ void ExtendableTableViewPrivate::handleNewRow()
             const QModelIndex index = m_model->index(first, m_column, parent);
             if(index.isValid()) {
                 m_self->scrollTo(index, QAbstractItemView::EnsureVisible);
+                m_self->setCurrentIndex(index);
                 m_self->edit(index);
             }
         },
@@ -298,13 +296,13 @@ void ExtendableTableViewPrivate::handleMoveDown() const
     }
 }
 
-ExtendableTableView::ExtendableTableView(ActionManager* actionManager, QWidget* parent)
-    : ExtendableTableView{actionManager, {None}, parent}
+ExtendableTableView::ExtendableTableView(QWidget* parent)
+    : ExtendableTableView{{None}, parent}
 { }
 
-ExtendableTableView::ExtendableTableView(ActionManager* actionManager, const Tools& tools, QWidget* parent)
+ExtendableTableView::ExtendableTableView(const Tools& tools, QWidget* parent)
     : QTableView{parent}
-    , p{std::make_unique<ExtendableTableViewPrivate>(this, actionManager, tools)}
+    , p{std::make_unique<ExtendableTableViewPrivate>(this, tools)}
 { }
 
 ExtendableTableView::~ExtendableTableView() = default;
@@ -381,7 +379,7 @@ QAction* ExtendableTableView::moveDownAction() const
 
 Context ExtendableTableView::context() const
 {
-    return p->m_context->context();
+    return p->m_context;
 }
 
 QSize ExtendableTableView::sizeHint() const
@@ -425,9 +423,9 @@ void ExtendableTableView::contextMenuEvent(QContextMenuEvent* event)
     setupContextActions(menu, event->pos());
     menu->addSeparator();
 
-    menu->addAction(p->m_addCommand->action());
+    menu->addAction(p->m_add);
     if(indexAt(event->pos()).isValid()) {
-        menu->addAction(p->m_removeCommand->action());
+        menu->addAction(p->m_remove);
     }
 
     menu->popup(event->globalPos());
@@ -438,6 +436,15 @@ void ExtendableTableView::resizeEvent(QResizeEvent* event)
     QTableView::resizeEvent(event);
 
     p->updateToolArea();
+}
+
+void ExtendableTableView::mousePressEvent(QMouseEvent* event)
+{
+    if(event->button() > Qt::RightButton) {
+        event->ignore();
+        return;
+    }
+    QTableView::mousePressEvent(event);
 }
 } // namespace Fooyin
 

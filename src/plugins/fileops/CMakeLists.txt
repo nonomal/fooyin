@@ -4,12 +4,12 @@ create_fooyin_plugin_internal(
             Fooyin::Gui
     SOURCES fileopsdialog.cpp
             fileopsdialog.h
+            fileopsdeletedialog.cpp
+            fileopsdeletedialog.h
             fileopsmodel.cpp
             fileopsmodel.h
             fileopsplugin.cpp
             fileopsplugin.h
-            fileopsregistry.cpp
-            fileopsregistry.h
             fileopssettings.cpp
             fileopssettings.h
             fileopsworker.cpp

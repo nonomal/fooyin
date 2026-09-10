@@ -8,6 +8,7 @@ endif()
 create_fooyin_plugin_internal(
     gmeinput
     DEPENDS Fooyin::Core
+            Fooyin::Gui
             ${LIBGME_LIBRARIES}
     SOURCES gmedefs.h
             gmeinput.cpp
@@ -18,15 +19,8 @@ create_fooyin_plugin_internal(
             gmesettings.h
 )
 
-target_include_directories(
-    gmeinput
-    PRIVATE ${LIBGME_INCLUDE_DIRS}
-)
-
-target_link_directories(
-    gmeinput
-    PRIVATE ${LIBGME_LIBRARY_DIRS}
-)
+target_include_directories(gmeinput PRIVATE ${LIBGME_INCLUDE_DIRS})
+target_link_directories(gmeinput PRIVATE ${LIBGME_LIBRARY_DIRS})
 
 fooyin_append_mimes(
     audio/x-ay

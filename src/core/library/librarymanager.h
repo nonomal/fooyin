@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -55,7 +55,7 @@ public:
     [[nodiscard]] std::optional<LibraryInfo> findLibraryByPath(const QString& path) const;
     [[nodiscard]] std::optional<LibraryInfo> libraryInfo(int id) const;
 
-signals:
+Q_SIGNALS:
     void libraryAdded(const Fooyin::LibraryInfo& library);
     void libraryAboutToBeRemoved(const Fooyin::LibraryInfo& library);
     void libraryRemoved(const Fooyin::LibraryInfo& library, const std::set<int>& tracksRemoved);

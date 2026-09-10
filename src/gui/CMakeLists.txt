@@ -1,26 +1,51 @@
 set(SOURCES
+    ${CMAKE_SOURCE_DIR}/include/gui/coverartworktypes.h
     ${CMAKE_SOURCE_DIR}/include/gui/coverprovider.h
+    ${CMAKE_SOURCE_DIR}/include/gui/coverrepository.h
+    ${CMAKE_SOURCE_DIR}/include/gui/configdialog.h
+    ${CMAKE_SOURCE_DIR}/include/gui/contextmenuutils.h
+    ${CMAKE_SOURCE_DIR}/include/gui/conversion/conversionservice.h
+    ${CMAKE_SOURCE_DIR}/include/gui/dsp/dsplayouteditor.h
+    ${CMAKE_SOURCE_DIR}/include/gui/dsp/dspsettingsdialog.h
+    ${CMAKE_SOURCE_DIR}/include/gui/dsp/dspsettingsprovider.h
     ${CMAKE_SOURCE_DIR}/include/gui/editablelayout.h
     ${CMAKE_SOURCE_DIR}/include/gui/fylayout.h
     ${CMAKE_SOURCE_DIR}/include/gui/fywidget.h
+    ${CMAKE_SOURCE_DIR}/include/gui/framerate.h
     ${CMAKE_SOURCE_DIR}/include/gui/guiconstants.h
+    ${CMAKE_SOURCE_DIR}/include/gui/iconloader.h
     ${CMAKE_SOURCE_DIR}/include/gui/guipaths.h
     ${CMAKE_SOURCE_DIR}/include/gui/guisettings.h
+    ${CMAKE_SOURCE_DIR}/include/gui/guistyleprovider.h
+    ${CMAKE_SOURCE_DIR}/include/gui/guiutils.h
     ${CMAKE_SOURCE_DIR}/include/gui/layoutprovider.h
+    ${CMAKE_SOURCE_DIR}/include/gui/output/outputprofilemanager.h
+    ${CMAKE_SOURCE_DIR}/include/gui/playlist/currentplaylistcontroller.h
+    ${CMAKE_SOURCE_DIR}/include/gui/playlist/playlisteditcontroller.h
+    ${CMAKE_SOURCE_DIR}/include/gui/playlist/playlistinteractor.h
+    ${CMAKE_SOURCE_DIR}/include/gui/plugins/dspguiplugin.h
+    ${CMAKE_SOURCE_DIR}/include/gui/plugins/guiplugin.h
+    ${CMAKE_SOURCE_DIR}/include/gui/plugins/guiplugincontext.h
+    ${CMAKE_SOURCE_DIR}/include/gui/plugins/pluginconfigguiplugin.h
+    ${CMAKE_SOURCE_DIR}/include/gui/plugins/pluginsettingsprovider.h
     ${CMAKE_SOURCE_DIR}/include/gui/propertiesdialog.h
+    ${CMAKE_SOURCE_DIR}/include/gui/settings/context/staticcontextmenu.h
+    ${CMAKE_SOURCE_DIR}/include/gui/settings/context/staticcontextmenupage.h
+    ${CMAKE_SOURCE_DIR}/include/gui/scripting/richtext.h
+    ${CMAKE_SOURCE_DIR}/include/gui/scripting/richtextutils.h
+    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scripteditor.h
+    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scriptformatter.h
+    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scriptformatterregistry.h
+    ${CMAKE_SOURCE_DIR}/include/gui/statusevent.h
+    ${CMAKE_SOURCE_DIR}/include/gui/theme/fytheme.h
+    ${CMAKE_SOURCE_DIR}/include/gui/theme/fythemefile.h
+    ${CMAKE_SOURCE_DIR}/include/gui/theme/themeregistry.h
+    ${CMAKE_SOURCE_DIR}/include/gui/trackmimedata.h
     ${CMAKE_SOURCE_DIR}/include/gui/trackselectioncontroller.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgetcontainer.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgetfilter.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgetprovider.h
-    ${CMAKE_SOURCE_DIR}/include/gui/windowcontroller.h
-    ${CMAKE_SOURCE_DIR}/include/gui/plugins/guiplugin.h
-    ${CMAKE_SOURCE_DIR}/include/gui/plugins/guiplugincontext.h
-    ${CMAKE_SOURCE_DIR}/include/gui/scripting/richtext.h
-    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scripteditor.h
-    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scriptformatter.h
-    ${CMAKE_SOURCE_DIR}/include/gui/scripting/scriptformatterregistry.h
-    ${CMAKE_SOURCE_DIR}/include/gui/theme/fytheme.h
-    ${CMAKE_SOURCE_DIR}/include/gui/theme/themeregistry.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/actiondelegate.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/autoheaderview.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/checkboxdelegate.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/clickablelabel.h
@@ -32,10 +57,14 @@ set(SOURCES
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/elapsedprogressdialog.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/elidedlabel.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/expandableinputbox.h
-    ${CMAKE_SOURCE_DIR}/include/gui/widgets/expandingcombobox.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/expandedtreeview.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/expandingcombobox.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/extendabletableview.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/fontbutton.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/gradienteditor.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/lineediteditor.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/messagebanner.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/metadatacompleter.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/multilinedelegate.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/overlaywidget.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/popuplineedit.h
@@ -45,38 +74,16 @@ set(SOURCES
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/slider.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/slidereditor.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/specialvaluespinbox.h
+    ${CMAKE_SOURCE_DIR}/include/gui/widgets/textinputdialog.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/toolbutton.h
     ${CMAKE_SOURCE_DIR}/include/gui/widgets/tooltip.h
-    coverprovider.cpp
-    editablelayout.cpp
-    fylayout.cpp
-    fywidget.cpp
-    guiapplication.cpp
-    guiapplication.h
-    guipaths.cpp
-    guiutils.cpp
-    guiutils.h
-    internalguisettings.cpp
-    internalguisettings.h
-    layoutcommands.cpp
-    layoutcommands.h
-    layoutprovider.cpp
-    mainwindow.cpp
-    mainwindow.h
-    statusevent.cpp
-    statusevent.h
-    systemtrayicon.cpp
-    systemtrayicon.h
-    trackselectioncontroller.cpp
-    widgetfilter.cpp
-    widgetprovider.cpp
-    widgets.cpp
-    widgets.h
-    windowcontroller.cpp
+    ${CMAKE_SOURCE_DIR}/include/gui/windowcontroller.h
     artwork/artworkdelegate.cpp
     artwork/artworkdelegate.h
     artwork/artworkdialog.cpp
     artwork/artworkdialog.h
+    artwork/artworkexporter.cpp
+    artwork/artworkexporter.h
     artwork/artworkfinder.cpp
     artwork/artworkfinder.h
     artwork/artworkitem.cpp
@@ -87,30 +94,64 @@ set(SOURCES
     artwork/artworkproperties.h
     artwork/artworkrow.cpp
     artwork/artworkrow.h
+    artwork/artworksaveutils.cpp
+    artwork/artworksaveutils.h
+    artwork/artworkviewerdialog.cpp
+    artwork/artworkviewerdialog.h
+    artwork/sources/artworksource.cpp
+    artwork/sources/artworksource.cpp
     artwork/sources/artworksource.cpp
     artwork/sources/artworksource.h
-    artwork/sources/artworksource.cpp
-    artwork/sources/artworksource.cpp
     artwork/sources/discogsartwork.cpp
     artwork/sources/discogsartwork.h
     artwork/sources/lastfmartwork.cpp
     artwork/sources/lastfmartwork.h
     artwork/sources/musicbrainzartwork.cpp
     artwork/sources/musicbrainzartwork.h
+    contextmenuids.h
     controls/playercontrol.cpp
     controls/playercontrol.h
+    controls/commandbutton.cpp
+    controls/commandbutton.h
+    controls/commandbuttonconfigdialog.cpp
+    controls/commandbuttonconfigdialog.h
     controls/playlistcontrol.cpp
     controls/playlistcontrol.h
+    controls/dspchainselector.cpp
+    controls/dspchainselector.h
+    controls/outputselector.cpp
+    controls/outputselector.h
+    controls/replaygainmodeselector.cpp
+    controls/replaygainmodeselector.h
     controls/seekbar.cpp
     controls/seekbar.h
     controls/volumecontrol.cpp
     controls/volumecontrol.h
+    conversion/conversioncontroller.cpp
+    conversion/conversioncontroller.h
+    conversion/convertersetupdialog.cpp
+    conversion/convertersetupdialog.h
+    conversion/convertersettingsstore.cpp
+    conversion/convertersettingsstore.h
+    conversion/encoderprofiledialog.cpp
+    conversion/encoderprofiledialog.h
+    conversion/encoderprofiletablemodel.cpp
+    conversion/encoderprofiletablemodel.h
+    coverprovider.cpp
+    coverrepository.cpp
     dialog/aboutdialog.cpp
     dialog/aboutdialog.h
     dialog/autoplaylistdialog.cpp
     dialog/autoplaylistdialog.h
+    dialog/commandpickerdialog.cpp
+    dialog/commandpickerdialog.h
+    dialog/configdialog.cpp
     dialog/exportlayoutdialog.cpp
     dialog/exportlayoutdialog.h
+    dialog/iconpickerdialog.cpp
+    dialog/iconpickerdialog.h
+    dialog/importlayoutdialog.cpp
+    dialog/importlayoutdialog.h
     dialog/propertiesdialog.cpp
     dialog/saveplaylistsdialog.cpp
     dialog/saveplaylistsdialog.h
@@ -118,24 +159,47 @@ set(SOURCES
     dialog/searchdialog.h
     dirbrowser/dirbrowser.cpp
     dirbrowser/dirbrowser.h
+    dirbrowser/dirbrowserconfigwidget.cpp
+    dirbrowser/dirbrowserconfigwidget.h
     dirbrowser/dirdelegate.cpp
     dirbrowser/dirdelegate.h
     dirbrowser/dirproxymodel.cpp
     dirbrowser/dirproxymodel.h
     dirbrowser/dirtree.cpp
     dirbrowser/dirtree.h
-    selectioninfo/infodelegate.cpp
-    selectioninfo/infodelegate.h
-    selectioninfo/infoitem.cpp
-    selectioninfo/infoitem.h
-    selectioninfo/infomodel.cpp
-    selectioninfo/infomodel.h
-    selectioninfo/infopopulator.cpp
-    selectioninfo/infopopulator.h
-    selectioninfo/infoview.cpp
-    selectioninfo/infoview.h
-    selectioninfo/infowidget.cpp
-    selectioninfo/infowidget.h
+    dsp/dsppreset.cpp
+    dsp/dsppreset.h
+    dsp/dsppresetregistry.cpp
+    dsp/dsppresetregistry.h
+    dsp/dsplayouteditor.cpp
+    dsp/dspsettingscontroller.cpp
+    dsp/dspsettingscontroller.h
+    dsp/dspsettingsdialog.cpp
+    dsp/dspsettingslayoutwidget.cpp
+    dsp/dspsettingslayoutwidget.h
+    dsp/dspsettingsregistry.cpp
+    dsp/dspsettingsregistry.h
+    dsp/resamplersettingswidget.cpp
+    dsp/resamplersettingswidget.h
+    dsp/skipsilencesettingswidget.cpp
+    dsp/skipsilencesettingswidget.h
+    editablelayout.cpp
+    editablelayout_p.h
+    fylayout.cpp
+    fywidget.cpp
+    guiapplication.cpp
+    guiapplication.h
+    guistyleprovider.cpp
+    iconloader.cpp
+    guipaths.cpp
+    guiutils.cpp
+    internalguisettings.cpp
+    internalguisettings.h
+    layoutcommands.cpp
+    layoutcommands.h
+    pluginsettingsregistry.cpp
+    pluginsettingsregistry.h
+    layoutprovider.cpp
     librarytree/librarytreecontroller.cpp
     librarytree/librarytreecontroller.h
     librarytree/librarytreedelegate.cpp
@@ -149,12 +213,18 @@ set(SOURCES
     librarytree/librarytreemodel.h
     librarytree/librarytreepopulator.cpp
     librarytree/librarytreepopulator.h
-    librarytree/librarytreescriptregistry.cpp
-    librarytree/librarytreescriptregistry.h
+    librarytree/librarytreescriptenvironment.cpp
+    librarytree/librarytreescriptenvironment.h
     librarytree/librarytreeview.cpp
     librarytree/librarytreeview.h
     librarytree/librarytreewidget.cpp
     librarytree/librarytreewidget.h
+    librarytree/librarytreeconfigwidget.cpp
+    librarytree/librarytreeconfigwidget.h
+    librarytree/librarytreegroupeditordialog.cpp
+    librarytree/librarytreegroupeditordialog.h
+    mainwindow.cpp
+    mainwindow.h
     menubar/editmenu.cpp
     menubar/editmenu.h
     menubar/filemenu.cpp
@@ -171,12 +241,47 @@ set(SOURCES
     menubar/playbackmenu.h
     menubar/viewmenu.cpp
     menubar/viewmenu.h
+    metadatalookup/lookupresultsmodel.cpp
+    metadatalookup/lookupresultsmodel.h
+    metadatalookup/metadataapply.cpp
+    metadatalookup/metadataapply.h
+    metadatalookup/metadatachangesdialog.cpp
+    metadatalookup/metadatachangesdialog.h
+    metadatalookup/metadatalookupdialog.cpp
+    metadatalookup/metadatalookupdialog.h
+    metadatalookup/metadatalookupregistry.cpp
+    metadatalookup/metadatalookupregistry.h
+    metadatalookup/metadatamatcher.cpp
+    metadatalookup/metadatamatcher.h
+    metadatalookup/metadatatypes.h
+    metadatalookup/trackmatchmodel.cpp
+    metadatalookup/trackmatchmodel.h
+    metadatalookup/sources/metadatalookupsource.cpp
+    metadatalookup/sources/metadatalookupsource.h
+    metadatalookup/sources/musicbrainzmetadata.cpp
+    metadatalookup/sources/musicbrainzmetadata.h
+    sortactionhandler.cpp
+    sortactionhandler.h
+    nowplayingoutput/nowplayingoutputservice.cpp
+    nowplayingoutput/nowplayingoutputservice.h
+    nowplayingoutput/nowplayingoutputpage.cpp
+    nowplayingoutput/nowplayingoutputpage.h
+    playlist/manager/playlistmanagerdelegate.cpp
+    playlist/manager/playlistmanagerdelegate.h
+    playlist/manager/playlistmanagermodel.cpp
+    playlist/manager/playlistmanagermodel.h
+    playlist/manager/playlistmanagerwidget.cpp
+    playlist/manager/playlistmanagerwidget.h
     playlist/organiser/playlistorganiser.cpp
     playlist/organiser/playlistorganiser.h
+    playlist/organiser/playlistorganiserconfigwidget.cpp
+    playlist/organiser/playlistorganiserconfigwidget.h
     playlist/organiser/playlistorganiserdelegate.cpp
     playlist/organiser/playlistorganiserdelegate.h
     playlist/organiser/playlistorganiseritem.cpp
     playlist/organiser/playlistorganiseritem.h
+    playlist/organiser/organiserscripenvironment.cpp
+    playlist/organiser/organiserscripenvironment.h
     playlist/organiser/playlistorganisermodel.cpp
     playlist/organiser/playlistorganisermodel.h
     playlist/playlistbox.cpp
@@ -188,33 +293,50 @@ set(SOURCES
     playlist/playlistcommands.h
     playlist/playlistcontroller.cpp
     playlist/playlistcontroller.h
+    playlist/playlistuicontroller.cpp
+    playlist/playlistuicontroller.h
+    playlist/playlistworkspace.cpp
+    playlist/playlistworkspace.h
+    playlist/playlistworkspacestate.cpp
+    playlist/playlistworkspacestate.h
     playlist/playlistdelegate.cpp
     playlist/playlistdelegate.h
     playlist/playlistinteractor.cpp
-    playlist/playlistinteractor.h
     playlist/playlistitem.cpp
     playlist/playlistitem.h
     playlist/playlistitemmodels.cpp
     playlist/playlistitemmodels.h
+    playlist/playlistsearchcontroller.cpp
+    playlist/playlistsearchcontroller.h
     playlist/playlistmodel.cpp
     playlist/playlistmodel.h
     playlist/playlistpopulator.cpp
     playlist/playlistpopulator.h
     playlist/playlistpreset.cpp
     playlist/playlistpreset.h
-    playlist/playlistscriptregistry.cpp
-    playlist/playlistscriptregistry.h
     playlist/playlisttabs.cpp
     playlist/playlisttabs.h
+    playlist/playlisttabsconfigdialog.cpp
+    playlist/playlisttabsconfigdialog.h
     playlist/playlistview.cpp
     playlist/playlistview.h
+    playlist/detachedplaylistsession.cpp
+    playlist/detachedplaylistsession.h
+    playlist/editableplaylistsession.cpp
+    playlist/editableplaylistsession.h
+    playlist/editableplaylistsessionhost.h
+    playlist/playlistwidgetsessionhost.h
+    playlist/playlistwidgetsession.cpp
+    playlist/playlistwidgetsession.h
     playlist/playlistwidget.cpp
     playlist/playlistwidget.h
-    playlist/playlistwidget_p.h
     playlist/presetregistry.cpp
     playlist/presetregistry.h
+    plugins/pluginsettingsprovider.cpp
     queueviewer/queueviewer.cpp
     queueviewer/queueviewer.h
+    queueviewer/queueviewerconfigwidget.cpp
+    queueviewer/queueviewerconfigwidget.h
     queueviewer/queueviewerdelegate.cpp
     queueviewer/queueviewerdelegate.h
     queueviewer/queuevieweritem.cpp
@@ -239,29 +361,56 @@ set(SOURCES
     replaygain/replaygainview.h
     replaygain/replaygainwidget.cpp
     replaygain/replaygainwidget.h
+    scanprogresstext.cpp
+    scanprogresstext.h
+    scriptdisplay/scriptdisplay.cpp
+    scriptdisplay/scriptdisplay.h
+    scriptdisplay/scriptdisplayconfigdialog.cpp
+    scriptdisplay/scriptdisplayconfigdialog.h
     scripting/expressiontreemodel.cpp
     scripting/expressiontreemodel.h
-    scripting/scripthighlighter.cpp
-    scripting/scripthighlighter.h
+    scripting/richtextutils.cpp
     scripting/scripteditor.cpp
     scripting/scriptformatter.cpp
+    scripting/scriptvariableproviders.cpp
+    scripting/scriptvariableproviders.h
+    scripting/scriptcommandhandler.cpp
+    scripting/scriptcommandhandler.h
+    scripting/scriptreferenceentries.cpp
+    scripting/scriptreferenceentries.h
     scripting/scriptformatterregistry.cpp
+    scripting/scripthighlighter.cpp
+    scripting/scripthighlighter.h
     search/searchcontroller.cpp
     search/searchcontroller.h
     search/searchwidget.cpp
     search/searchwidget.h
-    settings/generalpage.cpp
-    settings/generalpage.h
-    settings/guigeneralpage.cpp
-    settings/guigeneralpage.h
-    settings/guithemespage.cpp
-    settings/guithemespage.h
-    settings/networkpage.cpp
-    settings/networkpage.h
-    settings/searchpage.cpp
-    settings/searchpage.h
-    settings/shellintegrationpage.cpp
-    settings/shellintegrationpage.h
+    output/outputprofilemanager.cpp
+    selectioninfo/infodelegate.cpp
+    selectioninfo/infodelegate.h
+    selectioninfo/infoitem.cpp
+    selectioninfo/infoitem.h
+    selectioninfo/infomodel.cpp
+    selectioninfo/infomodel.h
+    selectioninfo/infopopulator.cpp
+    selectioninfo/infopopulator.h
+    selectioninfo/infoview.cpp
+    selectioninfo/infoview.h
+    selectioninfo/infowidget.cpp
+    selectioninfo/infowidget.h
+    selectioninfo/selectioninfofield.h
+    selectioninfo/selectioninfofieldregistry.cpp
+    selectioninfo/selectioninfofieldregistry.h
+    selectioninfo/selectioninfofieldsmodel.cpp
+    selectioninfo/selectioninfofieldsmodel.h
+    selectioninfo/selectioninfosettingspage.cpp
+    selectioninfo/selectioninfosettingspage.h
+    settings/advanced/advanceditemdelegate.cpp
+    settings/advanced/advanceditemdelegate.h
+    settings/advanced/advancedpage.cpp
+    settings/advanced/advancedpage.h
+    settings/advanced/advancedsettingsmodel.cpp
+    settings/advanced/advancedsettingsmodel.h
     settings/artwork/artworkdownloadpage.cpp
     settings/artwork/artworkdownloadpage.h
     settings/artwork/artworkgeneralpage.cpp
@@ -272,10 +421,33 @@ set(SOURCES
     settings/artwork/artworksourcesmodel.h
     settings/artwork/artworksourcespage.cpp
     settings/artwork/artworksourcespage.h
-    settings/dirbrowser/dirbrowserpage.cpp
-    settings/dirbrowser/dirbrowserpage.h
+    settings/context/configurablecontextmenumodel.cpp
+    settings/context/configurablecontextmenumodel.h
+    settings/context/configurablecontextmenudelegate.cpp
+    settings/context/configurablecontextmenudelegate.h
+    settings/context/configurablecontextmenupage.cpp
+    settings/context/configurablecontextmenupage.h
+    settings/context/staticcontextmenupage.cpp
+    settings/context/trackcontextmenupage.cpp
+    settings/context/trackcontextmenupage.h
+    settings/generalpage.cpp
+    settings/generalpage.h
+    settings/guitrackdisplaypage.cpp
+    settings/guitrackdisplaypage.h
+    settings/guigeneralpage.cpp
+    settings/guigeneralpage.h
+    settings/guilayoutpage.cpp
+    settings/guilayoutpage.h
+    settings/guithemespage.cpp
+    settings/guithemespage.h
+    settings/layouttreemodel.cpp
+    settings/layouttreemodel.h
     settings/library/librarygeneralpage.cpp
     settings/library/librarygeneralpage.h
+    settings/library/librarymetadatapage.cpp
+    settings/library/librarymetadatapage.h
+    settings/library/libraryratingspage.cpp
+    settings/library/libraryratingspage.h
     settings/library/librarymodel.cpp
     settings/library/librarymodel.h
     settings/library/librarysortingpage.cpp
@@ -284,18 +456,33 @@ set(SOURCES
     settings/library/sortingmodel.h
     settings/librarytree/librarytreegroupmodel.cpp
     settings/librarytree/librarytreegroupmodel.h
-    settings/librarytree/librarytreepage.cpp
-    settings/librarytree/librarytreepage.h
-    settings/librarytree/librarytreegrouppage.cpp
-    settings/librarytree/librarytreegrouppage.h
+    settings/networkpage.cpp
+    settings/networkpage.h
     settings/playback/decodermodel.cpp
     settings/playback/decodermodel.h
+    settings/playback/decoderdelegate.cpp
+    settings/playback/decoderdelegate.h
+    settings/playback/devicepage.cpp
+    settings/playback/devicepage.h
+    settings/playback/outputdevicesdelegate.cpp
+    settings/playback/outputdevicesdelegate.h
+    settings/playback/outputdevicesmodel.cpp
+    settings/playback/outputdevicesmodel.h
     settings/playback/decoderpage.cpp
     settings/playback/decoderpage.h
+    settings/playback/dspdelegate.cpp
+    settings/playback/dspdelegate.h
+    settings/playback/dspmanagerpage.cpp
+    settings/playback/dspmanagerpage.h
+    settings/playback/fadingpage.cpp
+    settings/playback/fadingpage.h
+    settings/playback/dspmodel.cpp
+    settings/playback/dspmodel.h
     settings/playback/outputpage.cpp
     settings/playback/outputpage.h
     settings/playback/playbackpage.cpp
     settings/playback/playbackpage.h
+    settings/playback/playbacksettingsutils.h
     settings/playback/replaygainpage.cpp
     settings/playback/replaygainpage.h
     settings/playlist/playlistcolumnmodel.cpp
@@ -304,56 +491,87 @@ set(SOURCES
     settings/playlist/playlistcolumnpage.h
     settings/playlist/playlistgeneralpage.cpp
     settings/playlist/playlistgeneralpage.h
+    settings/playlist/playlistguipage.cpp
+    settings/playlist/playlistguipage.h
     settings/playlist/playlistpresetspage.cpp
     settings/playlist/playlistpresetspage.h
+    settings/playlist/playlistsavingpage.cpp
+    settings/playlist/playlistsavingpage.h
     settings/plugins/pluginaboutdialog.cpp
     settings/plugins/pluginaboutdialog.h
     settings/plugins/pluginsmodel.cpp
     settings/plugins/pluginsmodel.h
     settings/plugins/pluginspage.cpp
     settings/plugins/pluginspage.h
+    settings/searchpage.cpp
+    settings/searchpage.h
+    settings/shellintegrationpage.cpp
+    settings/shellintegrationpage.h
     settings/shortcuts/shortcutsmodel.cpp
     settings/shortcuts/shortcutsmodel.h
     settings/shortcuts/shortcutspage.cpp
     settings/shortcuts/shortcutspage.h
-    settings/widgets/playbackqueuepage.cpp
-    settings/widgets/playbackqueuepage.h
     settings/widgets/statuswidgetpage.cpp
     settings/widgets/statuswidgetpage.h
+    splitters/fysplitter.cpp
+    splitters/fysplitter.h
+    splitters/splitterstate.cpp
+    splitters/splitterstate.h
     splitters/splitterwidget.cpp
     splitters/splitterwidget.h
     splitters/tabstackwidget.cpp
     splitters/tabstackwidget.h
+    statusevent.cpp
+    systemtrayicon.cpp
+    systemtrayicon.h
     theme/fytheme.cpp
+    theme/fythemefile.cpp
     theme/themeregistry.cpp
+    trackmimedata.cpp
+    trackselectioncontroller.cpp
+    widgetfilter.cpp
+    widgetprovider.cpp
+    verification/verificationcontroller.cpp
+    verification/verificationcontroller.h
+    widgets.cpp
+    widgets.h
+    widgets/actiondelegate.cpp
     widgets/autoheaderview.cpp
     widgets/checkboxdelegate.cpp
     widgets/clickablelabel.cpp
     widgets/colourbutton.cpp
     widgets/coverwidget.cpp
     widgets/coverwidget.h
+    widgets/coverwidgetconfigwidget.cpp
+    widgets/coverwidgetconfigwidget.h
     widgets/customisableinput.cpp
     widgets/doubleslidereditor.cpp
     widgets/dummy.cpp
     widgets/dummy.h
-    widgets/elidedlabel.cpp
     widgets/editabletabbar.cpp
     widgets/editabletabwidget.cpp
     widgets/elapsedprogressdialog.cpp
+    widgets/elidedlabel.cpp
     widgets/expandableinputbox.cpp
     widgets/expandedtreeview.cpp
     widgets/expandedtreeview_p.h
     widgets/expandingcombobox.cpp
     widgets/extendabletableview.cpp
     widgets/fontbutton.cpp
+    widgets/gradienteditor.cpp
     widgets/hovermenu.cpp
     widgets/hovermenu.h
+    widgets/lineediteditor.cpp
     widgets/logslider.cpp
     widgets/logslider.h
     widgets/menuheader.cpp
     widgets/menuheader.h
+    widgets/messagebanner.cpp
+    widgets/metadatacompleter.cpp
     widgets/multilinedelegate.cpp
     widgets/overlaywidget.cpp
+    widgets/pixmapfadecontroller.cpp
+    widgets/pixmapfadecontroller.h
     widgets/popuplineedit.cpp
     widgets/scriptlineedit.cpp
     widgets/seekcontainer.cpp
@@ -363,23 +581,28 @@ set(SOURCES
     widgets/spacer.cpp
     widgets/spacer.h
     widgets/specialvaluespinbox.cpp
+    widgets/titletooltipgroupbox.cpp
+    widgets/titletooltipgroupbox.h
     widgets/statuswidget.cpp
     widgets/statuswidget.h
+    widgets/textinputdialog.cpp
     widgets/toolbutton.cpp
     widgets/tooltip.cpp
     widgets/widgetcontainer.cpp
+    windowcontroller.cpp
 )
 
 create_fooyin_library(
     fooyin_gui
+    ADD_PRIVATE_TARGET
     EXPORT_NAME Gui
     SOURCES ${SOURCES}
 )
 
 target_link_libraries(
     fooyin_gui
-    PUBLIC Fooyin::Core 
-           Fooyin::Utils
-    PRIVATE Fooyin::CorePrivate 
+    PRIVATE Fooyin::CorePrivate
             Qt::Svg
+    PUBLIC Fooyin::Core
+           Fooyin::Utils
 )

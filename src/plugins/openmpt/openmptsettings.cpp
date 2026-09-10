@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -47,8 +47,7 @@ OpenMptSettings::OpenMptSettings(SettingsManager* settings, QWidget* parent)
     , m_interpolationFilter{new QComboBox(this)}
     , m_loopCount{new QSpinBox(this)}
 {
-    setWindowTitle(tr("%1 Settings").arg(u"OpenMPT"_s));
-    setModal(true);
+    setWindowTitle(tr("OpenMPT Settings"));
 
     auto* buttons
         = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Reset, this);

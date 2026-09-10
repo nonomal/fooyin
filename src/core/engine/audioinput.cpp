@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,26 +19,84 @@
 
 #include <core/engine/audioinput.h>
 
-#include <core/coresettings.h>
-#include <core/playlist/playlist.h>
-
-#include <QUrl>
-
-using namespace Qt::StringLiterals;
-
-namespace {
-bool isRepeatTrackMode()
-{
-    const Fooyin::FySettings settings;
-    const auto playMode = settings.value(Fooyin::Settings::Core::PlayModeKey).value<Fooyin::Playlist::PlayModes>();
-    return playMode & Fooyin::Playlist::PlayMode::RepeatTrack;
-}
-} // namespace
+#include <array>
+#include <stop_token>
+#include <utility>
 
 namespace Fooyin {
+class AudioDecoderPrivate
+{
+public:
+    AudioDecoder::PlaybackHints playbackHints{AudioDecoder::NoHints};
+    std::stop_source abortSource;
+};
+
+AudioDecoder::AudioDecoder()
+    : p{std::make_unique<AudioDecoderPrivate>()}
+{ }
+
+AudioDecoder::~AudioDecoder() = default;
+
+QStringList AudioDecoder::preferredExtensions() const
+{
+    return {};
+}
+
+QStringList AudioDecoder::supportedSchemes() const
+{
+    return {};
+}
+
+bool AudioDecoder::supportsRemoteSources() const
+{
+    return false;
+}
+
+bool AudioDecoder::allowsConcurrentDecoding() const
+{
+    return true;
+}
+
+int AudioDecoder::playbackPrebufferMs() const
+{
+    return 0;
+}
+
+QStringList AudioDecoder::takeWarnings()
+{
+    return {};
+}
+
+bool AudioDecoder::needsMoreInput() const
+{
+    return false;
+}
+
+AudioDecoder::RepeatHandling AudioDecoder::repeatHandling() const
+{
+    return RepeatHandling::EngineTransition;
+}
+
+AudioDecoder::PlaybackHints AudioDecoder::playbackHints() const
+{
+    return p->playbackHints;
+}
+
+void AudioDecoder::setPlaybackHints(PlaybackHints hints)
+{
+    if(std::exchange(p->playbackHints, hints) == hints) {
+        return;
+    }
+    playbackHintsChanged(hints);
+}
+
+void AudioDecoder::playbackHintsChanged(PlaybackHints /*hints*/) { }
+
+void AudioDecoder::interruptRead() { }
+
 bool AudioDecoder::isRepeatingTrack() const
 {
-    return isRepeatTrackMode();
+    return playbackHints().testFlag(RepeatTrackEnabled);
 }
 
 bool AudioDecoder::trackHasChanged() const
@@ -51,12 +109,55 @@ Track AudioDecoder::changedTrack() const
     return {};
 }
 
+std::optional<AudioDecoder::TimedTrackChange> AudioDecoder::takeTimedTrackChange()
+{
+    return {};
+}
+
 int AudioDecoder::bitrate() const
 {
     return 0;
 }
 
 void AudioDecoder::start() { }
+
+void AudioDecoder::requestAbort()
+{
+    p->abortSource.request_stop();
+    interruptRead();
+}
+
+std::stop_token AudioDecoder::abortToken() const noexcept
+{
+    return p->abortSource.get_token();
+}
+
+AudioDecoder::ReadResult AudioDecoder::readAudio(size_t bytes)
+{
+    AudioBuffer buffer = readBuffer(bytes);
+    if(buffer.isValid()) {
+        return ReadResult::data(std::move(buffer));
+    }
+    if(needsMoreInput()) {
+        return ReadResult::needMoreInput();
+    }
+    return ReadResult::endOfStream();
+}
+
+QStringList AudioReader::preferredExtensions() const
+{
+    return {};
+}
+
+QStringList AudioReader::supportedSchemes() const
+{
+    return {};
+}
+
+bool AudioReader::supportsRemoteSources() const
+{
+    return false;
+}
 
 bool AudioReader::canWriteCover() const
 {
@@ -66,11 +167,6 @@ bool AudioReader::canWriteCover() const
 int AudioReader::subsongCount() const
 {
     return 1;
-}
-
-bool AudioReader::isRepeatingTrack() const
-{
-    return isRepeatTrackMode();
 }
 
 bool AudioReader::init(const AudioSource& /*source*/)
@@ -92,5 +188,58 @@ bool AudioReader::writeCover(const AudioSource& /*source*/, const Track& /*track
                              WriteOptions /*options*/)
 {
     return false;
+}
+
+bool ArchiveReader::copyEntryToDevice(const QString& file, QIODevice* device,
+                                      const StopRequestedCallback& stopRequested)
+{
+    if(!device || !device->isWritable()) {
+        return false;
+    }
+
+    ArchiveEntryData entryData = entry(file);
+    if(!entryData.device) {
+        return false;
+    }
+
+    std::array<char, 64UL * 1024> buffer{};
+    while(!stopRequested()) {
+        const qint64 read = entryData.device->read(buffer.data(), buffer.size());
+        if(read == 0) {
+            return true;
+        }
+        if(read < 0) {
+            return false;
+        }
+
+        qint64 writtenTotal{0};
+        while(writtenTotal < read) {
+            if(stopRequested()) {
+                return false;
+            }
+            const qint64 written = device->write(buffer.data() + writtenTotal, read - writtenTotal);
+            if(written <= 0) {
+                return false;
+            }
+            writtenTotal += written;
+        }
+    }
+
+    return false;
+}
+
+bool ArchiveReader::readEntries(const ReadEntryInfoCallback& readEntry, const StopRequestedCallback& stopRequested)
+{
+    bool keepReading{true};
+    const bool result = readTracks(
+        [&readEntry, &keepReading](ArchiveEntryData&& entryData) {
+            if(!readEntry || !keepReading) {
+                return;
+            }
+            keepReading = readEntry(entryData.info);
+        },
+        [&keepReading, &stopRequested]() { return !keepReading || stopRequested(); });
+
+    return !keepReading || result;
 }
 } // namespace Fooyin

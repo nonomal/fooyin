@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,7 +38,7 @@ public:
     virtual void calculateAsAlbum(const TrackList& tracks, bool truePeak)                                 = 0;
     virtual void calculateByAlbumTags(const TrackList& tracks, const QString& groupScript, bool truePeak) = 0;
 
-signals:
+Q_SIGNALS:
     void startingCalculation(const QString& filepath);
     void calculationFinished(const Fooyin::TrackList& tracks);
     void closed();
@@ -60,7 +60,7 @@ public:
     void calculateAsAlbum(const TrackList& tracks);
     void calculateByAlbumTags(const TrackList& tracks);
 
-signals:
+Q_SIGNALS:
     void startingCalculation(const QString& filepath);
     void calculationFinished(const Fooyin::TrackList& tracks);
 

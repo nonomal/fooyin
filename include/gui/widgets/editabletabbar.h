@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,8 @@
 
 #include <QTabBar>
 
+class QStyleOptionTab;
+
 namespace Fooyin {
 class PopupLineEdit;
 
@@ -39,21 +41,24 @@ public:
 
     explicit EditableTabBar(QWidget* parent = nullptr);
 
-    void showEditor();
+    void showEditor(int index);
     void closeEditor();
+    void clearHoverState();
 
     void setEditTitle(const QString& title);
     void setEditMode(EditMode mode);
 
-signals:
+Q_SIGNALS:
     void middleClicked(int index);
     void addButtonClicked();
     void tabTextChanged(int index, const QString& text);
 
 protected:
     bool event(QEvent* event) override;
+    void initStyleOption(QStyleOptionTab* option, int tabIndex) const override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
 
 private:
@@ -61,5 +66,6 @@ private:
     EditMode m_mode;
     PopupLineEdit* m_lineEdit;
     QPoint m_accumDelta;
+    bool m_suppressHoverState;
 };
 } // namespace Fooyin

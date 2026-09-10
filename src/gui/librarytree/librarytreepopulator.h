@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,14 +19,20 @@
 
 #pragma once
 
+#include "librarytreegroup.h"
 #include "librarytreeitem.h"
 
 #include <utils/crypto.h>
 #include <utils/worker.h>
 
+#include <QFont>
+
+#include <memory>
+
 namespace Fooyin {
 class LibraryManager;
 class LibraryTreePopulatorPrivate;
+class SettingsManager;
 
 using ItemKeyMap     = std::unordered_map<Md5Hash, LibraryTreeItem>;
 using NodeKeyMap     = std::unordered_map<Md5Hash, std::vector<Md5Hash>>;
@@ -35,31 +41,47 @@ using TrackIdNodeMap = std::unordered_map<int, std::vector<Md5Hash>>;
 struct PendingTreeData
 {
     ItemKeyMap items;
+    ItemKeyMap updatedItems;
     NodeKeyMap nodes;
     TrackIdNodeMap trackParents;
 
     void clear()
     {
         items.clear();
+        updatedItems.clear();
         nodes.clear();
         trackParents.clear();
     }
 };
+
+using PendingTreeDataPtr = std::shared_ptr<PendingTreeData>;
 
 class LibraryTreePopulator : public Worker
 {
     Q_OBJECT
 
 public:
-    explicit LibraryTreePopulator(LibraryManager* libraryManager, QObject* parent = nullptr);
+    enum class PopulationMode : uint8_t
+    {
+        Incremental = 0,
+        Atomic
+    };
+
+    explicit LibraryTreePopulator(LibraryManager* libraryManager, SettingsManager* settings, QObject* parent = nullptr);
     ~LibraryTreePopulator() override;
 
-    void run(const QString& grouping, const TrackList& tracks, bool useVarious);
+    void setFont(const QFont& font);
 
-signals:
-    void populated(Fooyin::PendingTreeData data);
+    void run(const LibraryTreeGrouping& grouping, const TrackList& tracks, bool useVarious,
+             PopulationMode mode = PopulationMode::Incremental);
+    void updateItems(ItemKeyMap items, bool useVarious);
+
+Q_SIGNALS:
+    void populated(Fooyin::PendingTreeDataPtr data);
 
 private:
     std::unique_ptr<LibraryTreePopulatorPrivate> p;
 };
 } // namespace Fooyin
+
+Q_DECLARE_METATYPE(Fooyin::PendingTreeDataPtr)

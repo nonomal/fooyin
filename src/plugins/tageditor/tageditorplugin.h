@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +27,8 @@
 namespace Fooyin::TagEditor {
 class TagEditorFieldRegistry;
 class TagEditorFieldsPage;
-class TagEditorWidget;
+class TagEditorPropertiesTab;
+class TagEditorPanel;
 
 class TagEditorPlugin : public QObject,
                         public Plugin,
@@ -43,7 +44,8 @@ public:
     void initialise(const GuiPluginContext& context) override;
 
 private:
-    TagEditorWidget* createEditor(const TrackList& tracks);
+    TagEditorPropertiesTab* createEditor(const TrackList& tracks);
+    TagEditorPanel* createPanel();
 
     ActionManager* m_actionManager;
     MusicLibrary* m_library;

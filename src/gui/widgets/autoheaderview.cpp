@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,8 @@
 #include <QLoggingCategory>
 #include <QMenu>
 #include <QMouseEvent>
+#include <QTableView>
+#include <QTreeView>
 
 Q_LOGGING_CATEGORY(AUTO_HEADER, "fy.autoheader")
 
@@ -65,6 +67,7 @@ public:
     AutoHeaderView* m_self;
 
     bool m_stretchEnabled{false};
+    bool m_isCollapsed{false};
     SectionWidths m_sectionWidths;
 
     SectionState m_state{SectionState::None};
@@ -78,6 +81,7 @@ public:
 
     int m_pendingColumns{0};
     QByteArray m_pendingState;
+    bool m_pendingRestoreSort{true};
 };
 
 void AutoHeaderViewPrivate::calculateSectionWidths()
@@ -89,12 +93,16 @@ void AutoHeaderViewPrivate::calculateSectionWidths()
     m_sectionWidths.clear();
 
     const int sectionCount = m_self->count();
-    const int headerWidth  = m_self->width();
+    const int headerSize   = m_self->orientation() == Qt::Horizontal ? m_self->width() : m_self->height();
+
+    if(headerSize <= 0) {
+        return;
+    }
 
     m_sectionWidths.resize(sectionCount);
 
     for(int section{0}; section < sectionCount; ++section) {
-        const auto width         = static_cast<double>(m_self->sectionSize(section)) / headerWidth;
+        const auto width         = static_cast<double>(m_self->sectionSize(section)) / headerSize;
         m_sectionWidths[section] = width;
     }
 }
@@ -148,7 +156,11 @@ void AutoHeaderViewPrivate::updateWidths(const SectionIndexes& sections) const
     }
 
     const int sectionCount = static_cast<int>(m_sectionWidths.size());
-    const int headerWidth  = m_self->width();
+    const int headerSize   = m_self->orientation() == Qt::Horizontal ? m_self->width() : m_self->height();
+
+    if(headerSize <= 0) {
+        return;
+    }
 
     for(int section{0}; section < sectionCount; ++section) {
         const int logical = m_self->logicalIndex(section);
@@ -159,7 +171,7 @@ void AutoHeaderViewPrivate::updateWidths(const SectionIndexes& sections) const
 
         const bool visible           = !m_self->isSectionHidden(logical);
         const double normalisedWidth = m_sectionWidths.at(logical);
-        const int width              = !visible ? 0 : static_cast<int>(normalisedWidth * headerWidth);
+        const int width              = !visible ? 0 : static_cast<int>(normalisedWidth * headerSize);
 
         if(!sections.empty() && !sections.contains(logical)) {
             continue;
@@ -276,7 +288,7 @@ void AutoHeaderViewPrivate::columnsAboutToBeRemoved(int first, int last)
 void AutoHeaderViewPrivate::sectionCountChanged(int oldCount, int newCount)
 {
     if(m_pendingColumns > 0 && !m_pendingState.isEmpty() && newCount == m_pendingColumns) {
-        m_self->restoreHeaderState(m_pendingState);
+        m_self->restoreHeaderState(m_pendingState, m_pendingRestoreSort);
         return;
     }
 
@@ -333,7 +345,7 @@ void AutoHeaderView::resetSections()
     const int sectionCount = count();
 
     if(sectionCount > 0) {
-        const int headerWidth = width();
+        const int headerWidth = orientation() == Qt::Horizontal ? width() : height();
 
         const auto width = headerWidth / sectionCount;
 
@@ -359,6 +371,28 @@ void AutoHeaderView::resetSectionPositions()
     }
 }
 
+bool AutoHeaderView::isCollapsed() const
+{
+    return p->m_isCollapsed;
+}
+
+void AutoHeaderView::setCollapsed(bool collapsed)
+{
+    if(std::exchange(p->m_isCollapsed, collapsed) == collapsed) {
+        return;
+    }
+
+    const int size = collapsed ? 0 : QWIDGETSIZE_MAX;
+    if(orientation() == Qt::Horizontal) {
+        setFixedHeight(size);
+    }
+    else {
+        setFixedWidth(size);
+    }
+
+    adjustSize();
+}
+
 void AutoHeaderView::hideHeaderSection(int logical)
 {
     const int sectionCount = count();
@@ -376,7 +410,7 @@ void AutoHeaderView::hideHeaderSection(int logical)
     }
 
     hideSection(logical);
-    emit sectionVisiblityChanged(logical);
+    Q_EMIT sectionVisiblityChanged(logical);
 
     if(!p->m_stretchEnabled) {
         return;
@@ -394,7 +428,7 @@ void AutoHeaderView::showHeaderSection(int logical)
     }
 
     showSection(logical);
-    emit sectionVisiblityChanged(logical);
+    Q_EMIT sectionVisiblityChanged(logical);
 
     p->normaliseWidths();
     p->updateWidths();
@@ -458,6 +492,27 @@ void AutoHeaderView::setHeaderSectionAlignment(int logical, Qt::Alignment alignm
     }
 }
 
+void AutoHeaderView::resizeColumnToContents(int logical)
+{
+    if(orientation() == Qt::Vertical) {
+        return;
+    }
+
+    const auto resizeColumn = [this, logical](const auto& view) {
+        view->resizeColumnToContents(logical);
+        p->calculateSectionWidths();
+        p->normaliseWidths();
+        p->updateWidths();
+    };
+
+    if(auto* tree = qobject_cast<QTreeView*>(parentWidget())) {
+        resizeColumn(tree);
+    }
+    else if(auto* table = qobject_cast<QTableView*>(parentWidget())) {
+        resizeColumn(table);
+    }
+}
+
 bool AutoHeaderView::isStretchEnabled() const
 {
     return p->m_stretchEnabled;
@@ -474,7 +529,7 @@ void AutoHeaderView::setStretchEnabled(bool enabled)
             p->updateWidths();
         }
     }
-    emit stretchChanged(enabled);
+    Q_EMIT stretchChanged(enabled);
 }
 
 void AutoHeaderView::addHeaderContextMenu(QMenu* menu, const QPoint& pos)
@@ -600,6 +655,14 @@ QByteArray AutoHeaderView::saveHeaderState() const
 
 void AutoHeaderView::restoreHeaderState(const QByteArray& state)
 {
+    restoreHeaderState(state, true);
+}
+
+void AutoHeaderView::restoreHeaderState(const QByteArray& state, bool restoreSort)
+{
+    const auto currentSortOrder  = sortIndicatorOrder();
+    const int currentSortSection = sortIndicatorSection();
+
     Qt::SortOrder sortOrder{Qt::AscendingOrder};
     int sortSection{0};
 
@@ -613,8 +676,9 @@ void AutoHeaderView::restoreHeaderState(const QByteArray& state)
         stream >> pixelWidths;
 
         if(std::cmp_not_equal(pixelWidths.size(), count())) {
-            p->m_pendingColumns = static_cast<int>(pixelWidths.size());
-            p->m_pendingState   = state;
+            p->m_pendingColumns     = static_cast<int>(pixelWidths.size());
+            p->m_pendingState       = state;
+            p->m_pendingRestoreSort = restoreSort;
             return;
         }
 
@@ -648,7 +712,12 @@ void AutoHeaderView::restoreHeaderState(const QByteArray& state)
         qCDebug(AUTO_HEADER) << "Header state empty";
     }
 
-    setSortIndicator(sortSection, sortOrder);
+    if(restoreSort) {
+        setSortIndicator(sortSection, sortOrder);
+    }
+    else {
+        setSortIndicator(currentSortSection, currentSortOrder);
+    }
 
     const int sectionCount = count();
     if(sectionCount > 0) {
@@ -664,13 +733,15 @@ void AutoHeaderView::restoreHeaderState(const QByteArray& state)
 
     p->m_pendingColumns = 0;
     p->m_pendingState.clear();
+    p->m_pendingRestoreSort = true;
 
-    emit stateRestored();
+    Q_EMIT stateRestored();
 }
 
 void AutoHeaderView::mousePressEvent(QMouseEvent* event)
 {
     if(p->m_state != SectionState::None || event->button() != Qt::LeftButton) {
+        event->ignore();
         return;
     }
 
@@ -752,7 +823,7 @@ void AutoHeaderView::mouseReleaseEvent(QMouseEvent* event)
         const int logicalIndex = logicalIndexAt(pos);
 
         if(logicalIndex >= 0 && handleIndex == -1) {
-            emit leftClicked(logicalIndex, pos);
+            Q_EMIT leftClicked(logicalIndex, pos);
         }
     }
     else if(p->m_state == SectionState::Resizing) {
@@ -770,6 +841,11 @@ void AutoHeaderView::mouseReleaseEvent(QMouseEvent* event)
 
 void AutoHeaderView::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    if(event->button() != Qt::LeftButton) {
+        event->ignore();
+        return;
+    }
+
     p->m_state = SectionState::Resizing;
 
     QHeaderView::mouseDoubleClickEvent(event);

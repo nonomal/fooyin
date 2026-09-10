@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,16 +19,41 @@
 
 #pragma once
 
+#include "gui/trackselectioncontroller.h"
+
+#include <core/player/playbackqueue.h>
 #include <core/player/playerdefs.h>
 #include <gui/fywidget.h>
 
+#include <QDir>
+#include <QList>
+#include <QPointer>
+#include <QStringList>
+#include <QUndoStack>
+
+class QAction;
+class QFileIconProvider;
+class QFileSystemModel;
+class QHBoxLayout;
+class QJsonObject;
+class QLineEdit;
+class QModelIndex;
+class QMenu;
+class QUrl;
+class QVBoxLayout;
+
 namespace Fooyin {
 class ActionManager;
-class DirBrowserPrivate;
+class DirProxyModel;
+class DirTree;
 class PlaylistInteractor;
 class Playlist;
+class PlaylistHandler;
 struct PlaylistTrack;
 class SettingsManager;
+class ToolButton;
+class WidgetContext;
+enum class TrackAction;
 
 class DirBrowser : public FyWidget
 {
@@ -41,20 +66,57 @@ public:
         List,
     };
 
+    enum class ControlsPosition : int
+    {
+        Top,
+        Bottom,
+    };
+
     DirBrowser(const QStringList& supportedExtensions, ActionManager* actionManager,
                PlaylistInteractor* playlistInteractor, SettingsManager* settings, QWidget* parent = nullptr);
     ~DirBrowser() override;
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
+    void saveLayoutData(QJsonObject& layout) override;
+    void loadLayoutData(const QJsonObject& layout) override;
+    void searchEvent(const SearchRequest& request) override;
 
     void updateDir(const QString& dir);
 
-signals:
+    struct ConfigData
+    {
+        int doubleClickAction{static_cast<int>(TrackAction::Play)};
+        int middleClickAction{static_cast<int>(TrackAction::None)};
+        bool sendPlayback{true};
+        bool showIcons{true};
+        bool indentList{true};
+        bool showHeader{true};
+        bool restoreSort{false};
+        Mode mode{Mode::List};
+        ControlsPosition controlsPosition{ControlsPosition::Top};
+        bool showControls{true};
+        bool showLocation{true};
+        bool showSymLinks{false};
+        bool showHidden{false};
+        QString rootPath{
+            QDir::homePath(),
+        };
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
+
+Q_SIGNALS:
+    void configChanged();
     void rootChanged();
 
-public slots:
-    void playstateChanged(Player::PlayState state);
+public Q_SLOTS:
+    void playstateChanged(Fooyin::Player::PlayState state);
     void activePlaylistChanged(Fooyin::Playlist* playlist);
     void playlistTrackChanged(const Fooyin::PlaylistTrack& track);
 
@@ -62,7 +124,98 @@ protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
+    void openConfigDialog() override;
+
 private:
-    std::unique_ptr<DirBrowserPrivate> p;
+    void checkIconProvider();
+
+    void handleModelUpdated() const;
+
+    [[nodiscard]] QueueTracks loadQueueTracks(const TrackList& tracks) const;
+    [[nodiscard]] QList<QUrl> filesFromPaths(const QStringList& paths) const;
+    [[nodiscard]] QStringList selectedFilePaths() const;
+
+    void handleAction(TrackAction action, bool onlySelection);
+    void handlePlayAction(const QList<QUrl>& files, const QString& startingFile);
+    void addPlaylistMenu(QMenu* menu) const;
+    void handleDoubleClick(const QModelIndex& index);
+    void handleMiddleClick();
+    void handleModelReset();
+
+    void changeRoot(const QString& root);
+    void updateIndent(bool show);
+    void setDoubleClickAction(int action);
+    void setMiddleClickAction(int action);
+    void setSendPlayback(bool enabled);
+    void setShowIconsEnabled(bool enabled);
+    void setListIndentEnabled(bool enabled);
+    void setRootPath(const QString& rootPath);
+    [[nodiscard]] QString rootPath() const;
+
+    void updateFilters();
+    void setControlsPosition(ControlsPosition position);
+    void setControlsEnabled(bool enabled);
+    void setLocationEnabled(bool enabled);
+    void setShowSymLinksEnabled(bool enabled);
+    void setShowHidden(bool enabled);
+    void changeMode(Mode newMode);
+    void startPlayback(const TrackList& tracks, int row);
+    void updateControlState() const;
+    void goUp();
+    [[nodiscard]] QString tempPlaylistName() const;
+
+    static void saveConfigToLayout(const ConfigData& config, QJsonObject& layout);
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+
+    QStringList m_supportedExtensions;
+    ActionManager* m_actionManager;
+    PlaylistInteractor* m_playlistInteractor;
+    PlaylistHandler* m_playlistHandler;
+    SettingsManager* m_settings;
+
+    std::unique_ptr<QFileIconProvider> m_iconProvider;
+
+    QVBoxLayout* m_mainLayout;
+    QHBoxLayout* m_controlLayout;
+    QPointer<QLineEdit> m_dirEdit;
+    QPointer<ToolButton> m_backDir;
+    QPointer<ToolButton> m_forwardDir;
+    QPointer<ToolButton> m_upDir;
+
+    bool m_setup;
+    Mode m_mode;
+    DirTree* m_dirTree;
+    QFileSystemModel* m_model;
+    DirProxyModel* m_proxyModel;
+    QUndoStack m_dirHistory;
+
+    QFlags<QDir::Filter> m_defaultFilters;
+    bool m_showSymLinks;
+    bool m_showHidden;
+    bool m_sendPlayback;
+    bool m_listIndent;
+    QString m_rootPath;
+
+    Playlist* m_playlist;
+
+    TrackAction m_doubleClickAction;
+    TrackAction m_middleClickAction;
+
+    WidgetContext* m_context;
+
+    QAction* m_goUp;
+    QAction* m_goBack;
+    QAction* m_goForward;
+
+    QAction* m_playAction;
+    QAction* m_addCurrent;
+    QAction* m_addActive;
+    QAction* m_sendCurrent;
+    QAction* m_sendNew;
+    QAction* m_addQueue;
+    QAction* m_queueNext;
+    QAction* m_sendQueue;
+
+    ConfigData m_config;
 };
 } // namespace Fooyin

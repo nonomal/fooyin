@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,16 +40,13 @@ public:
     [[nodiscard]] QString layoutName() const override;
 
 private:
-    void updateButtonStyle() const;
     void setupMenus();
     void setMode(Playlist::PlayModes mode) const;
+    [[nodiscard]] QColor iconColour() const;
 
     PlayerController* m_playerController;
-    SettingsManager* m_settings;
 
     ToolButton* m_repeat;
     ToolButton* m_shuffle;
-
-    QColor m_iconColour;
 };
 } // namespace Fooyin

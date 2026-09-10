@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,30 +26,45 @@
 
 class QLineEdit;
 class QItemSelection;
+class QString;
 
 namespace Fooyin {
 class ActionManager;
 class Application;
 class CoverProvider;
+class GuiStyleProvider;
 class PlaylistInteractor;
 class SettingsManager;
+class TrackSelectionController;
 
 class SearchDialog : public QDialog
 {
     Q_OBJECT
 
 public:
+    enum class Target : uint8_t
+    {
+        Playlist,
+        Library
+    };
+
     SearchDialog(ActionManager* actionManager, PlaylistInteractor* playlistInteractor, CoverProvider* coverProvider,
-                 Application* core, PlaylistWidget::Mode mode, QWidget* parent = nullptr);
+                 Application* core, GuiStyleProvider* styleProvider, TrackSelectionController* selectionController,
+                 Target target, QWidget* parent = nullptr);
 
     void done(int value) override;
 
     [[nodiscard]] QSize sizeHint() const override;
 
+    void setSearch(const QString& search);
+
 protected:
-    void keyPressEvent(QKeyEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void navigateResults(int delta);
+    void playCurrentResult();
+
     void search();
     void updateTitle();
     void showOptionsMenu();
@@ -58,12 +73,13 @@ private:
     void saveState();
     void loadState();
 
-    PlaylistWidget::Mode m_mode;
+    Target m_target;
     PlaylistInteractor* m_playlistInteractor;
     SettingsManager* m_settings;
 
     QLineEdit* m_searchBar;
     PlaylistWidget* m_view;
     bool m_autoSelect;
+    bool m_showAll;
 };
 } // namespace Fooyin

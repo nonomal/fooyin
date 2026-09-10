@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,7 @@
 #include <QMainWindow>
 #include <QMouseEvent>
 #include <QStyle>
+#include <QStyleOption>
 #include <QWheelEvent>
 
 namespace Fooyin {
@@ -35,30 +36,29 @@ EditableTabBar::EditableTabBar(QWidget* parent)
     , m_title{tr("Tab")}
     , m_mode{EditMode::Inline}
     , m_lineEdit{nullptr}
+    , m_suppressHoverState{false}
 {
     setMovable(true);
 }
 
-void EditableTabBar::showEditor()
+void EditableTabBar::showEditor(int index)
 {
-    const int currIndex = currentIndex();
-
     if(m_mode == EditMode::Inline) {
-        m_lineEdit = new PopupLineEdit(tabText(currentIndex()), this);
+        m_lineEdit = new PopupLineEdit(tabText(index), this);
         m_lineEdit->setAttribute(Qt::WA_DeleteOnClose);
 
         QObject::connect(m_lineEdit, &QObject::destroyed, this, [this]() { m_lineEdit = nullptr; });
         QObject::connect(m_lineEdit, &PopupLineEdit::editingCancelled, m_lineEdit, &QWidget::close);
-        QObject::connect(m_lineEdit, &PopupLineEdit::editingFinished, this, [this, currIndex]() {
+        QObject::connect(m_lineEdit, &PopupLineEdit::editingFinished, this, [this, index]() {
             const QString text = m_lineEdit->text();
-            if(text != tabText(currIndex)) {
-                setTabText(currIndex, m_lineEdit->text());
-                emit tabTextChanged(currIndex, m_lineEdit->text());
+            if(!text.isEmpty() && text != tabText(index)) {
+                setTabText(index, m_lineEdit->text());
+                Q_EMIT tabTextChanged(index, m_lineEdit->text());
             }
             m_lineEdit->close();
         });
 
-        const QRect rect = tabRect(currIndex);
+        const QRect rect = tabRect(index);
         m_lineEdit->setGeometry(rect);
 
         m_lineEdit->show();
@@ -66,15 +66,15 @@ void EditableTabBar::showEditor()
         m_lineEdit->setFocus(Qt::ActiveWindowFocusReason);
     }
     else {
-        const QString currentText = tabText(currIndex);
+        const QString currentText = tabText(index);
 
         bool ok{false};
-        const QString text = QInputDialog::getText(Utils::getMainWindow(), tr("Edit %1 Name").arg(m_title),
-                                                   tr("%1 name:").arg(m_title), QLineEdit::Normal, currentText, &ok);
+        const QString text = QInputDialog::getText(Utils::getMainWindow(), tr("Rename Tab"), tr("Name:"),
+                                                   QLineEdit::Normal, currentText, &ok);
 
         if(ok && !text.isEmpty() && text != currentText) {
-            setTabText(currIndex, text);
-            emit tabTextChanged(currIndex, text);
+            setTabText(index, text);
+            Q_EMIT tabTextChanged(index, text);
         }
     }
 }
@@ -84,6 +84,12 @@ void EditableTabBar::closeEditor()
     if(m_lineEdit) {
         m_lineEdit->close();
     }
+}
+
+void EditableTabBar::clearHoverState()
+{
+    m_suppressHoverState = true;
+    update();
 }
 
 void EditableTabBar::setEditTitle(const QString& title)
@@ -101,19 +107,42 @@ bool EditableTabBar::event(QEvent* event)
     if(event->type() == QEvent::HoverLeave) {
         m_accumDelta = {};
     }
+
+    if(event->type() == QEvent::Enter || event->type() == QEvent::HoverEnter || event->type() == QEvent::HoverMove) {
+        if(m_suppressHoverState) {
+            m_suppressHoverState = false;
+            update();
+        }
+    }
+
     return QTabBar::event(event);
+}
+
+void EditableTabBar::initStyleOption(QStyleOptionTab* option, int tabIndex) const
+{
+    QTabBar::initStyleOption(option, tabIndex);
+
+    if(m_suppressHoverState) {
+        option->state &= ~QStyle::State_MouseOver;
+    }
 }
 
 void EditableTabBar::mouseDoubleClickEvent(QMouseEvent* event)
 {
+    if(event->button() > Qt::MiddleButton) {
+        event->ignore();
+        return;
+    }
+
     const QPoint pos = event->position().toPoint();
 
     if(event->button() & Qt::MiddleButton) {
         return;
     }
 
-    if(tabAt(pos) >= 0) {
-        showEditor();
+    const int tab = tabAt(pos);
+    if(tab >= 0) {
+        showEditor(tab);
     }
 
     QTabBar::mouseDoubleClickEvent(event);
@@ -121,13 +150,27 @@ void EditableTabBar::mouseDoubleClickEvent(QMouseEvent* event)
 
 void EditableTabBar::mousePressEvent(QMouseEvent* event)
 {
-    const QPoint pos = event->position().toPoint();
-
-    if(event->button() & Qt::MiddleButton) {
-        emit middleClicked(tabAt(pos));
+    if(event->button() != Qt::LeftButton) {
+        event->ignore();
+        return;
     }
 
     QTabBar::mousePressEvent(event);
+}
+
+void EditableTabBar::mouseReleaseEvent(QMouseEvent* event)
+{
+    if(event->button() & Qt::MiddleButton) {
+        const QPoint pos = event->position().toPoint();
+        const int index  = tabAt(pos);
+        if(index >= 0 || rect().contains(pos)) {
+            Q_EMIT middleClicked(index);
+        }
+        event->accept();
+        return;
+    }
+
+    QTabBar::mouseReleaseEvent(event);
 }
 
 void EditableTabBar::wheelEvent(QWheelEvent* event)
@@ -144,7 +187,7 @@ void EditableTabBar::wheelEvent(QWheelEvent* event)
 
     if(currentIndex() > 0 && currentIndex() < count() - 1) {
         QTabBar::wheelEvent(event);
-        emit tabBarClicked(currentIndex());
+        Q_EMIT tabBarClicked(currentIndex());
         return;
     }
 
@@ -176,7 +219,7 @@ void EditableTabBar::wheelEvent(QWheelEvent* event)
     if(isTabEnabled(proposedIndex) && isTabVisible(proposedIndex)) {
         if(proposedIndex != currentIndex()) {
             setCurrentIndex(proposedIndex);
-            emit tabBarClicked(currentIndex());
+            Q_EMIT tabBarClicked(currentIndex());
             event->accept();
         }
     }

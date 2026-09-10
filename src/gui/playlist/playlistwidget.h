@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,38 +19,105 @@
 
 #pragma once
 
-#include <core/track.h>
-#include <gui/fywidget.h>
+#include "editableplaylistsessionhost.h"
+#include "internalguisettings.h"
+#include "playlistcolumn.h"
+#include "playlistcontroller.h"
+#include "playlistmodel.h"
+#include "playlistpreset.h"
+#include "sortactionhandler.h"
 
+#include <gui/fywidget.h>
+#include <gui/trackselectioncontroller.h>
+#include <gui/widgets/autoheaderview.h>
+
+#include <core/library/sortingregistry.h>
+
+#include <QByteArray>
 #include <QModelIndexList>
+#include <QString>
+
+#include <memory>
+#include <optional>
+
+class QVBoxLayout;
+class QAction;
+class QMenu;
 
 namespace Fooyin {
 class ActionManager;
 class Application;
 class CoverProvider;
+class GuiStyleProvider;
 class MusicLibrary;
+class PlaylistColumnRegistry;
+class PlaylistDelegate;
+class PlaylistSearchController;
 class PlaylistInteractor;
-class PlaylistModel;
 class PlaylistView;
-class PlaylistWidgetPrivate;
 class SettingsManager;
+class SettingsDialogController;
+class SignalThrottler;
+class SortingRegistry;
+class WidgetContext;
+class PlaylistWidgetSession;
+
+struct PlaylistWidgetLayoutState
+{
+    PlaylistPreset currentPreset;
+    bool singleMode{false};
+    PlaylistColumnList columns;
+    std::vector<Qt::Alignment> columnAlignments;
+    QByteArray headerState;
+};
 
 class PlaylistWidget : public FyWidget
 {
     Q_OBJECT
 
 public:
-    // TODO: Separate main playlist logic into it's own class,
-    // as this is quite hacky
-    enum class Mode : uint8_t
+    struct ModeCapabilities
     {
-        Playlist         = 0,
-        DetachedPlaylist = 1,
-        DetachedLibrary  = 2
+        bool editablePlaylist{false};
+        bool playlistBackedSelection{false};
     };
 
-    PlaylistWidget(ActionManager* actionManager, PlaylistInteractor* playlistInteractor, CoverProvider* coverProvider,
-                   Application* core, Mode mode = Mode::Playlist, QWidget* parent = nullptr);
+    struct ContextMenuState
+    {
+        bool hasSelection{false};
+        bool showStopAfter{false};
+        bool showEditablePlaylistActions{false};
+        bool showSortMenu{false};
+        bool showClipboard{false};
+        bool usePlaylistQueueCommands{false};
+        bool disableSortMenu{false};
+    };
+
+    struct ContextMenuRequest
+    {
+        qsizetype selectedCount{0};
+    };
+
+    static PlaylistWidget* createMainPlaylist(ActionManager* actionManager, PlaylistInteractor* playlistInteractor,
+                                              TrackSelectionController* selectionController,
+                                              CoverProvider* coverProvider, Application* core,
+                                              GuiStyleProvider* styleProvider, QWidget* parent = nullptr);
+    static PlaylistWidget* createDetachedPlaylistSearch(ActionManager* actionManager,
+                                                        PlaylistInteractor* playlistInteractor,
+                                                        TrackSelectionController* selectionController,
+                                                        CoverProvider* coverProvider, Application* core,
+                                                        GuiStyleProvider* styleProvider, QWidget* parent = nullptr);
+    static PlaylistWidget* createDetachedLibrarySearch(ActionManager* actionManager,
+                                                       PlaylistInteractor* playlistInteractor,
+                                                       TrackSelectionController* selectionController,
+                                                       CoverProvider* coverProvider, Application* core,
+                                                       GuiStyleProvider* styleProvider, QWidget* parent = nullptr);
+    static PlaylistWidget* createDetachedTracks(ActionManager* actionManager, PlaylistInteractor* playlistInteractor,
+                                                TrackSelectionController* selectionController,
+                                                CoverProvider* coverProvider, Application* core,
+                                                GuiStyleProvider* styleProvider, const TrackList& tracks,
+                                                QWidget* parent = nullptr);
+
     ~PlaylistWidget() override;
 
     [[nodiscard]] PlaylistView* view() const;
@@ -65,13 +132,140 @@ public:
     void loadLayoutData(const QJsonObject& layout) override;
     void finalise() override;
 
-    void searchEvent(const QString& search) override;
+    void searchEvent(const SearchRequest& request) override;
+    bool openIntegratedSearch();
+
+    void resetModel();
+    void resetModelThrottled() const;
+    void changePreset(const PlaylistPreset& preset);
+    void setReadOnly(bool readOnly, bool allowSorting);
+    void doubleClicked(const QModelIndex& index);
+    void middleClicked(const QModelIndex& index);
+    void resetSort(bool force = false);
+    void setHeaderVisible(bool visible);
+    void setScrollbarVisible(bool visible);
+    void setAlternatingRowColors(bool enabled);
+    void selectAll();
+
+    void handlePresetChanged(const PlaylistPreset& preset);
+    void changePlaylistLayout(Playlist* previousPlaylist, const Playlist* playlist);
+    bool followCurrentTrack();
+    void sessionHandleRestoredState();
+    [[nodiscard]] bool hasDelayedStateLoad() const;
+    void clearDelayedStateLoad();
+    void setDelayedStateLoad(QMetaObject::Connection connection);
+
+    [[nodiscard]] const PlaylistWidgetLayoutState& layoutState() const;
+    [[nodiscard]] ActionManager* actionManager() const;
+    [[nodiscard]] PresetRegistry* presetRegistry() const;
+    [[nodiscard]] PlaylistController* playlistController() const;
+    [[nodiscard]] PlayerController* playerController() const;
+    [[nodiscard]] MusicLibrary* musicLibrary() const;
+    [[nodiscard]] PlaylistInteractor* playlistInteractor() const;
+    [[nodiscard]] SettingsManager* settingsManager() const;
+    [[nodiscard]] SignalThrottler* resetThrottler() const;
+    [[nodiscard]] LibraryManager* libraryManager() const;
+    [[nodiscard]] TrackSelectionController* selectionController() const;
+    [[nodiscard]] WidgetContext* playlistContext() const;
+    [[nodiscard]] PlaylistModel* playlistModel() const;
+    [[nodiscard]] PlaylistView* playlistView() const;
+
+    [[nodiscard]] PlaylistWidgetSessionHost& sessionHost();
+    [[nodiscard]] EditablePlaylistSessionHost& editableSessionHost();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
 private:
-    std::unique_ptr<PlaylistWidgetPrivate> p;
+    PlaylistWidget(ActionManager* actionManager, PlaylistInteractor* playlistInteractor, CoverProvider* coverProvider,
+                   Application* core, GuiStyleProvider* styleProvider, TrackSelectionController* selectionController,
+                   std::unique_ptr<PlaylistWidgetSession> session, QWidget* parent);
+    void populateTrackContextMenu(QMenu* menu, const ContextMenuRequest& request);
+    void showHeaderMenu(const QPoint& pos);
+    void addSortMenu(QMenu* parent, bool disabled);
+    void refreshSortActions();
+    void updateSortActionState();
+    void addClipboardMenu(QMenu* parent, bool hasSelection) const;
+    void addSingleModeAction(QMenu* parent);
+    void addCustomLayoutAction(QMenu* parent);
+    void addPresetMenu(QMenu* parent);
+    void addColumnsMenu(QMenu* parent);
+    void addSettingsAction(QMenu* menu);
+    void applyInitialViewSettings();
+    void applySessionTexts();
+    void refreshViewStyle();
+    void updateMetadataEditTriggers(bool readOnly);
+    void handleColumnChanged(const PlaylistColumn& column);
+    void handleColumnRemoved(int id);
+    void resetColumnsToDefault();
+    void setColumnVisible(int columnId, bool visible);
+    void setSingleMode(bool enabled);
+    void ensureDefaultColumns(PlaylistWidgetLayoutState& state) const;
+    void applyDefaultHeaderConfiguration();
+    [[nodiscard]] PlaylistWidgetLayoutState captureLayoutState() const;
+    [[nodiscard]] QString serialiseLayoutState(const PlaylistWidgetLayoutState& state) const;
+    [[nodiscard]] std::optional<PlaylistWidgetLayoutState> deserialiseLayoutState(const QString& encoded) const;
+    void applyLayoutState(const PlaylistWidgetLayoutState& state);
+    void saveRememberedLayout(Playlist* playlist);
+    [[nodiscard]] bool remembersLayout(const Playlist* playlist) const;
+    void updateSpans();
+    void applyBackgroundSettings();
+    void reloadBackgroundCover(const Track& track = {});
+    void updateVisibleCoverPins();
+    void executeClickAction(TrackAction action);
+
+    void handleMetadataWriteRequested(const TrackList& tracks);
+    void handleBulkWriteRequested(const TrackList& tracks);
+
+    void setupConnections();
+    void setupActions();
+
+    ActionManager* m_actionManager;
+    PlaylistInteractor* m_playlistInteractor;
+    PlaylistController* m_playlistController;
+    CoverProvider* m_coverProvider;
+    PlayerController* m_playerController;
+    LibraryManager* m_libraryManager;
+    TrackSelectionController* m_selectionController;
+    MusicLibrary* m_library;
+    SettingsManager* m_settings;
+    GuiStyleProvider* m_styleProvider;
+    SettingsDialogController* m_settingsDialog;
+
+    std::unique_ptr<PlaylistWidgetSession> m_session;
+    QMetaObject::Connection m_delayedStateLoad;
+    SignalThrottler* m_resetThrottler;
+
+    PlaylistColumnRegistry* m_columnRegistry;
+    PresetRegistry* m_presetRegistry;
+    SortingRegistry* m_sortRegistry;
+
+    QVBoxLayout* m_layout;
+    PlaylistModel* m_model;
+    PlaylistDelegate* m_delgate;
+    PlaylistView* m_playlistView;
+    AutoHeaderView* m_header;
+    PlaylistWidgetLayoutState m_layoutState;
+    PlaylistWidgetLayoutState m_defaultLayoutState;
+    QString m_loadedPlaylistLayout;
+    // Until playlist settings are per-playlist
+    bool m_useGlobalPresetState;
+
+    WidgetContext* m_playlistContext;
+    TrackAction m_doubleClickAction;
+    TrackAction m_middleClickAction;
+    bool m_startPlaybackOnSend;
+    QAction* m_playAction;
+    std::unique_ptr<SortActionHandler> m_sortActions;
+
+    int m_bgCoverRequestId;
+    PlaylistBgImage m_bgImageMode;
+    Track::Cover m_bgCoverType;
+    QString m_bgCustomImage;
+    Track m_bgCoverTrack;
+
+    std::unique_ptr<EditablePlaylistSessionHost> m_host;
+    PlaylistSearchController* m_searchController;
 };
 } // namespace Fooyin

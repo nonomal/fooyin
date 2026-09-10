@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,9 @@
 namespace Fooyin::Scripting {
 QString num(const QStringList& vec);
 QString replace(const QStringList& vec);
+QString regexReplace(const QStringList& vec);
+QString regexMatch(const QStringList& vec);
+QString regexMatches(const QStringList& vec);
 QString ascii(const QStringList& vec);
 QString slice(const QStringList& vec);
 QString chop(const QStringList& vec);
@@ -38,12 +41,9 @@ QString stristr(const QStringList& vec);
 QString strstrLast(const QStringList& vec);
 QString stristrLast(const QStringList& vec);
 QString split(const QStringList& vec);
+QString join(const QStringList& vec);
 QString len(const QStringList& vec);
 QString longest(const QStringList& vec);
-ScriptResult strcmp(const QStringList& vec);
-ScriptResult stricmp(const QStringList& vec);
-ScriptResult longer(const QStringList& vec);
-QString sep();
 QString crlf(const QStringList& vec);
 QString tab(const QStringList& vec);
 QString swapPrefix(const QStringList& vec);
@@ -64,4 +64,19 @@ QString ext(const QStringList& vec);
 QString filename(const QStringList& vec);
 QString progress(const QStringList& vec);
 QString progress2(const QStringList& vec);
+QString doclink(const QStringList& vec);
+QString cmdlink(const QStringList& vec);
+QString urlencode(const QStringList& vec);
+QString crc32(const QStringList& vec);
+QString hex(const QStringList& vec);
+
+QString sep();
+
+ScriptResult strcmp(const QStringList& vec);
+ScriptResult stricmp(const QStringList& vec);
+ScriptResult regexTest(const QStringList& vec);
+ScriptResult longer(const QStringList& vec);
+ScriptResult isalpha(const QStringList& vec);
+ScriptResult isalnum(const QStringList& vec);
+ScriptResult isnum(const QStringList& vec);
 } // namespace Fooyin::Scripting

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,13 +20,11 @@
 #include "systemtrayicon.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
-#include <utils/utils.h>
 
 #include <QMenu>
-
-constexpr auto IconSize = 22;
 
 namespace Fooyin {
 SystemTrayIcon::SystemTrayIcon(ActionManager* actionManager, QObject* parent)
@@ -34,7 +32,7 @@ SystemTrayIcon::SystemTrayIcon(ActionManager* actionManager, QObject* parent)
     , m_actionManager{actionManager}
     , m_menu{std::make_unique<QMenu>()}
 {
-    setIcon(Utils::iconFromTheme(Constants::Icons::Fooyin).pixmap(IconSize));
+    setIcon(Gui::applicationIcon());
 
     auto* stop      = actionManager->command(Constants::Actions::Stop)->action();
     auto* prev      = actionManager->command(Constants::Actions::Previous)->action();
@@ -56,11 +54,11 @@ SystemTrayIcon::SystemTrayIcon(ActionManager* actionManager, QObject* parent)
 
     QObject::connect(this, &QSystemTrayIcon::activated, this, [this, playPause](const auto reason) {
         switch(reason) {
-            case(QSystemTrayIcon::DoubleClick):
-            case(QSystemTrayIcon::Trigger):
-                emit toggleVisibility();
+            case DoubleClick:
+            case Trigger:
+                Q_EMIT toggleVisibility();
                 break;
-            case(QSystemTrayIcon::MiddleClick):
+            case MiddleClick:
                 playPause->trigger();
                 break;
             default:

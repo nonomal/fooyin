@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <core/application.h>
 #include <core/database/trackdatabase.h>
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <gui/statusevent.h>
 #include <gui/widgets/elapsedprogressdialog.h>
 #include <utils/actions/actioncontainer.h>
@@ -36,12 +37,19 @@
 #include <QAction>
 #include <QMainWindow>
 #include <QMenu>
+#include <QPointer>
+
+using namespace Qt::StringLiterals;
+
+constexpr auto RecentlyPlayedQuery = "lastplayed DURING LAST 2 WEEKS SORT DESCENDING BY %lastplayed%"_L1;
+constexpr auto RecentlyAddedQuery  = "addedtime DURING LAST 2 WEEKS SORT DESCENDING BY %addedtime%"_L1;
 
 namespace Fooyin {
 LibraryMenu::LibraryMenu(Application* core, ActionManager* actionManager, QObject* parent)
     : QObject{parent}
     , m_database{core->databasePool()}
     , m_library{core->library()}
+    , m_activeLibraryScanId{-1}
 {
     auto* libraryMenu = actionManager->actionContainer(Constants::Menus::Library);
 
@@ -65,15 +73,15 @@ LibraryMenu::LibraryMenu(Application* core, ActionManager* actionManager, QObjec
     dbMenu->addAction(removeUnavailable);
     QObject::connect(removeUnavailable, &QAction::triggered, this, &LibraryMenu::removeUnavailbleTracks);
 
-    auto* refreshLibrary
-        = new QAction(Utils::iconFromTheme(Constants::Icons::RescanLibrary), tr("&Scan for changes"), this);
+    auto* refreshLibrary = new QAction(tr("&Scan for changes"), this);
+    Gui::setThemeIcon(refreshLibrary, Constants::Icons::RescanLibrary);
     refreshLibrary->setStatusTip(tr("Update tracks in libraries which have been modified on disk"));
     auto* refreshLibraryCmd = actionManager->registerAction(refreshLibrary, Constants::Actions::Refresh);
     refreshLibraryCmd->setCategories(libraryCategory);
     QObject::connect(refreshLibrary, &QAction::triggered, core->library(), &MusicLibrary::refreshAll);
 
-    auto* rescanLibrary
-        = new QAction(Utils::iconFromTheme(Constants::Icons::RescanLibrary), tr("&Reload tracks"), this);
+    auto* rescanLibrary = new QAction(tr("&Reload tracks"), this);
+    Gui::setThemeIcon(rescanLibrary, Constants::Icons::RescanLibrary);
     rescanLibrary->setStatusTip(tr("Reload metadata from files for all tracks in libraries"));
     auto* rescanLibraryCmd = actionManager->registerAction(rescanLibrary, Constants::Actions::Rescan);
     rescanLibraryCmd->setCategories(libraryCategory);
@@ -83,7 +91,20 @@ LibraryMenu::LibraryMenu(Application* core, ActionManager* actionManager, QObjec
     search->setStatusTip(tr("Search all libraries"));
     auto* searchCmd = actionManager->registerAction(search, Constants::Actions::SearchLibrary);
     searchCmd->setCategories(libraryCategory);
-    QObject::connect(search, &QAction::triggered, this, &LibraryMenu::requestSearch);
+    QObject::connect(search, &QAction::triggered, this, [this]() { Q_EMIT requestSearch({}); });
+
+    auto* recentlyPlayed = new QAction(tr("Show Recently &Played"), this);
+    recentlyPlayed->setStatusTip(tr("Show tracks played in the last few weeks"));
+    auto* recentlyPlayedCmd = actionManager->registerAction(recentlyPlayed, "Library.ShowRecentlyPlayed");
+    recentlyPlayedCmd->setCategories(libraryCategory);
+    QObject::connect(recentlyPlayed, &QAction::triggered, this,
+                     [this]() { Q_EMIT requestSearch(RecentlyPlayedQuery); });
+
+    auto* recentlyAdded = new QAction(tr("Show Recently &Added"), this);
+    recentlyAdded->setStatusTip(tr("Show tracks added in the last few weeks"));
+    auto* recentlyAddedCmd = actionManager->registerAction(recentlyAdded, "Library.ShowRecentlyAdded");
+    recentlyAddedCmd->setCategories(libraryCategory);
+    QObject::connect(recentlyAdded, &QAction::triggered, this, [this]() { Q_EMIT requestSearch(RecentlyAddedQuery); });
 
     auto* quickSearch = new QAction(tr("&Quick Search"), this);
     quickSearch->setStatusTip(tr("Show quick search popup"));
@@ -91,7 +112,8 @@ LibraryMenu::LibraryMenu(Application* core, ActionManager* actionManager, QObjec
     quickSearchCmd->setCategories(libraryCategory);
     QObject::connect(quickSearch, &QAction::triggered, this, &LibraryMenu::requestQuickSearch);
 
-    auto* openSettings = new QAction(Utils::iconFromTheme(Constants::Icons::Settings), tr("&Configure"), this);
+    auto* openSettings = new QAction(tr("&Configure"), this);
+    Gui::setThemeIcon(openSettings, Constants::Icons::Settings);
     openSettings->setStatusTip(tr("Open the library page in the settings dialog"));
     auto* openSettingsCmd = actionManager->registerAction(openSettings, "Library.Configure");
     openSettingsCmd->setCategories(libraryCategory);
@@ -99,12 +121,53 @@ LibraryMenu::LibraryMenu(Application* core, ActionManager* actionManager, QObjec
         core->settingsManager()->settingsDialog()->openAtPage(Constants::Page::LibraryGeneral);
     });
 
+    auto* cancelScan = new QAction(tr("Cancel current scan"), this);
+    Gui::setThemeIcon(cancelScan, Constants::Icons::Close);
+    cancelScan->setVisible(false);
+    cancelScan->setStatusTip(tr("Cancel the current library scan"));
+
+    QObject::connect(m_library, &MusicLibrary::scanProgress, this, [this, cancelScan](const ScanProgress& progress) {
+        const bool activeLibraryScan = progress.type == ScanRequest::Library && progress.id >= 0
+                                    && progress.phase != ScanProgress::Phase::Finished;
+
+        if(activeLibraryScan) {
+            m_activeLibraryScanId = progress.id;
+            cancelScan->setText(tr("Cancel current scan"));
+            cancelScan->setStatusTip(tr("Cancel the current scan"));
+            cancelScan->setVisible(true);
+        }
+        else {
+            m_activeLibraryScanId = -1;
+            cancelScan->setVisible(false);
+        }
+    });
+    QObject::connect(cancelScan, &QAction::triggered, this, [this]() {
+        if(m_activeLibraryScanId >= 0) {
+            m_library->cancelScan(m_activeLibraryScanId);
+        }
+    });
+    QObject::connect(m_library, &MusicLibrary::scanSummary, this,
+                     [](int id, const ScanRequest::Type type, const ScanSummaryCounts& summary) {
+                         if(type != ScanRequest::Library || id < 0) {
+                             return;
+                         }
+
+                         StatusEvent::post(tr("Library scan finished: %1, %2, %3")
+                                               .arg(tr("%Ln track(s) added", "", summary.added),
+                                                    tr("%Ln track(s) updated", "", summary.updated),
+                                                    tr("%Ln track(s) removed", "", summary.removed)));
+                     });
+
     libraryMenu->addAction(refreshLibraryCmd);
     libraryMenu->addAction(rescanLibraryCmd);
+    libraryMenu->addAction(cancelScan);
     libraryMenu->addSeparator();
     libraryMenu->addMenu(dbMenu);
     libraryMenu->addAction(searchCmd);
     libraryMenu->addAction(quickSearchCmd);
+    libraryMenu->addSeparator();
+    libraryMenu->addAction(recentlyPlayedCmd);
+    libraryMenu->addAction(recentlyAddedCmd);
     libraryMenu->addSeparator();
     libraryMenu->addAction(openSettingsCmd);
 }
@@ -119,14 +182,15 @@ void LibraryMenu::removeUnavailbleTracks()
     progress->setWindowTitle(tr("Removing unavailable tracks"));
 
     m_deleteRequest = m_library->removeUnavailbleTracks();
-    QObject::connect(
-        m_library, &MusicLibrary::tracksDeleted, this,
-        [this, progress]() {
-            progress->setValue(1);
-            progress->deleteLater();
-            m_deleteRequest = {};
-        },
-        Qt::SingleShotConnection);
+
+    const QPointer progressGuard{progress};
+    m_deleteRequest.finished.then(this, [this, progressGuard](const WriteResult& /*result*/) {
+        if(progressGuard) {
+            progressGuard->setValue(1);
+            progressGuard->deleteLater();
+        }
+        m_deleteRequest = {};
+    });
 
     QObject::connect(progress, &ElapsedProgressDialog::cancelled, progress, [this, progress]() {
         if(m_deleteRequest.cancel) {

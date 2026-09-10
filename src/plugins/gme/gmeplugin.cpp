@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,17 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Gme {
+namespace {
+class GmePluginSettingsProvider : public PluginSettingsProvider
+{
+protected:
+    QDialog* createSettings(QWidget* parent) override
+    {
+        return new GmeSettings(parent);
+    }
+};
+} // namespace
+
 QString GmePlugin::inputName() const
 {
     return u"Game Music Emu"_s;
@@ -42,16 +53,9 @@ InputCreator GmePlugin::inputCreator() const
     return creator;
 }
 
-bool GmePlugin::hasSettings() const
+std::unique_ptr<PluginSettingsProvider> GmePlugin::settingsProvider() const
 {
-    return true;
-}
-
-void GmePlugin::showSettings(QWidget* parent)
-{
-    auto* dialog = new GmeSettings(parent);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->show();
+    return std::make_unique<GmePluginSettingsProvider>();
 }
 } // namespace Fooyin::Gme
 

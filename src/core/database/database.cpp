@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,7 +30,7 @@
 
 using namespace Qt::StringLiterals;
 
-constexpr auto CurrentSchemaVersion = 14;
+constexpr auto CurrentSchemaVersion = 20;
 
 namespace {
 Fooyin::DbConnection::DbParams dbConnectionParams()
@@ -91,18 +91,18 @@ bool Database::initSchema()
     const auto upgradeResult = schema.upgradeDatabase(CurrentSchemaVersion, u"://dbschema.xml"_s);
 
     switch(upgradeResult) {
-        case(DbSchema::UpgradeResult::Success):
-        case(DbSchema::UpgradeResult::IsCurrent):
-        case(DbSchema::UpgradeResult::BackwardsCompatible):
+        case DbSchema::UpgradeResult::Success:
+        case DbSchema::UpgradeResult::IsCurrent:
+        case DbSchema::UpgradeResult::BackwardsCompatible:
             changeStatus(Status::Ok);
             return true;
-        case(DbSchema::UpgradeResult::Error):
+        case DbSchema::UpgradeResult::Error:
             changeStatus(Status::SchemaError);
             return false;
-        case(DbSchema::UpgradeResult::Failed):
+        case DbSchema::UpgradeResult::Failed:
             changeStatus(Status::DbError);
             return false;
-        case(DbSchema::UpgradeResult::Incompatible):
+        case DbSchema::UpgradeResult::Incompatible:
             changeStatus(Status::Incompatible);
             return false;
         default:
@@ -113,6 +113,6 @@ bool Database::initSchema()
 void Database::changeStatus(Status status)
 {
     m_status = status;
-    emit statusChanged(status);
+    Q_EMIT statusChanged(status);
 }
 } // namespace Fooyin

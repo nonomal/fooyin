@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,6 +28,25 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::OpenMpt {
+namespace {
+class OpenMptPluginSettingsProvider : public PluginSettingsProvider
+{
+public:
+    explicit OpenMptPluginSettingsProvider(SettingsManager* settings)
+        : m_settings{settings}
+    { }
+
+protected:
+    QDialog* createSettings(QWidget* parent) override
+    {
+        return new OpenMptSettings(m_settings, parent);
+    }
+
+private:
+    SettingsManager* m_settings;
+};
+} // namespace
+
 void OpenMptPlugin::initialise(const CorePluginContext& context)
 {
     m_settings = context.settingsManager;
@@ -57,16 +76,9 @@ InputCreator OpenMptPlugin::inputCreator() const
     return creator;
 }
 
-bool OpenMptPlugin::hasSettings() const
+std::unique_ptr<PluginSettingsProvider> OpenMptPlugin::settingsProvider() const
 {
-    return true;
-}
-
-void OpenMptPlugin::showSettings(QWidget* parent)
-{
-    auto* dialog = new OpenMptSettings(m_settings, parent);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->show();
+    return std::make_unique<OpenMptPluginSettingsProvider>(m_settings);
 }
 } // namespace Fooyin::OpenMpt
 

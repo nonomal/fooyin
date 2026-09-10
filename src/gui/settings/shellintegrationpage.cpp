@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -52,6 +52,7 @@ private:
     QLineEdit* m_excludeTypes;
     ScriptLineEdit* m_externalSortScript;
     QCheckBox* m_alwaysSend;
+    QCheckBox* m_openFileAddDirectory;
     QLineEdit* m_externalPlaylist;
 };
 
@@ -60,7 +61,8 @@ ShellIntegrationPageWidget::ShellIntegrationPageWidget(SettingsManager* settings
     , m_restrictTypes{new QLineEdit(this)}
     , m_excludeTypes{new QLineEdit(this)}
     , m_externalSortScript{new ScriptLineEdit(this)}
-    , m_alwaysSend{new QCheckBox(tr("Always send to playlist"), this)}
+    , m_alwaysSend{new QCheckBox(tr("Always replace playlist"), this)}
+    , m_openFileAddDirectory{new QCheckBox(tr("Load files from the same folder when opening one file"), this)}
     , m_externalPlaylist{new QLineEdit(this)}
 {
     auto* fileTypesGroup  = new QGroupBox(tr("File Types"), this);
@@ -71,28 +73,33 @@ ShellIntegrationPageWidget::ShellIntegrationPageWidget(SettingsManager* settings
     fileTypesLayout->addWidget(m_restrictTypes, row++, 1);
     fileTypesLayout->addWidget(new QLabel(tr("Exclude") + ":"_L1, this), row, 0);
     fileTypesLayout->addWidget(m_excludeTypes, row++, 1);
-    fileTypesLayout->addWidget(new QLabel(u"🛈 e.g. \"mp3;m4a\""_s, this), row++, 1);
+    //: Example of semicolon-separated file extensions (e.g. mp3;m4a)
+    fileTypesLayout->addWidget(new QLabel(u"🛈 "_s + tr("e.g. \"%1\"").arg("mp3;m4a"_L1), this), row++, 1);
     fileTypesLayout->setColumnStretch(1, 1);
 
     auto* playlistGroup       = new QGroupBox(tr("Playlist"), this);
     auto* playlistGroupLayout = new QGridLayout(playlistGroup);
 
-    m_externalPlaylist->setToolTip(tr("When opening files, always send to playlist, replacing all existing tracks"));
+    m_externalPlaylist->setToolTip(
+        tr("When opening files, always replace the playlist contents with the incoming tracks"));
+    m_openFileAddDirectory->setToolTip(
+        tr("When opening one file from the file manager, add all supported files from the same folder and play the "
+           "opened file"));
 
     row = 0;
     playlistGroupLayout->addWidget(m_alwaysSend, row++, 0, 1, 2);
+    playlistGroupLayout->addWidget(m_openFileAddDirectory, row++, 0, 1, 2);
     playlistGroupLayout->addWidget(new QLabel(tr("Playlist name") + ":"_L1, this), row, 0);
     playlistGroupLayout->addWidget(m_externalPlaylist, row++, 1);
     playlistGroupLayout->addWidget(new QLabel(tr("Sort incoming tracks by") + ":"_L1, this), row, 0);
     playlistGroupLayout->addWidget(m_externalSortScript, row++, 1);
-    playlistGroupLayout->setRowStretch(row, 1);
     playlistGroupLayout->setColumnStretch(1, 1);
 
     auto* mainLayout = new QGridLayout(this);
 
     row = 0;
     mainLayout->addWidget(fileTypesGroup, row++, 0);
-    mainLayout->addWidget(playlistGroup, row, 0);
+    mainLayout->addWidget(playlistGroup, row++, 0);
     mainLayout->setRowStretch(row, 1);
 }
 
@@ -107,6 +114,7 @@ void ShellIntegrationPageWidget::load()
     m_excludeTypes->setText(excludeExtensions.join(u';'));
 
     m_alwaysSend->setChecked(m_settings->value<Settings::Core::OpenFilesSendTo>());
+    m_openFileAddDirectory->setChecked(m_settings->value<Settings::Core::OpenFileAddDirectory>());
     m_externalPlaylist->setText(m_settings->value<Settings::Core::OpenFilesPlaylist>());
     m_externalSortScript->setText(m_settings->value<Settings::Core::ExternalSortScript>());
 }
@@ -119,6 +127,7 @@ void ShellIntegrationPageWidget::apply()
                         m_excludeTypes->text().split(u';', Qt::SkipEmptyParts));
 
     m_settings->set<Settings::Core::OpenFilesSendTo>(m_alwaysSend->isChecked());
+    m_settings->set<Settings::Core::OpenFileAddDirectory>(m_openFileAddDirectory->isChecked());
     m_settings->set<Settings::Core::OpenFilesPlaylist>(m_externalPlaylist->text());
     m_settings->set<Settings::Core::ExternalSortScript>(m_externalSortScript->text());
 }
@@ -129,6 +138,7 @@ void ShellIntegrationPageWidget::reset()
     m_settings->fileRemove(Settings::Core::Internal::ExternalExcludeTypes);
 
     m_settings->reset<Settings::Core::OpenFilesSendTo>();
+    m_settings->reset<Settings::Core::OpenFileAddDirectory>();
     m_settings->reset<Settings::Core::OpenFilesPlaylist>();
     m_settings->reset<Settings::Core::ExternalSortScript>();
 }
@@ -138,7 +148,8 @@ ShellIntegrationPage::ShellIntegrationPage(SettingsManager* settings, QObject* p
 {
     setId(Constants::Page::ShellIntegration);
     setName(tr("General"));
-    setCategory({tr("Shell Integration")});
+    setCategory({tr("Integrations"), tr("System")});
+    setRelativePosition(SettingsPageRelativePosition::After, Constants::Page::Plugins);
     setWidgetCreator([settings] { return new ShellIntegrationPageWidget(settings); });
 }
 } // namespace Fooyin

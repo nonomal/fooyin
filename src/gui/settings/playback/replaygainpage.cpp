@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <core/coresettings.h>
 #include <core/engine/enginecontroller.h>
 #include <core/internalcoresettings.h>
+#include <core/track.h>
 #include <gui/guiconstants.h>
 #include <gui/widgets/doubleslidereditor.h>
 #include <gui/widgets/scriptlineedit.h>
@@ -49,6 +50,9 @@ public:
     void reset() override;
 
 private:
+    void updateMode(int mode);
+    void updateType(int type);
+
     SettingsManager* m_settings;
 
     QRadioButton* m_disabled;
@@ -127,32 +131,28 @@ ReplayGainPageWidget::ReplayGainPageWidget(SettingsManager* settings)
     m_preAmp->setToolTip(preAmpToolTip);
     preAmpLabel->setToolTip(preAmpToolTip);
 
-    preAmpLayout->addWidget(rgPreAmpLabel, 0, 0);
-    preAmpLayout->addWidget(m_rgPreAmp, 0, 1);
-    preAmpLayout->addWidget(preAmpLabel, 1, 0);
-    preAmpLayout->addWidget(m_preAmp, 1, 1);
+    int row{0};
+    preAmpLayout->addWidget(rgPreAmpLabel, row, 0);
+    preAmpLayout->addWidget(m_rgPreAmp, row++, 1);
+    preAmpLayout->addWidget(preAmpLabel, row, 0);
+    preAmpLayout->addWidget(m_preAmp, row++, 1);
     preAmpLayout->setColumnStretch(1, 1);
 
-    layout->addWidget(modeGroupBox, 0, 0);
-    layout->addWidget(typeGroupBox, 1, 0);
-    layout->addWidget(preAmpGroup, 2, 0);
+    row = 0;
+    layout->addWidget(modeGroupBox, row++, 0);
+    layout->addWidget(typeGroupBox, row++, 0);
+    layout->addWidget(preAmpGroup, row++, 0);
 
     layout->setRowStretch(layout->rowCount(), 1);
+
+    m_settings->subscribe<Settings::Core::RGMode>(this, &ReplayGainPageWidget::updateMode);
+    m_settings->subscribe<Settings::Core::RGType>(this, &ReplayGainPageWidget::updateType);
 }
 
 void ReplayGainPageWidget::load()
 {
-    const auto mode = static_cast<AudioEngine::RGProcessing>(m_settings->value<Settings::Core::RGMode>());
-    m_disabled->setChecked(mode == AudioEngine::NoProcessing);
-    m_applyGain->setChecked(mode == AudioEngine::ApplyGain);
-    m_applyGainClipping->setChecked(
-        mode == static_cast<AudioEngine::RGProcessing>(AudioEngine::ApplyGain | AudioEngine::PreventClipping));
-    m_clipping->setChecked(mode == AudioEngine::PreventClipping);
-
-    const auto gainType = static_cast<ReplayGainType>(m_settings->value<Settings::Core::RGType>());
-    m_trackGain->setChecked(gainType == ReplayGainType::Track);
-    m_albumGain->setChecked(gainType == ReplayGainType::Album);
-    m_orderGain->setChecked(gainType == ReplayGainType::PlaybackOrder);
+    updateMode(m_settings->value<Settings::Core::RGMode>());
+    updateType(m_settings->value<Settings::Core::RGType>());
 
     const auto rgPreAmp = static_cast<double>(m_settings->value<Settings::Core::RGPreAmp>());
     m_rgPreAmp->setValue(rgPreAmp);
@@ -160,21 +160,38 @@ void ReplayGainPageWidget::load()
     m_preAmp->setValue(preAmp);
 }
 
+void ReplayGainPageWidget::updateMode(int modeValue)
+{
+    const auto mode = static_cast<Engine::RGProcessing>(modeValue);
+    m_disabled->setChecked(mode == Engine::NoProcessing);
+    m_applyGain->setChecked(mode == Engine::ApplyGain);
+    m_applyGainClipping->setChecked(mode == (Engine::ApplyGain | Engine::PreventClipping));
+    m_clipping->setChecked(mode == Engine::PreventClipping);
+}
+
+void ReplayGainPageWidget::updateType(int typeValue)
+{
+    const auto gainType = static_cast<ReplayGainType>(typeValue);
+    m_trackGain->setChecked(gainType == ReplayGainType::Track);
+    m_albumGain->setChecked(gainType == ReplayGainType::Album);
+    m_orderGain->setChecked(gainType == ReplayGainType::PlaybackOrder);
+}
+
 void ReplayGainPageWidget::apply()
 {
-    int mode{AudioEngine::NoProcessing};
+    int mode{Engine::NoProcessing};
 
     if(m_disabled->isChecked()) {
-        mode = AudioEngine::NoProcessing;
+        mode = Engine::NoProcessing;
     }
     else if(m_applyGain->isChecked()) {
-        mode = AudioEngine::ApplyGain;
+        mode = Engine::ApplyGain;
     }
     else if(m_applyGainClipping->isChecked()) {
-        mode = AudioEngine::ApplyGain | AudioEngine::PreventClipping;
+        mode = Engine::ApplyGain | Engine::PreventClipping;
     }
     else if(m_clipping->isChecked()) {
-        mode = AudioEngine::PreventClipping;
+        mode = Engine::PreventClipping;
     }
 
     m_settings->set<Settings::Core::RGMode>(mode);
@@ -196,6 +213,7 @@ void ReplayGainPageWidget::apply()
 void ReplayGainPageWidget::reset()
 {
     m_settings->reset<Settings::Core::RGMode>();
+    m_settings->reset<Settings::Core::Internal::ReplayGainLastActiveMode>();
     m_settings->reset<Settings::Core::RGType>();
     m_settings->reset<Settings::Core::RGPreAmp>();
     m_settings->reset<Settings::Core::NonRGPreAmp>();

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,9 +25,13 @@
 
 #include <QDialog>
 
+#include <memory>
+
 namespace Fooyin {
+class AudioLoader;
 class MusicLibrary;
 class SettingsManager;
+class LibraryManager;
 
 namespace FileOps {
 class FileOpsDialogPrivate;
@@ -37,14 +41,15 @@ class FileOpsDialog : public QDialog
     Q_OBJECT
 
 public:
-    FileOpsDialog(MusicLibrary* library, const TrackList& tracks, Operation operation, SettingsManager* settings,
+    FileOpsDialog(MusicLibrary* library, std::shared_ptr<AudioLoader> audioLoader, const TrackList& tracks,
+                  Operation operation, SettingsManager* settings, LibraryManager* libraryManager = nullptr,
                   QWidget* parent = nullptr);
 
     void loadPreset(const QString& name);
 
     void done(int value) override;
 
-signals:
+Q_SIGNALS:
     void presetsChanged();
 
 private:

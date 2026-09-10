@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 
 class QTcpServer;
 class QTcpSocket;
@@ -37,7 +38,7 @@ public:
 
     void setAuthTokenName(const QString& name);
 
-signals:
+Q_SIGNALS:
     void tokenReceived(const QString& token);
 
 private:
@@ -47,7 +48,7 @@ private:
 
     QString m_callbackUrl;
     QTcpServer* m_server;
-    QTcpSocket* m_socket;
+    QPointer<QTcpSocket> m_socket;
     QString m_tokenName;
     QByteArray requestData;
 };

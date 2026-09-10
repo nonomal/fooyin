@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,19 +19,32 @@
 
 #include "layoutcommands.h"
 
+#include "editablelayout_p.h"
+#include "widgets/dummy.h"
+
 #include <gui/editablelayout.h>
+#include <gui/layoutprovider.h>
 #include <gui/widgetcontainer.h>
 #include <gui/widgetprovider.h>
 
 #include <QJsonArray>
 
+#include <utility>
+
 namespace Fooyin {
+LayoutChangeCommand::LayoutChangeCommand(EditableLayout* layout)
+    : LayoutChangeCommand{layout, nullptr, nullptr}
+{ }
+
 LayoutChangeCommand::LayoutChangeCommand(EditableLayout* layout, WidgetProvider* provider, WidgetContainer* container)
     : m_layout{layout}
     , m_provider{provider}
     , m_container{container}
-    , m_containerId{container->id()}
-{ }
+{
+    if(container) {
+        m_containerId = container->id();
+    }
+}
 
 bool LayoutChangeCommand::checkContainer()
 {
@@ -42,6 +55,27 @@ bool LayoutChangeCommand::checkContainer()
     }
 
     return m_container != nullptr;
+}
+
+SwitchLayoutCommand::SwitchLayoutCommand(EditableLayoutPrivate* editableLayout, FyLayout layout)
+    : LayoutChangeCommand{editableLayout->m_self}
+    , m_editableLayout{editableLayout}
+    , m_oldLayout{m_layout->saveCurrentToLayout(editableLayout->m_layoutProvider->currentLayout().name(), true)}
+    , m_newLayout{std::move(layout)}
+{ }
+
+void SwitchLayoutCommand::undo()
+{
+    m_newLayout = m_layout->saveCurrentToLayout(m_newLayout.name(), true);
+    m_editableLayout->m_layoutProvider->saveLayout(m_newLayout);
+    m_editableLayout->changeLayout(m_oldLayout);
+}
+
+void SwitchLayoutCommand::redo()
+{
+    m_oldLayout = m_layout->saveCurrentToLayout(m_oldLayout.name(), true);
+    m_editableLayout->m_layoutProvider->saveLayout(m_oldLayout);
+    m_editableLayout->changeLayout(m_newLayout);
 }
 
 AddWidgetCommand::AddWidgetCommand(EditableLayout* layout, WidgetProvider* provider, WidgetContainer* container,
@@ -268,6 +302,77 @@ void RemoveWidgetCommand::redo()
         m_containerState = m_container->saveState();
 
         m_container->removeWidget(m_index);
+    }
+}
+
+CollapseContainerCommand::CollapseContainerCommand(EditableLayout* layout, WidgetProvider* provider,
+                                                   WidgetContainer* container, const Id& containerId)
+    : LayoutChangeCommand{layout, provider, container}
+    , m_index{-1}
+{
+    auto* containerToCollapse = qobject_cast<WidgetContainer*>(container->widgetAtId(containerId));
+    if(!containerToCollapse) {
+        return;
+    }
+
+    m_index              = container->widgetIndex(containerId);
+    m_collapsedContainer = EditableLayout::saveWidget(containerToCollapse);
+
+    for(auto* widget : containerToCollapse->widgets()) {
+        if(!qobject_cast<Dummy*>(widget)) {
+            if(m_promotedWidget.empty()) {
+                m_promotedWidget = EditableLayout::saveWidget(widget);
+            }
+            else {
+                m_promotedWidget = {};
+                return;
+            }
+        }
+    }
+}
+
+void CollapseContainerCommand::undo()
+{
+    if(!checkContainer()) {
+        return;
+    }
+
+    if(m_index >= 0 && !m_collapsedContainer.empty()) {
+        m_container->removeWidget(m_index);
+
+        QMetaObject::invokeMethod(
+            m_container,
+            [this]() {
+                if(auto* container = EditableLayout::loadWidget(m_provider, m_collapsedContainer)) {
+                    m_container->insertWidget(m_index, container);
+                    container->finalise();
+                    m_container->restoreState(m_containerState);
+                }
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void CollapseContainerCommand::redo()
+{
+    if(!checkContainer()) {
+        return;
+    }
+
+    if(m_index >= 0 && !m_promotedWidget.empty()) {
+        m_containerState = m_container->saveState();
+        m_container->removeWidget(m_index);
+
+        QMetaObject::invokeMethod(
+            m_container,
+            [this]() {
+                if(auto* widget = EditableLayout::loadWidget(m_provider, m_promotedWidget)) {
+                    m_container->insertWidget(m_index, widget);
+                    widget->finalise();
+                    m_container->restoreState(m_containerState);
+                }
+            },
+            Qt::QueuedConnection);
     }
 }
 

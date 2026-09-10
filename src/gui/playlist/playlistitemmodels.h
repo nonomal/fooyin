@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,71 +25,80 @@
 
 #include <QSize>
 
+#include <optional>
+
 namespace Fooyin {
-class PlaylistScriptRegistry;
 class ScriptParser;
 
 class PlaylistContainerItem
 {
 public:
-    explicit PlaylistContainerItem(bool isSimple);
+    enum class LayoutKind : uint8_t
+    {
+        Header = 0,
+        SimpleHeader,
+        Subheader,
+    };
 
-    [[nodiscard]] TrackList tracks() const;
-    [[nodiscard]] int trackCount() const;
+    explicit PlaylistContainerItem(LayoutKind layoutKind);
 
-    [[nodiscard]] RichScript title() const;
-    [[nodiscard]] RichScript subtitle() const;
-    [[nodiscard]] RichScript sideText() const;
-    [[nodiscard]] RichScript info() const;
+    [[nodiscard]] const RichText& title() const;
+    [[nodiscard]] const RichText& subtitle() const;
+    [[nodiscard]] const RichText& sideText() const;
+    [[nodiscard]] const RichText& info() const;
+    [[nodiscard]] LayoutKind layoutKind() const;
     [[nodiscard]] int rowHeight() const;
     [[nodiscard]] QSize size() const;
+    [[nodiscard]] int height() const;
+    [[nodiscard]] int scriptIndex() const;
+    [[nodiscard]] const std::optional<Track>& coverTrack() const;
 
-    void updateGroupText(ScriptParser* parser, ScriptFormatter* formatter);
-
-    void setTitle(const RichScript& title);
-    void setSubtitle(const RichScript& subtitle);
-    void setSideText(const RichScript& text);
-    void setInfo(const RichScript& info);
+    void setTitle(const RichText& title);
+    void setSubtitle(const RichText& subtitle);
+    void setSideText(const RichText& text);
+    void setInfo(const RichText& info);
     void setRowHeight(int height);
-
-    void addTrack(const Track& track);
-    void addTracks(const TrackList& tracks);
-    void clearTracks();
+    void setScriptIndex(int index);
+    void setCoverTrack(const Track& track);
+    void clearCoverTrack();
 
     void calculateSize();
 
 private:
-    TrackList m_tracks;
+    [[nodiscard]] QSize calculateSize(bool measureWidth) const;
 
-    RichScript m_title;
-    RichScript m_subtitle;
-    RichScript m_sideText;
-    RichScript m_info;
+    RichText m_title;
+    RichText m_subtitle;
+    RichText m_sideText;
+    RichText m_info;
 
-    bool m_simple;
-    QSize m_size;
+    LayoutKind m_layoutKind;
+    mutable QSize m_size;
+    mutable bool m_widthCalculated{false};
     int m_rowHeight;
+    int m_scriptIndex{-1};
+    std::optional<Track> m_coverTrack;
 };
 
 class PlaylistTrackItem
 {
 public:
     PlaylistTrackItem() = default;
-    PlaylistTrackItem(std::vector<RichScript> columns, const PlaylistTrack& track);
-    PlaylistTrackItem(RichScript left, RichScript right, const PlaylistTrack& track);
+    PlaylistTrackItem(std::vector<RichText> columns, PlaylistTrack track);
+    PlaylistTrackItem(RichText left, RichText right, PlaylistTrack track);
 
-    [[nodiscard]] std::vector<RichScript> columns() const;
-    [[nodiscard]] RichScript column(int column) const;
-    [[nodiscard]] RichScript left() const;
-    [[nodiscard]] RichScript right() const;
-    [[nodiscard]] PlaylistTrack track() const;
+    [[nodiscard]] const std::vector<RichText>& columns() const;
+    [[nodiscard]] const RichText& column(int column) const;
+    [[nodiscard]] const RichText& left() const;
+    [[nodiscard]] const RichText& right() const;
+    [[nodiscard]] const PlaylistTrack& track() const;
     [[nodiscard]] int index() const;
     [[nodiscard]] int rowHeight() const;
     [[nodiscard]] int depth() const;
     [[nodiscard]] QSize size(int column = 0) const;
 
-    void setColumns(const std::vector<RichScript>& columns);
-    void setLeftRight(const RichScript& left, const RichScript& right);
+    void setColumns(const std::vector<RichText>& columns);
+    void setLeftRight(const RichText& left, const RichText& right);
     void setTrack(const PlaylistTrack& track);
     void setIndex(int index);
 
@@ -97,15 +106,16 @@ public:
     void setDepth(int depth);
     void removeColumn(int column);
 
-    void calculateSize();
+    void calculateHeight() const;
+    void calculateSize() const;
 
 private:
-    std::vector<RichScript> m_columns;
-    RichScript m_left;
-    RichScript m_right;
+    std::vector<RichText> m_columns;
+    RichText m_left;
+    RichText m_right;
 
     PlaylistTrack m_track;
-    std::vector<QSize> m_sizes;
+    mutable std::vector<QSize> m_sizes;
     int m_rowHeight;
     int m_depth;
 };

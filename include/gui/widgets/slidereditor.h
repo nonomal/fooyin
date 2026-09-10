@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,6 +49,8 @@ public:
     [[nodiscard]] int singleStep() const;
     void setSingleStep(int step);
 
+    void setTicksVisible(bool visible);
+
     void setRange(int min, int max);
 
     [[nodiscard]] QString prefix() const;
@@ -59,17 +61,15 @@ public:
 
     void addSpecialValue(int val, const QString& text);
 
-signals:
+Q_SIGNALS:
     void valueChanged(int value);
 
-private slots:
+private Q_SLOTS:
     void sliderValueChanged(int value);
     void spinBoxValueChanged(int value);
 
 private:
     QSlider* m_slider;
     SpecialValueSpinBox* m_spinBox;
-    bool m_updatingSlider;
-    bool m_updatingSpinBox;
 };
 } // namespace Fooyin

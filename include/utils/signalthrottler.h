@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,12 +42,12 @@ public:
     [[nodiscard]] Qt::TimerType timerType() const;
     void setTimerType(Qt::TimerType timerType);
 
-signals:
+Q_SIGNALS:
     void triggered();
     void timeoutChanged(int timeout);
     void timerTypeChanged(Qt::TimerType timerType);
 
-public slots:
+public Q_SLOTS:
     void throttle();
 
 protected:

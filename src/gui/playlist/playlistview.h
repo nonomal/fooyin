@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,10 +19,25 @@
 
 #pragma once
 
+#include <core/library/musiclibrary.h>
 #include <core/track.h>
 #include <gui/widgets/expandedtreeview.h>
 
+#include "internalguisettings.h"
+
+#include <QBasicTimer>
+#include <QPixmap>
+
+class QKeyEvent;
+class QLineEdit;
+class QResizeEvent;
+class QEvent;
+class QTimerEvent;
+class QWidget;
+
 namespace Fooyin {
+class HeartDelegate;
+class PixmapFadeController;
 class StarDelegate;
 
 class PlaylistView : public ExpandedTreeView
@@ -30,34 +45,123 @@ class PlaylistView : public ExpandedTreeView
     Q_OBJECT
 
 public:
+    struct BackgroundOptions
+    {
+        PlaylistBgImage imageMode{PlaylistBgImage::None};
+        PlaylistBgScaling scaling{PlaylistBgScaling::ScaledAndCropped};
+        PlaylistBgImagePosition position{PlaylistBgImagePosition::Middle};
+        int maxSize{0};
+        int blur{0};
+        int opacity{40};
+        bool fadeChanges{false};
+        int fadeDurationMs{1000};
+    };
+
     explicit PlaylistView(QWidget* parent = nullptr);
 
     void setLoadingText(const QString& text);
     void setEmptyText(const QString& text);
-    void setupRatingDelegate();
+    void setRatingColumn(int column);
+    void setLovedColumn(int column);
+    void setBackgroundOptions(const BackgroundOptions& options);
+    void setBackgroundPixmap(const QPixmap& pixmap);
 
     void playlistAboutToBeReset();
     void playlistReset();
     [[nodiscard]] bool playlistLoaded() const;
 
+    [[nodiscard]] bool hasActiveInlineEditor() const;
+    void setSingleWriteInProgress(bool inProgress);
+    void handleSingleWriteFinished();
+    void setBulkWriteInProgress(bool inProgress);
+    void handleBulkWriteFinished();
+
 protected:
+    void changeEvent(QEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+    void scrollContentsBy(int dx, int dy) override;
+    void timerEvent(QTimerEvent* event) override;
+    void closeEditor(QWidget* editor, QAbstractItemDelegate::EndEditHint hint) override;
     void leaveEvent(QEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     DropIndicatorPosition dropPosition(const QPoint& pos, const QRect& rect, const QModelIndex& index) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
-signals:
+Q_SIGNALS:
+    void bulkWriteRequested(const Fooyin::TrackList& tracks);
+    void tracksLoved(const Fooyin::TrackList& tracks);
     void tracksRated(const Fooyin::TrackList& tracks);
+    void displayChanged();
 
 private:
+    [[nodiscard]] QModelIndexList selectedTrackRows() const;
+    void editTrackStat(const QModelIndex& index, const QVariant& value, Track::Stat stat);
+    void emitTrackStatChanged(const TrackList& tracks, Track::Stat stat);
+    [[nodiscard]] std::vector<int> bulkEditableColumns() const;
+    [[nodiscard]] QModelIndex bulkEditAnchorIndex(int column) const;
+    [[nodiscard]] QRect bulkEditRect(int column) const;
+    [[nodiscard]] QString bulkEditValueForColumn(int column, bool& mixedValues) const;
+
+    bool startBulkEditSession();
+    bool commitBulkEdit(int columnIndex = -1);
+    void advanceBulkEditColumn(int offset);
+    void centreRectInView(const QRect& rect);
+    void endBulkEditSession(bool commitChanges);
+    void showBulkEditor();
+    void updateBulkEditorGeometry();
+
+    void queueEditor(const QModelIndex& index);
+    void cancelPendingEditor();
+    void reopenEditor(const QModelIndex& index);
+
     void ratingHoverIn(const QModelIndex& index, const QPoint& pos);
     void ratingHoverOut();
+    void loveHoverIn(const QModelIndex& index);
+    void loveHoverOut();
+
+    void drawBackground(QPainter& painter);
+    void updateBackgroundTransparency();
+    void invalidateScaledBackground();
+    struct BackgroundPixmapCache
+    {
+        qint64 sourceKey{0};
+        QSize viewportSize;
+        qreal dpr{1.0};
+        QPixmap pixmap;
+    };
+    [[nodiscard]] QPixmap preparedBackgroundPixmap(const QPixmap& source, BackgroundPixmapCache& cache) const;
+    [[nodiscard]] QPoint backgroundPixmapPosition(const QSize& pixmapSize) const;
+    void drawBackgroundPixmap(QPainter& painter, const QPixmap& pixmap);
 
     QString m_emptyText;
     QString m_loadingText;
     bool m_playlistLoaded;
+
     StarDelegate* m_starDelegate;
     int m_ratingColumn;
+    HeartDelegate* m_heartDelegate;
+    int m_lovedColumn;
+
+    BackgroundOptions m_bgOptions;
+    PixmapFadeController* m_bgFadeController;
+    mutable BackgroundPixmapCache m_cachedBg;
+    mutable BackgroundPixmapCache m_cachedPreviousBg;
+
+    QPersistentModelIndex m_pressedSelectedIndex;
+    QPersistentModelIndex m_pendingEditIndex;
+    QLineEdit* m_bulkEditor;
+    QBasicTimer m_editTimer;
+    QModelIndexList m_bulkEditRows;
+    std::vector<int> m_bulkEditColumns;
+    int m_bulkEditColumnIndex;
+    bool m_cancelledPendingEditClick;
+    bool m_cancelledActiveEditorClick;
+    bool m_suppressNextClickEdit;
+    bool m_singleWriteInProgress;
+    bool m_bulkWriteInProgress;
 };
 } // namespace Fooyin

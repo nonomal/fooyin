@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ PopupLineEdit::PopupLineEdit(QWidget* parent)
 
 PopupLineEdit::PopupLineEdit(const QString& contents, QWidget* parent)
     : QLineEdit{contents, parent}
+    , m_initialString{contents}
 { }
 
 void PopupLineEdit::paintEvent(QPaintEvent* event)
@@ -47,15 +48,21 @@ void PopupLineEdit::keyPressEvent(QKeyEvent* event)
     QLineEdit::keyPressEvent(event);
 
     if(event->key() == Qt::Key_Escape) {
-        emit editingCancelled();
+        m_cancelled = true;
+        Q_EMIT editingCancelled();
     }
 }
 
 void PopupLineEdit::focusOutEvent(QFocusEvent* event)
 {
-    QLineEdit::focusOutEvent(event);
+    if(m_initialString == text()) {
+        Q_EMIT editingCancelled();
+    }
 
-    emit editingFinished();
+    if(!m_cancelled) {
+        // Allow our base widget to emit editingFinished.
+        QLineEdit::focusOutEvent(event);
+    }
 }
 } // namespace Fooyin
 

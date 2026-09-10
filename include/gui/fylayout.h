@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,19 +40,30 @@ public:
     [[nodiscard]] QString name() const;
     [[nodiscard]] QJsonObject json() const;
 
+    [[nodiscard]] bool isShownInMenu() const;
+    void setShownInMenu(bool shown);
+
+    [[nodiscard]] bool appliesWindowSize() const;
+    void setAppliesWindowSize(bool enabled);
     void saveWindowSize();
+    void removeWindowSize();
     void loadWindowSize() const;
 
     enum ThemeOption : uint8_t
     {
-        SaveColours = 0,
-        SaveFonts,
-        All = SaveColours | SaveFonts
+        SaveColours = 1 << 0,
+        SaveFonts   = 1 << 1,
+        All         = SaveColours | SaveFonts
     };
     Q_DECLARE_FLAGS(ThemeOptions, ThemeOption)
     Q_FLAG(ThemeOptions)
 
+    [[nodiscard]] bool appliesTheme() const;
+    void setAppliesTheme(bool enabled);
+    [[nodiscard]] ThemeOptions themeOptions() const;
+    void setThemeOptions(ThemeOptions options);
     void saveTheme(const FyTheme& theme, ThemeOptions options = All);
+    void removeTheme();
     [[nodiscard]] FyTheme loadTheme() const;
 
 private:

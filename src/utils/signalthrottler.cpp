@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,8 @@ SignalThrottler::SignalThrottler(QObject* parent)
 
 SignalThrottler::~SignalThrottler()
 {
-    maybeEmitTriggered();
+    m_timer.stop();
+    m_pendingEmit = false;
 }
 
 bool SignalThrottler::isActive() const
@@ -50,7 +51,7 @@ void SignalThrottler::setTimeout(int timeout)
         return;
     }
     m_timeout = timeout;
-    emit timeoutChanged(timeout);
+    Q_EMIT timeoutChanged(timeout);
 }
 
 void SignalThrottler::setTimeout(std::chrono::milliseconds timeout)
@@ -69,7 +70,7 @@ void SignalThrottler::setTimerType(Qt::TimerType timerType)
         return;
     }
     m_timerType = timerType;
-    emit timerTypeChanged(timerType);
+    Q_EMIT timerTypeChanged(timerType);
 }
 
 void SignalThrottler::throttle()
@@ -102,6 +103,6 @@ void SignalThrottler::maybeEmitTriggered()
 void SignalThrottler::emitTriggered()
 {
     m_pendingEmit = false;
-    emit triggered();
+    Q_EMIT triggered();
 }
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,14 +19,15 @@
 
 #pragma once
 
-#include "vumetersettings.h"
-
 #include <core/engine/audioformat.h>
-#include <core/player/playerdefs.h>
+#include <core/engine/levelframe.h>
 #include <gui/fywidget.h>
 
+#include <QVariant>
+
+class QJsonObject;
+
 namespace Fooyin {
-class AudioBuffer;
 class PlayerController;
 class SettingsManager;
 
@@ -53,8 +54,10 @@ public:
     void saveLayoutData(QJsonObject& layout) override;
     void loadLayoutData(const QJsonObject& layout) override;
 
-    void renderBuffer(const AudioBuffer& buffer);
+    void renderLevel(const LevelFrame& frame);
 
+    [[nodiscard]] Type type() const;
+    [[nodiscard]] Qt::Orientation orientation() const;
     void setOrientation(Qt::Orientation orientation);
     void setShowLegend(bool show);
     void setChannelSpacing(int size);
@@ -65,13 +68,49 @@ public:
 
     [[nodiscard]] QSize minimumSizeHint() const override;
 
+    struct ConfigData
+    {
+        int peakHoldTimeMs{500};
+        int falloffTime{13};
+        int peakFalloffTime{13};
+        bool showPeaks{false};
+        bool showLegend{false};
+        int updateFps{40};
+        int channelSpacing{1};
+        int barSize{0};
+        int barSpacing{1};
+        int barSections{1};
+        int sectionSpacing{1};
+        QVariant meterColours;
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
+
+Q_SIGNALS:
+    void configChanged();
+
 protected:
+    void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void timerEvent(QTimerEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
 
+    void openConfigDialog() override;
+
 private:
+    [[nodiscard]] QString settingsKey(QStringView key) const;
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    void saveConfigToLayout(const ConfigData& config, QJsonObject& layout) const;
+
+    SettingsManager* m_settings;
+    ConfigData m_config;
+
     std::unique_ptr<VuMeterWidgetPrivate> p;
 };
 } // namespace VuMeter

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,11 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin::Filters {
 FilterColumnRegistry::FilterColumnRegistry(SettingsManager* settings, QObject* parent)
-    : ItemRegistry{u"Filters/FilterColumns"_s, settings, parent}
+    : ItemRegistry{u"Filters/FilterColumns"_s, settings, u"Filters/FilterColumnOverrides"_s, parent}
 {
     QObject::connect(this, &RegistryBase::itemChanged, this, [this](int id) {
         if(const auto field = itemById(id)) {
-            emit columnChanged(field.value());
+            Q_EMIT columnChanged(field.value());
         }
     });
 
@@ -36,11 +36,11 @@ FilterColumnRegistry::FilterColumnRegistry(SettingsManager* settings, QObject* p
 
 void FilterColumnRegistry::loadDefaults()
 {
-    addDefaultItem({.name = tr("Genre"), .field = u"%<genre>%"_s});
-    addDefaultItem({.name = tr("Album Artist"), .field = u"%<albumartist>%"_s});
-    addDefaultItem({.name = tr("Artist"), .field = u"%<artist>%"_s});
-    addDefaultItem({.name = tr("Album"), .field = u"%album%"_s});
-    addDefaultItem({.name = tr("Date"), .field = u"%date%"_s});
+    addDefaultItem({.id = 0, .name = tr("Genre"), .field = u"%<genre>%"_s, .sortField = {}});
+    addDefaultItem({.id = 1, .name = tr("Album Artist"), .field = u"%<albumartist>%"_s, .sortField = {}});
+    addDefaultItem({.id = 2, .name = tr("Artist"), .field = u"%<artist>%"_s, .sortField = {}});
+    addDefaultItem({.id = 3, .name = tr("Album"), .field = u"%album%"_s, .sortField = {}});
+    addDefaultItem({.id = 4, .name = tr("Date"), .field = u"%date%"_s, .sortField = {}});
 }
 } // namespace Fooyin::Filters
 

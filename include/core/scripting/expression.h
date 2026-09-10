@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,39 +25,148 @@ namespace Fooyin {
 namespace Expr {
 enum Type : uint8_t
 {
-    Null           = 0,
-    Literal        = 1,
-    Variable       = 2,
-    VariableList   = 3,
-    VariableRaw    = 4,
-    Date           = 5,
-    Function       = 6,
-    FunctionArg    = 7,
-    Conditional    = 8,
-    Not            = 9,
-    Group          = 10,
-    And            = 11,
-    Or             = 12,
-    XOr            = 13,
-    Equals         = 14,
-    Contains       = 15,
-    Greater        = 16,
-    GreaterEqual   = 17,
-    Less           = 18,
-    LessEqual      = 19,
-    SortAscending  = 20,
-    SortDescending = 21,
-    All            = 22,
-    QuotedLiteral  = 23,
-    Missing        = 24,
-    Present        = 25,
-    Before         = 26,
-    After          = 27,
-    Since          = 28,
-    During         = 29,
-    Limit          = 30,
+    Null = 0,
+    Literal,
+    Variable,
+    VariableList,
+    VariableRaw,
+    Date,
+    Function,
+    FunctionArg,
+    Conditional,
+    Not,
+    Group,
+    And,
+    Or,
+    XOr,
+    Equals,
+    Contains,
+    Greater,
+    GreaterEqual,
+    Less,
+    LessEqual,
+    SortAscending,
+    SortDescending,
+    All,
+    QuotedLiteral,
+    Missing,
+    Present,
+    Before,
+    After,
+    Since,
+    During,
+    Limit,
 };
 }
+
+enum class FunctionKind : uint8_t
+{
+    Generic = 0,
+    Get,
+    Put,
+    Puts,
+    If,
+    If2,
+    If3,
+    IfEqual,
+    IfGreater,
+    IfLonger,
+    Select,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Num,
+    Pad,
+    PadRight,
+};
+
+enum class VariableKind : uint8_t
+{
+    Generic = 0,
+    Track,
+    TrackTotal,
+    Disc,
+    DiscTotal,
+    Title,
+    Artist,
+    UniqueArtist,
+    PlayCount,
+    Duration,
+    DurationSecs,
+    DurationMSecs,
+    AlbumArtist,
+    Album,
+    Genre,
+    Genres,
+    Composer,
+    Performer,
+    Comment,
+    Date,
+    Year,
+    FileSize,
+    FileSizeNatural,
+    Bitrate,
+    SampleRate,
+    BitDepth,
+    FirstPlayed,
+    LastPlayed,
+    Rating,
+    RatingNormalized,
+    Stars,
+    RatingStars,
+    RatingStarsPadded,
+    RatingEditor,
+    Loved,
+    LoveEditor,
+    Codec,
+    CodecProfile,
+    Tool,
+    TagType,
+    Encoding,
+    Channels,
+    CreatedTime,
+    AddedTime,
+    LastModified,
+    FilePath,
+    FileName,
+    Extension,
+    FileNameWithExt,
+    Directory,
+    Path,
+    Subsong,
+    RGTrackGain,
+    RGTrackPeak,
+    RGTrackPeakDB,
+    RGAlbumGain,
+    RGAlbumPeak,
+    RGAlbumPeakDB,
+    TrackCount,
+    Playtime,
+    PlaylistSize,
+    PlaylistDuration,
+    PlaylistElapsed,
+    PlaybackTime,
+    PlaybackTimeSeconds,
+    PlaybackTimeRemaining,
+    PlaybackTimeRemainingSeconds,
+    IsPlaying,
+    IsPaused,
+    IsStopped,
+    LibraryName,
+    LibraryPath,
+    RelativePath,
+    Depth,
+    ListIndex,
+    QueueIndex,
+    QueueIndexes,
+    QueueTotal,
+    PlayingIcon,
+    FrontCover,
+    BackCover,
+    ArtistPicture,
+};
 
 struct Expression;
 using ExpressionList = std::vector<Expression>;
@@ -72,6 +181,17 @@ using ExpressionValue = std::variant<QString, FuncValue, ExpressionList>;
 
 struct Expression
 {
+    Expression() = default;
+
+    Expression(Expr::Type exprType)
+        : type{exprType}
+    { }
+
+    Expression(Expr::Type exprType, ExpressionValue exprValue)
+        : type{exprType}
+        , value{std::move(exprValue)}
+    { }
+
     Expr::Type type{Expr::Null};
     ExpressionValue value{QString{}};
 };

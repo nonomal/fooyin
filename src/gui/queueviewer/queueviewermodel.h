@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,17 +24,24 @@
 #include <core/player/playbackqueue.h>
 #include <core/scripting/scriptparser.h>
 #include <gui/coverprovider.h>
+#include <gui/scripting/scriptformatter.h>
 #include <utils/treemodel.h>
 
 #include <QIcon>
 
+class QMimeData;
+
 namespace Fooyin {
+class CoverRepository;
+class PlayerController;
+class SettingsManager;
+
 class QueueViewerModel : public TreeModel<QueueViewerItem>
 {
     Q_OBJECT
 
 public:
-    explicit QueueViewerModel(std::shared_ptr<AudioLoader> audioLoader, PlayerController* playerController,
+    explicit QueueViewerModel(CoverRepository* coverRepository, PlayerController* playerController,
                               SettingsManager* settings, QObject* parent = nullptr);
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
@@ -51,25 +58,25 @@ public:
     bool dropMimeData(const QMimeData* data, Qt::DropAction action, int row, int column,
                       const QModelIndex& parent) override;
 
-    void insertTracks(const QueueTracks& tracks, int row);
-    void removeTracks(const QueueTracks& tracks);
-    void removeIndexes(const std::vector<int>& indexes);
-
     void reset(const QueueTracks& tracks);
-    QueueTracks queueTracks() const;
 
     void playbackStateChanged();
-    void currentTrackChanged();
     [[nodiscard]] int queueIndex(const QModelIndex& index) const;
 
-signals:
-    void queueChanged();
-    void tracksDropped(int row, const QByteArray& data);
+    void setScripts(const QString& titleScript, const QString& subtitleScript);
+    void setShowCurrent(bool showCurrent);
+    void setShowIcon(bool showIcon);
+    void setIconSize(const QSize& iconSize);
+
+Q_SIGNALS:
+    void queueTracksMoved(int row, const QList<int>& indexes);
+    void tracksDropped(int row, const QMimeData* data);
     void playlistTracksDropped(int row, const QByteArray& data);
 
 private:
+    std::unique_ptr<QueueViewerItem> makeCurrentTrackItem(const QueueTracks& tracks);
     void regenerateTitles();
-    void moveTracks(int row, const QModelIndexList& indexes);
+    [[nodiscard]] bool shouldShowCurrentRow() const;
     void updateShowCurrent();
 
     PlayerController* m_playerController;
@@ -77,10 +84,17 @@ private:
 
     CoverProvider m_coverProvider;
     ScriptParser m_scriptParser;
+    ScriptFormatter m_scriptFormatter;
+
     std::vector<std::unique_ptr<QueueViewerItem>> m_trackItems;
     std::unordered_map<QString, std::vector<QueueViewerItem*>> m_trackParents;
+
+    QString m_titleScript;
+    QString m_subtitleScript;
+
+    bool m_showCurrent;
     bool m_showIcon;
-    CoverProvider::ThumbnailSize m_iconSize;
+    ThumbnailSize m_iconSize;
 
     std::unique_ptr<QueueViewerItem> m_currentTrackItem;
 };

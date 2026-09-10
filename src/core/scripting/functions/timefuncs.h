@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,4 +23,9 @@
 
 namespace Fooyin::Scripting {
 QString msToString(const QStringList& vec);
-}
+QString year(const QStringList& vec);
+QString month(const QStringList& vec);
+QString dayOfMonth(const QStringList& vec);
+QString date(const QStringList& vec);
+QString time(const QStringList& vec);
+} // namespace Fooyin::Scripting

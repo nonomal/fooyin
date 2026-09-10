@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "darklyrics.h"
 
 #include <core/network/networkaccessmanager.h>
+#include <core/network/networkutils.h>
 
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -70,7 +71,7 @@ void DarkLyrics::search(const SearchParams& params)
     QString album  = normalise(params.album);
 
     if(artist.isEmpty() || album.isEmpty()) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         return;
     }
 
@@ -78,7 +79,7 @@ void DarkLyrics::search(const SearchParams& params)
 
     qCInfo(LYRICS) << "Sending request" << url.toString();
 
-    const QNetworkRequest req{url};
+    const QNetworkRequest req = makeNetworkRequest(url);
     setReply(network()->get(req));
     QObject::connect(reply(), &QNetworkReply::finished, this, &DarkLyrics::handleLyricReply);
 }
@@ -86,7 +87,7 @@ void DarkLyrics::search(const SearchParams& params)
 void DarkLyrics::handleLyricReply()
 {
     if(reply()->error() != QNetworkReply::NoError) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         resetReply();
         return;
     }
@@ -134,11 +135,11 @@ void DarkLyrics::handleLyricReply()
 
     if(reader.hasError()) {
         qCDebug(LYRICS) << "Error parsing HTML:" << reader.errorString();
-        emit searchResult({});
+        Q_EMIT searchResult({});
     }
 
     if(lyricsText == "[Instrumental]"_L1) {
-        emit searchResult({});
+        Q_EMIT searchResult({});
         return;
     }
 
@@ -148,6 +149,6 @@ void DarkLyrics::handleLyricReply()
     lyrics.artist = m_params.artist;
     lyrics.data   = lyricsText;
 
-    emit searchResult({lyrics});
+    Q_EMIT searchResult({lyrics});
 }
 } // namespace Fooyin::Lyrics

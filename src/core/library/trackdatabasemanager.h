@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +21,13 @@
 
 #include "database/trackdatabase.h"
 
+#include <core/engine/audioinput.h>
+#include <core/trackmetadatastore.h>
 #include <utils/database/dbconnectionhandler.h>
 #include <utils/worker.h>
+
+#include <memory>
+#include <stop_token>
 
 namespace Fooyin {
 class Database;
@@ -36,28 +41,42 @@ class TrackDatabaseManager : public Worker
 
 public:
     explicit TrackDatabaseManager(DbConnectionPoolPtr dbPool, std::shared_ptr<AudioLoader> audioLoader,
-                                  SettingsManager* settings, QObject* parent = nullptr);
+                                  SettingsManager* settings, std::shared_ptr<TrackMetadataStore> metadataStore = {},
+                                  QObject* parent = nullptr);
 
     void initialiseThread() override;
 
-signals:
+Q_SIGNALS:
     void gotTracks(const Fooyin::TrackList& tracks);
     void updatedTracks(const Fooyin::TrackList& tracks);
-    void updatedTracksStats(const Fooyin::TrackList& tracks);
+    void availabilityChecked(const Fooyin::TrackList& tracks);
+    void updatedTracksStats(const Fooyin::TrackList& tracks, Fooyin::Track::Stats stats);
     void removedTracks(const Fooyin::TrackList& tracks);
+    void trackWriteCompleted(int operationId, const Fooyin::TrackList& tracks, int failed, bool cancelled);
+    void trackCoverWriteCompleted(int operationId, const Fooyin::TrackList& tracks, int failed, bool cancelled);
+    void tracksDeleted(int operationId, const Fooyin::TrackList& tracks, int failed, bool cancelled);
+    void unavailableTracksRemoved(int operationId, const Fooyin::TrackList& tracks, int failed, bool cancelled);
 
-public slots:
+public Q_SLOTS:
     void getAllTracks();
+    void checkTrackAvailability(const Fooyin::TrackList& tracks);
     void updateTracks(const Fooyin::TrackList& tracks, bool write);
-    void updateTrackStats(const Fooyin::TrackList& track, bool onlyPlaycount);
+    void updateTrackStats(const Fooyin::TrackList& tracks, Fooyin::Track::Stats updatedStats, bool writeToFiles);
     void writeCovers(const Fooyin::TrackCoverData& tracks);
-    void removeUnavailbleTracks(const TrackList& tracks);
+    void deleteTracks(const Fooyin::TrackList& tracks);
+    void removeUnavailbleTracks(const Fooyin::TrackList& tracks);
     void cleanupTracks();
+
+    void updateTracks(const Fooyin::TrackList& tracks, bool write, int operationId, std::stop_token stopToken);
+    void writeCovers(const Fooyin::TrackCoverData& tracks, int operationId, std::stop_token stopToken);
+    void deleteTracks(const Fooyin::TrackList& tracks, int operationId, std::stop_token stopToken);
+    void removeUnavailbleTracks(const Fooyin::TrackList& tracks, int operationId, std::stop_token stopToken);
 
 private:
     DbConnectionPoolPtr m_dbPool;
     std::shared_ptr<AudioLoader> m_audioLoader;
     SettingsManager* m_settings;
+    std::shared_ptr<TrackMetadataStore> m_metadataStore;
 
     std::unique_ptr<DbConnectionHandler> m_dbHandler;
     TrackDatabase m_trackDatabase;

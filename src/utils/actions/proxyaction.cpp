@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,9 @@
 #include <utils/stringutils.h>
 
 #include <QPointer>
+#include <QSignalBlocker>
+
+constexpr auto ThemeIconNameProperty = "_fy_themeIconName";
 
 namespace Fooyin {
 class ProxyActionPrivate
@@ -74,11 +77,14 @@ void ProxyActionPrivate::update(QAction* updateAction, bool initialise)
 
     QObject::disconnect(m_self, &ProxyAction::changed, nullptr, nullptr);
 
+    const bool proxyHasIcon = !m_self->icon().isNull();
+
     if(initialise) {
         m_self->setSeparator(updateAction->isSeparator());
         m_self->setMenuRole(updateAction->menuRole());
     }
-    if(initialise || m_self->hasAttribute(ProxyAction::UpdateIcon)) {
+    m_self->setProperty(ThemeIconNameProperty, updateAction->property(ThemeIconNameProperty));
+    if(initialise || m_self->hasAttribute(ProxyAction::UpdateIcon) || !proxyHasIcon) {
         m_self->setIcon(updateAction->icon());
         m_self->setIconText(updateAction->iconText());
         m_self->setIconVisibleInMenu(updateAction->isIconVisibleInMenu());
@@ -99,7 +105,10 @@ void ProxyActionPrivate::update(QAction* updateAction, bool initialise)
             if(m_action) {
                 QObject::disconnect(m_self, &ProxyAction::toggled, m_action, &QAction::setChecked);
             }
+
+            const QSignalBlocker blocker{m_self};
             m_self->setChecked(updateAction->isChecked());
+
             if(m_action) {
                 QObject::connect(m_self, &ProxyAction::toggled, m_action, &QAction::setChecked);
             }
@@ -179,7 +188,7 @@ void ProxyAction::setAction(QAction* action)
     p->connectAction();
     p->updateState();
 
-    emit currentActionChanged(action);
+    Q_EMIT currentActionChanged(action);
 }
 
 void ProxyAction::setShortcutVisibleInToolTip(bool visible)

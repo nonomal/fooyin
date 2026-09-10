@@ -1,48 +1,17 @@
-# Fooyin Roadmap
+# fooyin Roadmap
 
-This document outlines the upcoming features for fooyin.
+## Releases
 
-## New Features
-
-| Feature                                       | Release  |
-|-----------------------------------------------|----------|
-| Playback queue                                | ✅ 0.4.0  |
-| MPRIS support                                 | ✅ 0.4.0  |
-| CUE support                                   | ✅ 0.5.0  |
-| Renaming/Copying/Moving files on disk         | ✅ 0.6.0  |
-| Archive support (Adding to library, playback) | ✅ 0.6.0  |
-| Scrobbling                                    | ✅ 0.7.0  |
-| ReplayGain support                            | ✅ 0.7.0  |
-| Calculating ReplayGain                        | ✅ 0.8.0  |
-| Query-based language for advanced searching   | ✅ 0.8.0  |
-| Smart playlists                               | ✅ 0.9.0  |
-| Album artwork downloading/saving              | ✅ 0.9.0  |
-| Synchronised lyric support                    | ✅ 0.9.0  |
-| Audio conversion                              | ❓ TBD    |
-| Metadata lookup                               | ❓ TBD    |
-| Internet radio support                        | ❓ TBD    |
-| DSP plugins                                   | ❓ TBD    |
-| Equaliser                                     | ❓ TBD    |
-
-## Enhancements
-
-| Enhancement                                    | Release |
-|------------------------------------------------|---------|
-| Support custom tags within scripts             | ✅ 0.4.0 |
-| Add HTML-like tags to FooScript for formatting | ✅ 0.4.0 |
-| Import/Export playlists                        | ✅ 0.5.0 |
-| Add icon/artwork mode to Library Filter        | ✅ 0.5.0 |
-| Customise default tag editor fields            | ✅ 0.7.0 |
-| Variable bitrate display                       | ✅ 0.7.0 |
-| Per-playlist playback queue                    | ❓ TBD   |
-
-## Widgets
-
-| Widget                | Release |
-|-----------------------|---------|
-| Directory browser     | ✅ 0.4.0 |
-| Waveform seekbar      | ✅ 0.4.0 |
-| Playback queue viewer | ✅ 0.5.2 |
-| VU meter              | ✅ 0.8.0 |
-| Musical spectrum      | ❓ TBD   |
-| Spectrogram           | ❓ TBD   |
+| Version | Release date | New features                                                                                                                                                                                                                                                  | Notable improvements                                                                                                                                               |
+|---------|--------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0.13.0  | 2026-09-21   | CD playback and ripping<br>Metadata lookup<br>JavaScript panels<br>Global shortcuts<br>File integrity and AccurateRip verification                                                                                                                            | Per-track metadata in embedded CUE sheets<br>Custom playlist grouping scripts<br>Artwork in Discord Rich Presence                                                  |
+| 0.12.0  | 2026-07-27   | Audio conversion<br>Spectrogram<br>Oscilloscope<br>projectM                                                                                                                                                                                                   | PulseAudio output<br>Automatic resampling for unsupported device rates                                                                                             |
+| 0.11.0  | 2026-06-22   | Remote stream playback<br>Radio Browser<br>Musical spectrum<br>Sleep inhibitor                                                                                                                                                                                | Line and word progress for synchronised lyrics<br>Integrated playlist search<br>Per-playlist view layouts<br>Library file monitoring<br>Reworked layout management |
+| 0.10.0  | 2026-03-27   | DSP suite with plugin support<br>Equaliser<br>Configurable fading and crossfading<br>Discord Rich Presence<br>Script Display and Command Button widgets<br>Per-widget configuration<br>Full-size artwork viewing and export                                   | Playback engine rewrite<br>Rich formatting across widgets<br>Hidden file and symlink options in Directory Browser<br>CLI seeking<br>Persistent playback queue      |
+| 0.9.0   | 2025-08-17   | Autoplaylists<br>Artwork editing, downloading and saving<br>Lyrics search, saving and editing                                                                                                                                                                 | Playlist filtering<br>Scrobble filtering<br>Configurable ReplayGain scanner backends                                                                               |
+| 0.8.0   | 2024-10-14   | ReplayGain calculation<br>Quick search and query syntax<br>VU and peak meter                                                                                                                                                                                  | DSD playback<br>Artwork in the Library Tree                                                                                                                        |
+| 0.7.0   | 2024-09-19   | Last.fm and ListenBrainz scrobbling<br>ReplayGain support                                                                                                                                                                                                     | Customisable default Tag Editor fields<br>Dynamic VBR/ABR bitrate display<br>Additional multi-value metadata support                                               |
+| 0.6.0   | 2024-08-27   | File renaming, copying and moving<br>Library and playback support for archives<br>SndFile, VGM, OpenMPT, Game Music Emu and raw audio decoders<br>Playlist search and automatic export<br>Stop playback at a selected track<br>Inline playlist rating editing | Playcount metadata read/write                                                                                                                                      |
+| 0.5.2   | 2024-07-07   | Playback queue viewer and editor                                                                                                                                                                                                                              | Responsive artwork thumbnails<br>Playlist tab drag and drop                                                                                                        |
+| 0.5.0   | 2024-06-28   | CUE sheet support (including embedded CUE sheets)<br>M3U/M3U8 playlist import and export<br>Library Filter artwork mode<br>Tag reader and audio decoder plugin support                                                                                        | Layout switching menu                                                                                                                                              |
+| 0.4.0   | 2024-04-06   | Global playback queue<br>MPRIS desktop and media key integration<br>Custom metadata in scripts<br>Formatting tags in FooScript<br>Directory Browser<br>Waveform seekbar<br>Configurable plugin enablement                                                     | Layout editing with undo, redo, copy, paste and widget moving                                                                                                      |

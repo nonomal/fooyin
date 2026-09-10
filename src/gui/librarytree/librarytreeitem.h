@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,26 +20,30 @@
 #pragma once
 
 #include <core/track.h>
-
+#include <gui/scripting/richtext.h>
 #include <utils/crypto.h>
 #include <utils/treeitem.h>
 
-#include <QObject>
 #include <QString>
 #include <QStyleOptionViewItem>
 
 namespace Fooyin {
+class TrackSorter;
+
 class LibraryTreeItem : public TreeItem<LibraryTreeItem>
 {
 public:
     enum Role
     {
         Title = Qt::UserRole,
+        RichTitle,
+        RightRichTitle,
         Level,
         Key,
         Tracks,
         TrackCount,
         DecorationPosition,
+        IsPlaying,
     };
 
     LibraryTreeItem();
@@ -47,30 +51,45 @@ public:
 
     [[nodiscard]] bool pending() const;
     [[nodiscard]] int level() const;
-    [[nodiscard]] QString title() const;
-    [[nodiscard]] TrackList tracks() const;
+    [[nodiscard]] const QString& title() const;
+    [[nodiscard]] const QString& sortTitle() const;
+    [[nodiscard]] const QString& titleSource() const;
+    [[nodiscard]] const RichText& richTitle() const;
+    [[nodiscard]] const RichText& rightRichTitle() const;
+    [[nodiscard]] const TrackList& tracks() const;
     [[nodiscard]] int trackCount() const;
-    [[nodiscard]] Md5Hash key() const;
+    [[nodiscard]] int scriptChildCount() const;
+    [[nodiscard]] const Md5Hash& key() const;
     [[nodiscard]] std::optional<Track::Cover> coverType() const;
     [[nodiscard]] QStyleOptionViewItem::Position coverPosition() const;
 
     void setPending(bool pending);
     void setTitle(const QString& title);
+    void setSortTitle(const QString& title);
+    void setTitleSource(const QString& title);
+    void setRichTitle(const RichText& title);
+    void setRichTitles(const RichText& leftTitle, const RichText& rightTitle);
+    void setScriptChildCount(int count);
     void setKey(const Md5Hash& key);
 
     void addTrack(const Track& track);
     void addTracks(const TrackList& tracks);
     void removeTrack(const Track& track);
     void replaceTrack(const Track& track);
-    void sortTracks();
+    void sortTracks(TrackSorter& sorter, const QString& script);
 
 private:
     bool m_pending;
     int m_level;
     Md5Hash m_key;
     QString m_title;
+    QString m_sortTitle;
+    QString m_titleSource;
+    RichText m_richTitle;
+    RichText m_rightRichTitle;
     std::optional<Track::Cover> m_coverType;
     QStyleOptionViewItem::Position m_coverPosition;
     TrackList m_tracks;
+    int m_scriptChildCount;
 };
 } // namespace Fooyin

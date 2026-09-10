@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,13 +29,53 @@
 #include <kdsingleapplication.h>
 
 #include <QApplication>
+#include <QDir>
 #include <QLoggingCategory>
+
+#include <QSurfaceFormat>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 using namespace Qt::StringLiterals;
 
 namespace {
+void configureOpenGLSurfaceFormat()
+{
+    QSurfaceFormat format{QSurfaceFormat::defaultFormat()};
+    format.setRenderableType(QSurfaceFormat::OpenGL);
+    format.setVersion(3, 3);
+    format.setProfile(QSurfaceFormat::CoreProfile);
+    format.setAlphaBufferSize(8);
+    format.setDepthBufferSize(24);
+    format.setStencilBufferSize(8);
+    format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+    format.setSwapInterval(1);
+    QSurfaceFormat::setDefaultFormat(format);
+}
+
 #ifdef Q_OS_WIN
+#include <roapi.h>
 #include <windows.h>
+
+struct GuiThreadApartment
+{
+    HRESULT result{E_UNEXPECTED};
+
+    GuiThreadApartment()
+    {
+        result = RoInitialize(RO_INIT_SINGLETHREADED);
+    }
+
+    ~GuiThreadApartment()
+    {
+        if(SUCCEEDED(result)) {
+            RoUninitialize();
+        }
+    }
+};
+
 void configurePluginSearchPaths()
 {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
@@ -52,31 +92,31 @@ void parseCmdOptions(Fooyin::Application& app, Fooyin::GuiApplication& guiApp, C
     if(playerAction != CommandLine::PlayerAction::None) {
         auto* player = app.playerController();
         switch(playerAction) {
-            case(CommandLine::PlayerAction::PlayPause):
+            case CommandLine::PlayerAction::PlayPause:
                 player->playPause();
                 break;
-            case(CommandLine::PlayerAction::Play):
+            case CommandLine::PlayerAction::Play:
                 player->play();
                 break;
-            case(CommandLine::PlayerAction::Pause):
+            case CommandLine::PlayerAction::Pause:
                 player->pause();
                 break;
-            case(CommandLine::PlayerAction::Stop):
+            case CommandLine::PlayerAction::Stop:
                 player->stop();
                 break;
-            case(CommandLine::PlayerAction::Next):
+            case CommandLine::PlayerAction::Next:
                 player->next();
                 break;
-            case(CommandLine::PlayerAction::Previous):
+            case CommandLine::PlayerAction::Previous:
                 player->previous();
                 break;
-            case(CommandLine::PlayerAction::SeekFwd):
+            case CommandLine::PlayerAction::SeekFwd:
                 player->seekForward(cmdLine.seekDelta());
                 break;
-            case(CommandLine::PlayerAction::SeekBack):
+            case CommandLine::PlayerAction::SeekBack:
                 player->seekBackward(cmdLine.seekDelta());
                 break;
-            case(CommandLine::PlayerAction::None):
+            case CommandLine::PlayerAction::None:
                 break;
         }
     }
@@ -90,6 +130,20 @@ void parseCmdOptions(Fooyin::Application& app, Fooyin::GuiApplication& guiApp, C
 
 int main(int argc, char** argv)
 {
+#ifdef Q_OS_WIN
+    const GuiThreadApartment guiThreadApartment;
+    if(FAILED(guiThreadApartment.result)) {
+        QLoggingCategory log{"Main"};
+        qCCritical(log) << "Failed to initialise the GUI thread apartment:"
+                        << u"HRESULT 0x%1"_s.arg(
+                               static_cast<qulonglong>(static_cast<uint32_t>(guiThreadApartment.result)), 8, 16,
+                               QChar{u'0'});
+        return 1;
+    }
+#endif
+
+    configureOpenGLSurfaceFormat();
+
     Q_INIT_RESOURCE(data);
     Q_INIT_RESOURCE(icons);
 
@@ -148,12 +202,10 @@ int main(int argc, char** argv)
 
     if(!commandLine.empty()) {
         // Wait until playlists have been populated before parsing in case of playback commands
-        const auto delayedParse = [&]() {
-            parseCmdOptions(coreApp, guiApp, commandLine);
-        };
         auto* playlistHandler = coreApp.playlistHandler();
-        QObject::connect(playlistHandler, &Fooyin::PlaylistHandler::playlistsPopulated, playlistHandler,
-                         [delayedParse]() { delayedParse(); });
+        QObject::connect(
+            playlistHandler, &Fooyin::PlaylistHandler::playlistsPopulated, &guiApp,
+            [&]() { parseCmdOptions(coreApp, guiApp, commandLine); }, Qt::SingleShotConnection);
     }
 
     QObject::connect(&instance, &KDSingleApplication::messageReceived, &guiApp, [&](const QByteArray& options) {

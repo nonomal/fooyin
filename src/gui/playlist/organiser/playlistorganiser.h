@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,9 +19,11 @@
 
 #pragma once
 
-#include <core/track.h>
 #include <gui/fywidget.h>
 
+#include <QPersistentModelIndex>
+
+class QJsonObject;
 class QTreeView;
 
 namespace Fooyin {
@@ -45,11 +47,31 @@ public:
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
+    void saveLayoutData(QJsonObject& layout) override;
+    void loadLayoutData(const QJsonObject& layout) override;
+
+    struct ConfigData
+    {
+        QString leftScript;
+        QString rightScript;
+        QString playingTextColour;
+        QString playingBackgroundColour;
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void openConfigDialog() override;
 
 private:
+    [[nodiscard]] QModelIndex actionIndex() const;
+    [[nodiscard]] QModelIndexList actionIndexes() const;
     void selectionChanged();
     void selectCurrentPlaylist();
     void createGroup(const QModelIndex& index) const;
@@ -58,8 +80,12 @@ private:
 
     void filesToPlaylist(const QList<QUrl>& urls, const UId& id);
     void filesToGroup(const QList<QUrl>& urls, const QString& group, int index);
+    void filesToGroupOrdered(const QList<QUrl>& urls, const QString& group, int index);
+    void importPlaylists(const QList<QUrl>& urls, const QString& group, int index);
     void tracksToPlaylist(const std::vector<int>& trackIds, const UId& id);
     void tracksToGroup(const std::vector<int>& trackIds, const QString& group, int index);
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    static void saveConfigToLayout(const ConfigData& config, QJsonObject& layout);
 
     ActionManager* m_actionManager;
     SettingsManager* m_settings;
@@ -84,6 +110,14 @@ private:
     QAction* m_editAutoPlaylist;
     Command* m_editAutoPlaylistCmd;
 
+    QAction* m_sortAllPlaylists;
+    Command* m_sortAllPlaylistsCmd;
+
+    QAction* m_sortGroupPlaylists;
+    Command* m_sortGroupPlaylistsCmd;
+
+    ConfigData m_config;
+    QPersistentModelIndex m_contextMenuIndex;
     UId m_currentPlaylistId;
     bool m_creatingPlaylist{false};
 };

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,7 +54,12 @@ PipewireRegistry::PipewireRegistry(PipewireCore* core)
     pw_registry_add_listener(m_registry.get(), &m_registryListener, &registryEvents, this); // NOLINT
 }
 
-PipewireRegistry::~PipewireRegistry() = default;
+PipewireRegistry::~PipewireRegistry()
+{
+    if(m_registry) {
+        spa_hook_remove(&m_registryListener);
+    }
+}
 
 OutputDevices PipewireRegistry::devices() const
 {

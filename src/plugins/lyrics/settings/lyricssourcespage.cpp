@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 #include "lyricssettings.h"
 #include "lyricssourcesmodel.h"
 
+#include <gui/guiconstants.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QCheckBox>
@@ -92,8 +93,8 @@ void LyricsSourcesPageWidget::load()
 {
     m_sourceModel->setup(m_lyricsFinder->sources());
 
-    m_lyricTags->setText(m_settings->value<Settings::Lyrics::SearchTags>().join(u';'));
-    const auto paths = m_settings->value<Settings::Lyrics::Paths>();
+    m_lyricTags->setText(m_settings->fileValue(Settings::SearchTags, Defaults::searchTags()).toStringList().join(u';'));
+    const auto paths = m_settings->fileValue(Settings::Paths, Defaults::paths()).toStringList();
     m_lyricPaths->setPlainText(paths.join(u"\n"_s));
 }
 
@@ -116,9 +117,10 @@ void LyricsSourcesPageWidget::apply()
     }
 
     m_lyricsFinder->sort();
+    m_lyricsFinder->saveState();
 
-    m_settings->set<Settings::Lyrics::SearchTags>(m_lyricTags->text().split(u';', Qt::SkipEmptyParts));
-    m_settings->set<Settings::Lyrics::Paths>(m_lyricPaths->toPlainText().split(u'\n', Qt::SkipEmptyParts));
+    m_settings->fileSet(Settings::SearchTags, m_lyricTags->text().split(u';', Qt::SkipEmptyParts));
+    m_settings->fileSet(Settings::Paths, m_lyricPaths->toPlainText().split(u'\n', Qt::SkipEmptyParts));
 
     load();
 }
@@ -127,8 +129,8 @@ void LyricsSourcesPageWidget::reset()
 {
     m_lyricsFinder->reset();
 
-    m_settings->reset<Settings::Lyrics::SearchTags>();
-    m_settings->reset<Settings::Lyrics::Paths>();
+    m_settings->fileRemove(Settings::SearchTags);
+    m_settings->fileRemove(Settings::Paths);
 
     load();
 }
@@ -138,7 +140,8 @@ LyricsSourcesPage::LyricsSourcesPage(LyricsFinder* lyricsFinder, SettingsManager
 {
     setId(Constants::Page::LyricsSources);
     setName(tr("Sources"));
-    setCategory({tr("Lyrics")});
+    setCategory({tr("Lyrics"), tr("Sources")});
+    setRelativePosition(SettingsPageRelativePosition::After, ::Fooyin::Constants::Page::PlaylistGeneral);
     setWidgetCreator([lyricsFinder, settings] { return new LyricsSourcesPageWidget(lyricsFinder, settings); });
 }
 } // namespace Fooyin::Lyrics

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,13 +22,15 @@
 #include "librarymodel.h"
 
 #include "core/internalcoresettings.h"
-#include "core/library/libraryinfo.h"
+#include <gui/iconloader.h>
 
+#include "core/library/libraryinfo.h"
 #include <core/coresettings.h>
 #include <core/library/musiclibrary.h>
 #include <gui/guiconstants.h>
 #include <gui/widgets/extendabletableview.h>
 #include <utils/settings/settingsmanager.h>
+#include <utils/utils.h>
 
 #include <QCheckBox>
 #include <QFileDialog>
@@ -39,7 +41,6 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
-#include <QPushButton>
 
 using namespace Qt::StringLiterals;
 
@@ -54,9 +55,10 @@ public:
 protected:
     void setupContextActions(QMenu* menu, const QPoint& pos) override;
 
-signals:
+Q_SIGNALS:
     void refreshLibrary(const Fooyin::LibraryInfo& info);
     void rescanLibrary(const Fooyin::LibraryInfo& info);
+    void cancelLibraryScan(int id);
 };
 
 void LibraryTableView::setupContextActions(QMenu* menu, const QPoint& pos)
@@ -66,19 +68,29 @@ void LibraryTableView::setupContextActions(QMenu* menu, const QPoint& pos)
         return;
     }
 
-    const auto library   = index.data(Qt::UserRole).value<LibraryInfo>();
-    const bool isPending = library.status == LibraryInfo::Status::Pending;
+    const auto library    = index.data(LibraryModel::Info).value<LibraryInfo>();
+    const int scanId      = index.data(LibraryModel::ScanRequestId).toInt();
+    const bool isPending  = library.status == LibraryInfo::Status::Pending;
+    const bool isScanning = library.status == LibraryInfo::Status::Scanning && scanId >= 0;
 
-    auto* refresh = new QAction(tr("&Scan for changes"), this);
-    refresh->setEnabled(!isPending);
-    QObject::connect(refresh, &QAction::triggered, this, [this, library]() { emit refreshLibrary(library); });
+    auto* refresh = new QAction(tr("&Scan for changes"), menu);
+    refresh->setEnabled(!isPending && !isScanning);
+    QObject::connect(refresh, &QAction::triggered, this, [this, library]() { Q_EMIT refreshLibrary(library); });
 
-    auto* rescan = new QAction(tr("&Reload tracks"), this);
-    rescan->setEnabled(!isPending);
-    QObject::connect(rescan, &QAction::triggered, this, [this, library]() { emit rescanLibrary(library); });
+    auto* rescan = new QAction(tr("&Reload tracks"), menu);
+    rescan->setEnabled(!isPending && !isScanning);
+    QObject::connect(rescan, &QAction::triggered, this, [this, library]() { Q_EMIT rescanLibrary(library); });
 
     menu->addAction(refresh);
     menu->addAction(rescan);
+
+    if(isScanning) {
+        auto* cancel = new QAction(tr("&Cancel scan"), menu);
+        Gui::setThemeIcon(cancel, Constants::Icons::Close);
+        QObject::connect(cancel, &QAction::triggered, this, [this, scanId]() { Q_EMIT cancelLibraryScan(scanId); });
+        menu->addSeparator();
+        menu->addAction(cancel);
+    }
 }
 
 class LibraryGeneralPageWidget : public SettingsPageWidget
@@ -86,8 +98,7 @@ class LibraryGeneralPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit LibraryGeneralPageWidget(ActionManager* actionManager, LibraryManager* libraryManager,
-                                      MusicLibrary* library, SettingsManager* settings);
+    explicit LibraryGeneralPageWidget(LibraryManager* libraryManager, MusicLibrary* library, SettingsManager* settings);
 
     void load() override;
     void apply() override;
@@ -107,30 +118,26 @@ private:
     QLineEdit* m_excludeTypes;
 
     QCheckBox* m_autoRefresh;
-    QCheckBox* m_monitorLibraries;
+    QCheckBox* m_monitorLibraryDirectories;
+    QCheckBox* m_monitorTrackFiles;
     QCheckBox* m_markUnavailable;
     QCheckBox* m_markUnavailableStart;
-    QCheckBox* m_useVariousCompilations;
-    QCheckBox* m_saveRatings;
-    QCheckBox* m_savePlaycounts;
 };
 
-LibraryGeneralPageWidget::LibraryGeneralPageWidget(ActionManager* actionManager, LibraryManager* libraryManager,
-                                                   MusicLibrary* library, SettingsManager* settings)
+LibraryGeneralPageWidget::LibraryGeneralPageWidget(LibraryManager* libraryManager, MusicLibrary* library,
+                                                   SettingsManager* settings)
     : m_libraryManager{libraryManager}
     , m_library{library}
     , m_settings{settings}
-    , m_libraryView{new LibraryTableView(actionManager, this)}
+    , m_libraryView{new LibraryTableView(this)}
     , m_model{new LibraryModel(m_libraryManager, this)}
     , m_restrictTypes{new QLineEdit(this)}
     , m_excludeTypes{new QLineEdit(this)}
     , m_autoRefresh{new QCheckBox(tr("Auto refresh on startup"), this)}
-    , m_monitorLibraries{new QCheckBox(tr("Monitor libraries"), this)}
+    , m_monitorLibraryDirectories{new QCheckBox(tr("Monitor library directories"), this)}
+    , m_monitorTrackFiles{new QCheckBox(tr("Monitor track files"), this)}
     , m_markUnavailable{new QCheckBox(tr("Mark unavailable tracks on playback"), this)}
     , m_markUnavailableStart{new QCheckBox(tr("Mark unavailable tracks on startup"), this)}
-    , m_useVariousCompilations{new QCheckBox(tr("Use 'Various Artists' for compilations"), this)}
-    , m_saveRatings{new QCheckBox(tr("Save ratings to file metadata"), this)}
-    , m_savePlaycounts{new QCheckBox(tr("Save playcount to file metadata"), this)}
 {
     m_libraryView->setExtendableModel(m_model);
 
@@ -142,7 +149,9 @@ LibraryGeneralPageWidget::LibraryGeneralPageWidget(ActionManager* actionManager,
     m_libraryView->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 
     m_autoRefresh->setToolTip(tr("Scan libraries for changes on startup"));
-    m_monitorLibraries->setToolTip(tr("Monitor libraries for external changes"));
+    m_monitorLibraryDirectories->setToolTip(
+        tr("Watch library directories for external changes such as new or removed files"));
+    m_monitorTrackFiles->setToolTip(tr("Watch individual track files for tag changes"));
 
     auto* fileTypesGroup  = new QGroupBox(tr("File Types"), this);
     auto* fileTypesLayout = new QGridLayout(fileTypesGroup);
@@ -152,26 +161,42 @@ LibraryGeneralPageWidget::LibraryGeneralPageWidget(ActionManager* actionManager,
     fileTypesLayout->addWidget(m_restrictTypes, row++, 1);
     fileTypesLayout->addWidget(new QLabel(tr("Exclude") + ":"_L1, this), row, 0);
     fileTypesLayout->addWidget(m_excludeTypes, row++, 1);
-    fileTypesLayout->addWidget(new QLabel(u"🛈 e.g. \"mp3;m4a\""_s, this), row++, 1);
+    //: Example of semicolon-separated file extensions (e.g. mp3;m4a)
+    fileTypesLayout->addWidget(new QLabel(u"🛈 "_s + tr("e.g. \"%1\"").arg("mp3;m4a"_L1), this), row++, 1);
     fileTypesLayout->setColumnStretch(1, 1);
+
+    auto* scanningGroup  = new QGroupBox(tr("Scanning"), this);
+    auto* scanningLayout = new QGridLayout(scanningGroup);
+
+    row = 0;
+    scanningLayout->addWidget(m_autoRefresh, row++, 0);
+    scanningLayout->addWidget(m_monitorLibraryDirectories, row++, 0);
+    scanningLayout->addWidget(m_monitorTrackFiles, row++, 0);
+
+    auto* availabilityGroup  = new QGroupBox(tr("Availability"), this);
+    auto* availabilityLayout = new QGridLayout(availabilityGroup);
+
+    row = 0;
+    availabilityLayout->addWidget(m_markUnavailable, row++, 0);
+    availabilityLayout->addWidget(m_markUnavailableStart, row++, 0);
 
     auto* mainLayout = new QGridLayout(this);
 
     row = 0;
     mainLayout->addWidget(m_libraryView, row++, 0, 1, 2);
     mainLayout->addWidget(fileTypesGroup, row++, 0, 1, 2);
-    mainLayout->addWidget(m_autoRefresh, row++, 0, 1, 2);
-    mainLayout->addWidget(m_monitorLibraries, row++, 0, 1, 2);
-    mainLayout->addWidget(m_markUnavailable, row++, 0, 1, 2);
-    mainLayout->addWidget(m_markUnavailableStart, row++, 0, 1, 2);
-    mainLayout->addWidget(m_useVariousCompilations, row++, 0, 1, 2);
-    mainLayout->addWidget(m_saveRatings, row++, 0, 1, 2);
-    mainLayout->addWidget(m_savePlaycounts, row++, 0, 1, 2);
+    mainLayout->addWidget(scanningGroup, row, 0);
+    mainLayout->addWidget(availabilityGroup, row++, 1);
+    mainLayout->setRowStretch(row, 1);
+    mainLayout->setColumnStretch(0, 1);
     mainLayout->setColumnStretch(1, 1);
 
     QObject::connect(m_model, &LibraryModel::requestAddLibrary, this, &LibraryGeneralPageWidget::addLibrary);
     QObject::connect(m_libraryView, &LibraryTableView::refreshLibrary, m_library, &MusicLibrary::refresh);
     QObject::connect(m_libraryView, &LibraryTableView::rescanLibrary, m_library, &MusicLibrary::rescan);
+    QObject::connect(m_libraryView, &LibraryTableView::cancelLibraryScan, m_library, &MusicLibrary::cancelScan);
+    QObject::connect(m_library, &MusicLibrary::scanProgress, m_model, &LibraryModel::setScanProgress);
+    QObject::connect(m_monitorLibraryDirectories, &QCheckBox::toggled, m_monitorTrackFiles, &QWidget::setEnabled);
 }
 
 void LibraryGeneralPageWidget::load()
@@ -187,13 +212,12 @@ void LibraryGeneralPageWidget::load()
     m_excludeTypes->setText(excludeExtensions.join(u';'));
 
     m_autoRefresh->setChecked(m_settings->value<Settings::Core::AutoRefresh>());
-    m_monitorLibraries->setChecked(m_settings->value<Settings::Core::Internal::MonitorLibraries>());
+    m_monitorLibraryDirectories->setChecked(m_settings->value<Settings::Core::Internal::MonitorLibraryDirectories>());
+    m_monitorTrackFiles->setChecked(m_settings->value<Settings::Core::Internal::MonitorTrackFiles>());
+    m_monitorTrackFiles->setEnabled(m_monitorLibraryDirectories->isChecked());
     m_markUnavailable->setChecked(m_settings->fileValue(Settings::Core::Internal::MarkUnavailable, false).toBool());
     m_markUnavailableStart->setChecked(
         m_settings->fileValue(Settings::Core::Internal::MarkUnavailableStartup, false).toBool());
-    m_useVariousCompilations->setChecked(m_settings->value<Settings::Core::UseVariousForCompilations>());
-    m_saveRatings->setChecked(m_settings->value<Settings::Core::SaveRatingToMetadata>());
-    m_savePlaycounts->setChecked(m_settings->value<Settings::Core::SavePlaycountToMetadata>());
 }
 
 void LibraryGeneralPageWidget::apply()
@@ -206,12 +230,10 @@ void LibraryGeneralPageWidget::apply()
                         m_excludeTypes->text().split(u';', Qt::SkipEmptyParts));
 
     m_settings->set<Settings::Core::AutoRefresh>(m_autoRefresh->isChecked());
-    m_settings->set<Settings::Core::Internal::MonitorLibraries>(m_monitorLibraries->isChecked());
+    m_settings->set<Settings::Core::Internal::MonitorLibraryDirectories>(m_monitorLibraryDirectories->isChecked());
+    m_settings->set<Settings::Core::Internal::MonitorTrackFiles>(m_monitorTrackFiles->isChecked());
     m_settings->fileSet(Settings::Core::Internal::MarkUnavailable, m_markUnavailable->isChecked());
     m_settings->fileSet(Settings::Core::Internal::MarkUnavailableStartup, m_markUnavailableStart->isChecked());
-    m_settings->set<Settings::Core::UseVariousForCompilations>(m_useVariousCompilations->isChecked());
-    m_settings->set<Settings::Core::SaveRatingToMetadata>(m_saveRatings->isChecked());
-    m_settings->set<Settings::Core::SavePlaycountToMetadata>(m_savePlaycounts->isChecked());
 }
 
 void LibraryGeneralPageWidget::reset()
@@ -220,12 +242,10 @@ void LibraryGeneralPageWidget::reset()
     m_settings->fileRemove(Settings::Core::Internal::LibraryExcludeTypes);
 
     m_settings->reset<Settings::Core::AutoRefresh>();
-    m_settings->reset<Settings::Core::Internal::MonitorLibraries>();
+    m_settings->reset<Settings::Core::Internal::MonitorLibraryDirectories>();
+    m_settings->reset<Settings::Core::Internal::MonitorTrackFiles>();
     m_settings->fileRemove(Settings::Core::Internal::MarkUnavailable);
     m_settings->fileRemove(Settings::Core::Internal::MarkUnavailableStartup);
-    m_settings->reset<Settings::Core::UseVariousForCompilations>();
-    m_settings->reset<Settings::Core::SaveRatingToMetadata>();
-    m_settings->reset<Settings::Core::SavePlaycountToMetadata>();
 }
 
 void LibraryGeneralPageWidget::addLibrary() const
@@ -238,21 +258,21 @@ void LibraryGeneralPageWidget::addLibrary() const
         return;
     }
 
-    const QFileInfo info{dir};
+    const QFileInfo info{QDir::cleanPath(dir)};
     const QString name = info.fileName();
 
-    m_model->markForAddition({name, dir});
+    m_model->markForAddition({.name = name, .path = dir});
 }
 
-LibraryGeneralPage::LibraryGeneralPage(ActionManager* actionManager, LibraryManager* libraryManager,
-                                       MusicLibrary* library, SettingsManager* settings, QObject* parent)
+LibraryGeneralPage::LibraryGeneralPage(LibraryManager* libraryManager, MusicLibrary* library, SettingsManager* settings,
+                                       QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::LibraryGeneral);
     setName(tr("General"));
     setCategory({tr("Library")});
-    setWidgetCreator([actionManager, libraryManager, library, settings] {
-        return new LibraryGeneralPageWidget(actionManager, libraryManager, library, settings);
+    setWidgetCreator([libraryManager, library, settings] {
+        return new LibraryGeneralPageWidget(libraryManager, library, settings);
     });
 }
 } // namespace Fooyin

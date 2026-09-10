@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,17 +29,7 @@ Q_NAMESPACE
 
 enum WaveBarSettings : uint32_t
 {
-    Downmix       = 1 | Type::Int,
-    ShowCursor    = 2 | Type::Bool,
-    CursorWidth   = 3 | Type::Int,
-    ColourOptions = 4 | Type::Variant,
-    Mode          = 5 | Type::Int,
-    BarWidth      = 6 | Type::Int,
-    BarGap        = 7 | Type::Int,
-    MaxScale      = 8 | Type::Double,
-    CentreGap     = 9 | Type::Int,
-    ChannelScale  = 10 | Type::Double,
-    NumSamples    = 11 | Type::Int,
+    NumSamples = 11 | Type::Int,
 };
 Q_ENUM_NS(WaveBarSettings)
 } // namespace Settings::WaveBar
@@ -60,6 +50,13 @@ enum class DownmixOption
     Off = 0,
     Stereo,
     Mono,
+};
+
+enum class PeakDisplayMode
+{
+    Maximum = 0,
+    Average,
+    SmoothedAverage,
 };
 
 class WaveBarSettings

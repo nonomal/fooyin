@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,16 +21,27 @@
 
 #include "fycore_export.h"
 
-#include <core/engine/audioengine.h>
 #include <core/engine/audiooutput.h>
+#include <core/engine/enginedefs.h>
+#include <core/engine/levelframe.h>
+#include <core/engine/pcmframe.h>
 
+#include <QByteArray>
 #include <QObject>
 
 namespace Fooyin {
 struct AudioOutputBuilder;
+class AudioBuffer;
+class VisualisationService;
 
 using OutputNames = std::vector<QString>;
 
+/*!
+ * High-level playback engine facade exposed to app/UI layers.
+ *
+ * Implementations bridge UI/player requests to an underlying audio engine and
+ * emit normalised engine events/signals for the rest of the application.
+ */
 class FYCORE_EXPORT EngineController : public QObject
 {
     Q_OBJECT
@@ -40,32 +51,71 @@ public:
         : QObject{parent}
     { }
 
-    [[nodiscard]] virtual AudioEngine::PlaybackState engineState() const = 0;
-
-    /** Returns a list of all output names. */
+    //! Current playback state as reported by the engine.
+    [[nodiscard]] virtual Engine::PlaybackState engineState() const = 0;
+    //! All registered output backend names.
     [[nodiscard]] virtual OutputNames getAllOutputs() const = 0;
-
-    /** Returns a list of all output devices for the given @p output. */
+    //! Available devices for a specific output backend.
     [[nodiscard]] virtual OutputDevices getOutputDevices(const QString& output) const = 0;
+    //! Apply a combined output/device/DSP/bitdepth profile.
+    virtual void applyOutputProfile(const Engine::OutputProfileRequest& request) = 0;
+    /*!
+     * Pull-based visualisation API backed by shared post-master-DSP,
+     * pre-output-fader PCM history.
+     *
+     * This is intended for in-app visual widgets that query PCM or spectrum
+     * windows on their own repaint schedule.
+     *
+     * For push-style consumers such as meters, use the analysis signals below instead.
+     */
+    [[nodiscard]] virtual VisualisationService* visualisationService() const = 0;
 
     /*!
-     * Adds an audio output.
-     * @note output.name must be unique.
+     * Registers an audio output backend factory under @p name.
+     * @note @p name must be unique.
      */
     virtual void addOutput(const QString& name, OutputCreator output) = 0;
 
-signals:
+Q_SIGNALS:
+    //! Emitted when output backend selection changes.
     void outputChanged(const QString& output, const QString& device);
+    //! Emitted when device for current backend changes.
     void deviceChanged(const QString& device);
 
+    //! Fatal/non-recoverable engine error text.
     void engineError(const QString& error);
-    void engineStateChanged(AudioEngine::PlaybackState state);
-    void trackStatusChanged(AudioEngine::TrackStatus status);
+    //! Playback state transitions.
+    void engineStateChanged(Fooyin::Engine::PlaybackState state);
+    //! Emitted while a faded pause drains already-queued audio to the output.
+    void audiblePauseDrainStarted();
+    //! Emitted once the faded-pause output drain is no longer audible.
+    void audiblePauseDrainCompleted();
+    //! Track-status transitions with stable generation identifier.
+    void trackStatusContextChanged(const Fooyin::Engine::TrackStatusContext& context);
 
-    void bufferPlayed(const Fooyin::AudioBuffer& buffer);
+    //! Push-style fixed-hop level analysis snapshots for general consumers.
+    void levelReady(const Fooyin::LevelFrame& frame);
+    //! Push-style fixed-hop PCM analysis snapshots for general consumers.
+    void pcmReady(const Fooyin::PcmFrame& frame);
 
+    //! Metadata/context update for currently active track.
     void trackChanged(const Fooyin::Track& track);
-    void trackAboutToFinish();
+    //! Logical track switch committed by the engine.
+    void trackCommitted(const Fooyin::Engine::TrackCommitContext& context);
+    //! Early callback before track reaches terminal end.
+    void trackAboutToFinish(const Fooyin::Engine::AboutToFinishContext& context);
+    //! Callback fired when transition timing reaches the switch anchor.
+    void trackReadyToSwitch(const Fooyin::Engine::AboutToFinishContext& context);
+    //! Callback fired when active logical track reaches its exact boundary.
+    void trackBoundaryReached(const Fooyin::Engine::AboutToFinishContext& context);
+    //! Prepared-next-track readiness notification.
+    void nextTrackReadiness(const Fooyin::Engine::PlaybackItem& item, bool ready, uint64_t requestId);
+    //! Result of async prepared-crossfade arm attempt for a specific boundary generation.
+    void preparedCrossfadeArmResult(const Fooyin::Engine::PlaybackItem& item, uint64_t generation, bool armed);
+    //! Result of async prepared-gapless arm attempt for a specific boundary generation.
+    void preparedGaplessArmResult(const Fooyin::Engine::PlaybackItem& item, uint64_t generation, bool armed);
+
+    //! Emitted after stop teardown completes.
     void finished();
 };
 } // namespace Fooyin

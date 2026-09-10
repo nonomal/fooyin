@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,18 +31,29 @@ using Fooyin::WaveBar::WaveformData;
 
 QDataStream& operator>>(QDataStream& stream, std::vector<WaveformData<int16_t>::ChannelData>& data)
 {
-    quint32 size;
+    quint32 size{0};
     stream >> size;
+    if(stream.status() != QDataStream::Ok) {
+        data.clear();
+        return stream;
+    }
 
+    data.clear();
     data.reserve(size);
 
     while(size > 0) {
         --size;
 
         WaveformData<int16_t>::ChannelData channel;
-        Fooyin::operator>>(stream, channel.max);
-        Fooyin::operator>>(stream, channel.min);
-        Fooyin::operator>>(stream, channel.rms);
+        stream >> channel.max;
+        stream >> channel.min;
+        stream >> channel.rms;
+
+        if(stream.status() != QDataStream::Ok) {
+            data.clear();
+            return stream;
+        }
+
         data.emplace_back(channel);
     }
     return stream;
@@ -53,9 +64,9 @@ QDataStream& operator<<(QDataStream& stream, const std::vector<WaveformData<int1
     stream << static_cast<quint32>(data.size());
 
     for(const auto& channel : data) {
-        Fooyin::operator<<(stream, channel.max);
-        Fooyin::operator<<(stream, channel.min);
-        Fooyin::operator<<(stream, channel.rms);
+        stream << channel.max;
+        stream << channel.min;
+        stream << channel.rms;
     }
 
     return stream;
@@ -74,13 +85,20 @@ QByteArray serialiseData(const WaveformData<int16_t>& data)
     return out;
 }
 
-void deserialiseData(const QByteArray& cacheData, WaveformData<int16_t>& data)
+bool deserialiseData(const QByteArray& cacheData, WaveformData<int16_t>& data)
 {
+    data.channelData.clear();
+
     QByteArray in = qUncompress(cacheData);
+    if(in.isEmpty() && !cacheData.isEmpty()) {
+        return false;
+    }
+
     QDataStream stream{&in, QDataStream::ReadOnly};
     stream.setVersion(QDataStream::Qt_6_0);
 
     stream >> data.channelData;
+    return stream.status() == QDataStream::Ok;
 }
 } // namespace
 
@@ -120,8 +138,7 @@ bool WaveBarDatabase::loadCachedData(const QString& key, WaveformData<int16_t>& 
 
     if(query.exec() && query.next()) {
         const QByteArray cacheData = query.value(0).toByteArray();
-        deserialiseData(cacheData, data);
-        return true;
+        return deserialiseData(cacheData, data);
     }
 
     return false;
@@ -151,10 +168,22 @@ bool WaveBarDatabase::removeFromCache(const QString& key) const
 
 bool WaveBarDatabase::removeFromCache(const QStringList& keys) const
 {
-    const QString statement = u"DELETE FROM WaveCache WHERE TrackKey IN (:keys);"_s;
+    if(keys.empty()) {
+        return true;
+    }
+
+    QStringList placeholders;
+    placeholders.reserve(keys.size());
+    for(qsizetype i{0}; i < keys.size(); ++i) {
+        placeholders.emplace_back(u":key%1"_s.arg(i));
+    }
+
+    const QString statement = u"DELETE FROM WaveCache WHERE TrackKey IN (%1);"_s.arg(placeholders.join(u','));
 
     DbQuery query{db(), statement};
-    query.bindValue(u":keys"_s, keys);
+    for(qsizetype i{0}; i < keys.size(); ++i) {
+        query.bindValue(placeholders.at(i), keys.at(i));
+    }
 
     return query.exec();
 }

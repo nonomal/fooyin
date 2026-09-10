@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -60,7 +60,7 @@ public:
 
     bool reset();
 
-signals:
+Q_SIGNALS:
     void settingChangedVariant(const QVariant& value);
     void settingChangedBool(bool value);
     void settingChangedInt(int value);

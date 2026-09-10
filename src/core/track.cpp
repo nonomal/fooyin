@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,27 +18,123 @@
  */
 
 #include "core/constants.h"
+#include <core/ratingsymbols.h>
+#include <core/stringpool.h>
 #include <core/track.h>
+#include <core/trackmetadatastore.h>
 
 #include <utils/crypto.h>
-#include <utils/utils.h>
+#include <utils/stringutils.h>
 
 #include <QDir>
 #include <QFileInfo>
 #include <QIODevice>
 #include <QRegularExpression>
+#include <QUrl>
 
 #include <chrono>
-#include <ranges>
+#include <cmath>
+#include <limits>
+#include <utility>
 
 using namespace Qt::StringLiterals;
 
-constexpr auto MaxStarCount   = 10;
-constexpr auto YearRegex      = R"lit(\b\d{4}\b)lit";
-constexpr auto YearMonthRegex = R"lit(\b(\d{4})-(\d{2})\b)lit";
-constexpr auto FullDateRegex  = R"lit(\b(\d{4})-(\d{2})-(\d{2})\b)lit";
+constexpr auto MaxStarCount    = 10;
+constexpr auto YearRegex       = R"lit(\b\d{4}\b)lit";
+constexpr auto YearMonthRegex  = R"lit(\b(\d{4})-(\d{2})\b)lit";
+constexpr auto FullDateRegex   = R"lit(\b(\d{4})-(\d{2})-(\d{2})\b)lit";
+constexpr auto ChapterProperty = "_CHAPTER"_L1;
+constexpr auto ChapterValue    = "1"_L1;
 
 namespace {
+bool isRemoteTrackPath(const QString& path)
+{
+    if(path.isEmpty() || Fooyin::Track::isArchivePath(path)) {
+        return false;
+    }
+
+    const QUrl url{path};
+    if(!url.isValid() || url.scheme().isEmpty()) {
+        return false;
+    }
+
+    const QString scheme = url.scheme().toLower();
+    return scheme == "http"_L1 || scheme == "https"_L1;
+}
+
+bool isWindowsAbsolutePath(const QString& path)
+{
+    return (path.size() >= 3 && path.at(0).isLetter() && path.at(1) == u':'
+            && (path.at(2) == u'/' || path.at(2) == u'\\'))
+        || path.startsWith(uR"(\\)"_s) || path.startsWith("//"_L1);
+}
+
+bool isVirtualTrackPath(const QString& path)
+{
+    if(path.isEmpty() || Fooyin::Track::isArchivePath(path) || isRemoteTrackPath(path) || isWindowsAbsolutePath(path)) {
+        return false;
+    }
+
+    const QUrl url{path, QUrl::StrictMode};
+    return url.isValid() && !url.scheme().isEmpty() && url.scheme().compare(u"file"_s, Qt::CaseInsensitive) != 0;
+}
+
+QString virtualUrlName(const QString& path)
+{
+    const QUrl url{path, QUrl::StrictMode};
+    if(const QString name = QFileInfo{url.path()}.fileName(); !name.isEmpty()) {
+        return name;
+    }
+
+    const qsizetype separator = path.indexOf("://"_L1);
+    if(separator < 0) {
+        return {};
+    }
+
+    const QStringView authority = QStringView{path}.sliced(separator + 3);
+    const qsizetype slash       = authority.indexOf(u'/');
+    return (slash < 0 ? authority : authority.first(slash)).toString();
+}
+
+QString virtualUrlPath(const QString& path)
+{
+    const qsizetype separator = path.indexOf("://"_L1);
+    if(separator < 0) {
+        return {};
+    }
+
+    const qsizetype prefixEnd = separator + 3;
+    const qsizetype lastSlash = path.lastIndexOf(u'/');
+    return lastSlash < prefixEnd ? path.first(prefixEnd) : path.first(lastSlash);
+}
+
+QString prettyVirtualUrl(const QString& path)
+{
+    const qsizetype separator = path.indexOf(":///"_L1);
+    if(separator < 0) {
+        return path;
+    }
+    return path.first(separator + 3) + path.sliced(separator + 4);
+}
+
+QString remoteTrackFilename(const QString& path)
+{
+    const QUrl url{path};
+    const QFileInfo info{url.path()};
+    const QString filename = info.completeBaseName();
+    return !filename.isEmpty() ? filename : url.host();
+}
+
+QString remoteTrackDirectory(const QString& path)
+{
+    return QUrl{path}.host();
+}
+
+QString remoteTrackExtension(const QString& path)
+{
+    return QFileInfo{QUrl{path}.path()}.suffix().toLower();
+}
+
 QString validNum(auto num)
 {
     if(num > 0) {
@@ -47,32 +143,188 @@ QString validNum(auto num)
     return {};
 };
 
-using MetaMap = std::unordered_map<QString, std::function<QString(const Fooyin::Track& track)>>;
-MetaMap metaMap()
+QString ratingStarsText(int rating)
+{
+    if(rating <= 0) {
+        return {};
+    }
+
+    const int clampedRating = std::clamp(rating, 0, MaxStarCount);
+    const int fullStars     = clampedRating / 2;
+    const bool halfStar     = (clampedRating % 2) != 0;
+
+    QString text;
+    text.reserve(5);
+
+    text.append(Fooyin::defaultRatingFullStarSymbol().repeated(fullStars));
+    if(halfStar) {
+        text.append(Fooyin::defaultRatingHalfStarSymbol());
+    }
+
+    return text;
+}
+
+QString rawRatingTagProperty(const QString& tag)
+{
+    return QString::fromLatin1(Fooyin::Constants::RawRatingTagPrefix) + tag.toUpper();
+}
+
+using MetaMap     = std::unordered_map<QString, std::function<QString(const Fooyin::Track& track)>>;
+using MetaListMap = std::unordered_map<QString, std::function<QStringList(const Fooyin::Track& track)>>;
+
+const MetaListMap& metaListMap()
+{
+    using namespace Fooyin::Constants::MetaData;
+    // clang-format off
+    static const MetaListMap metaListMap{
+        {QString::fromLatin1(Artist),      [](const Fooyin::Track& track) { return track.artists(); }},
+        {QString::fromLatin1(AlbumArtist), [](const Fooyin::Track& track) { return track.albumArtists(); }},
+        {QString::fromLatin1(Genre),       [](const Fooyin::Track& track) { return track.genres(); }},
+        {QString::fromLatin1(Composer),    [](const Fooyin::Track& track) { return track.composers(); }},
+        {QString::fromLatin1(Performer),   [](const Fooyin::Track& track) { return track.performers(); }},
+    };
+    // clang-format on
+    return metaListMap;
+}
+
+const MetaMap& metaMap()
 {
     using namespace Fooyin::Constants::MetaData;
     // clang-format off
     static const MetaMap metaMap{
-        {QString::fromLatin1(Title),        [](const Fooyin::Track& track) { return track.title(); }},
-        {QString::fromLatin1(Artist),       [](const Fooyin::Track& track) { return track.artist(); }},
-        {QString::fromLatin1(Album),        [](const Fooyin::Track& track) { return track.album(); }},
-        {QString::fromLatin1(AlbumArtist),  [](const Fooyin::Track& track) { return track.albumArtist(); }},
-        {QString::fromLatin1(Track),        [](const Fooyin::Track& track) { return track.trackNumber(); }},
-        {QString::fromLatin1(TrackTotal),   [](const Fooyin::Track& track) { return track.trackTotal(); }},
-        {QString::fromLatin1(Disc),         [](const Fooyin::Track& track) { return track.discNumber(); }},
-        {QString::fromLatin1(DiscTotal),    [](const Fooyin::Track& track) { return track.discTotal(); }},
-        {QString::fromLatin1(Genre),        [](const Fooyin::Track& track) { return track.genre(); }},
-        {QString::fromLatin1(Composer),     [](const Fooyin::Track& track) { return track.composer(); }},
-        {QString::fromLatin1(Performer),    [](const Fooyin::Track& track) { return track.performer(); }},
-        {QString::fromLatin1(Comment),      [](const Fooyin::Track& track) { return track.comment(); }},
-        {QString::fromLatin1(Date),         [](const Fooyin::Track& track) { return track.date(); }},
-        {QString::fromLatin1(Year),         [](const Fooyin::Track& track) { return validNum(track.year()); }},
-        {QString::fromLatin1(Rating),       [](const Fooyin::Track& track) { return validNum(track.rating()); }},
-        {QString::fromLatin1(RatingEditor), [](const Fooyin::Track& track) { return validNum(track.rating()); }},
-        {QString::fromLatin1(RatingStars),  [](const Fooyin::Track& track) { return validNum(track.ratingStars()); }}
+        {QString::fromLatin1(Title),            [](const Fooyin::Track& track) { return track.title(); }},
+        {QString::fromLatin1(Artist),           [](const Fooyin::Track& track) { return track.artist(); }},
+        {QString::fromLatin1(Album),            [](const Fooyin::Track& track) { return track.album(); }},
+        {QString::fromLatin1(AlbumArtist),      [](const Fooyin::Track& track) { return track.albumArtist(); }},
+        {QString::fromLatin1(TrackNumber),      [](const Fooyin::Track& track) { return track.trackNumber(); }},
+        {QString::fromLatin1(TrackTotal),       [](const Fooyin::Track& track) { return track.trackTotal(); }},
+        {QString::fromLatin1(Disc),             [](const Fooyin::Track& track) { return track.discNumber(); }},
+        {QString::fromLatin1(DiscTotal),        [](const Fooyin::Track& track) { return track.discTotal(); }},
+        {QString::fromLatin1(Genre),            [](const Fooyin::Track& track) { return track.genre(); }},
+        {QString::fromLatin1(Composer),         [](const Fooyin::Track& track) { return track.composer(); }},
+        {QString::fromLatin1(Performer),        [](const Fooyin::Track& track) { return track.performer(); }},
+        {QString::fromLatin1(Comment),          [](const Fooyin::Track& track) { return track.comment(); }},
+        {QString::fromLatin1(Date),             [](const Fooyin::Track& track) { return track.date(); }},
+        {QString::fromLatin1(Year),             [](const Fooyin::Track& track) { return validNum(track.year()); }},
+        {QString::fromLatin1(Loved),            [](const Fooyin::Track& track) { return QString::number(track.isLoved()); }},
+        {QString::fromLatin1(LoveEditor),       [](const Fooyin::Track& track) { return QString::number(track.isLoved()); }},
+        {QString::fromLatin1(Rating),           [](const Fooyin::Track& track) { return validNum(track.rating() * 5.0F); }},
+        {QString::fromLatin1(RatingNormalized), [](const Fooyin::Track& track) { return validNum(track.rating()); }},
+        {QString::fromLatin1(Stars),            [](const Fooyin::Track& track) { return validNum(track.rating() * 5.0F); }},
+        {QString::fromLatin1(RatingEditor),     [](const Fooyin::Track& track) { return validNum(track.rating()); }}
     };
     // clang-format on
     return metaMap;
+}
+
+std::optional<int> opusHeaderGainQ78(const Fooyin::Track& track)
+{
+    const auto& props         = track.extraProperties();
+    const QString* opusHeader = props.find(QString::fromLatin1(Fooyin::Constants::OpusHeaderGainQ78));
+    if(!opusHeader) {
+        return {};
+    }
+
+    bool ok{false};
+    const int gain = opusHeader->toInt(&ok);
+    return ok ? std::optional{gain} : std::nullopt;
+}
+
+float opusHeaderGainDb(const Fooyin::Track& track)
+{
+    if(const auto gainQ78 = opusHeaderGainQ78(track); gainQ78.has_value()) {
+        return static_cast<float>(*gainQ78) / 256.0F;
+    }
+    return 0.0F;
+}
+
+float q78ToDb(int gainQ78)
+{
+    return static_cast<float>(gainQ78) / 256.0F;
+}
+
+std::optional<int16_t> replayGainToOpusR128Q78(float gainDb)
+{
+    const auto gainQ78 = std::lround((static_cast<double>(gainDb) - 5.0) * 256.0);
+    if(gainQ78 < std::numeric_limits<int16_t>::min() || gainQ78 > std::numeric_limits<int16_t>::max()) {
+        return {};
+    }
+
+    return static_cast<int16_t>(gainQ78);
+}
+
+std::optional<int16_t> adjustCommentGain(std::optional<int16_t> currentGain, int commentDeltaQ78)
+{
+    if(!currentGain.has_value()) {
+        return {};
+    }
+
+    const auto adjustedGain = static_cast<long long>(*currentGain) - commentDeltaQ78;
+    if(adjustedGain < std::numeric_limits<int16_t>::min() || adjustedGain > std::numeric_limits<int16_t>::max()) {
+        return {};
+    }
+
+    return static_cast<int16_t>(adjustedGain);
+}
+
+struct OpusGainState
+{
+    int16_t headerGain{0};
+    std::optional<int16_t> trackGain;
+    std::optional<int16_t> albumGain;
+};
+
+float opusHeaderLinearGain(const Fooyin::Track& track)
+{
+    return std::pow(10.0F, opusHeaderGainDb(track) / 20.0F);
+}
+
+void normaliseExtraProperties(Fooyin::Track::ExtraProperties& props)
+{
+    if(const QString* opusHeader = props.find(QString::fromLatin1(Fooyin::Constants::OpusHeaderGainQ78))) {
+        bool ok{false};
+        if(const int gain = opusHeader->toInt(&ok); ok && gain == 0) {
+            props.erase(QString::fromLatin1(Fooyin::Constants::OpusHeaderGainQ78));
+        }
+    }
+
+    if(const QString* chapter = props.find(ChapterProperty)) {
+        if(*chapter != ChapterValue) {
+            props.erase(ChapterProperty);
+        }
+    }
+}
+
+template <typename Value, typename KeyFn>
+bool readFlatStringMap(QDataStream& stream, Fooyin::FlatStringMap<Value>& out, KeyFn&& mapKey)
+{
+    static constexpr quint32 NullCode = 0xffffffffU;
+
+    out.clear();
+
+    quint32 size{0};
+    stream >> size;
+    if(stream.status() != QDataStream::Ok || size == NullCode) {
+        stream.setStatus(QDataStream::ReadCorruptData);
+        return false;
+    }
+
+    out.reserve(size);
+
+    for(quint32 i{0}; i < size; ++i) {
+        QString key;
+        Value value;
+
+        stream >> key >> value;
+        if(stream.status() != QDataStream::Ok) {
+            out.clear();
+            return false;
+        }
+
+        out.insertOrAssign(mapKey(std::move(key)), std::move(value));
+    }
+
+    return true;
 }
 } // namespace
 
@@ -81,32 +333,37 @@ class TrackPrivate : public QSharedData
 {
 public:
     void splitArchiveUrl();
+    [[nodiscard]] QString directory() const;
+    [[nodiscard]] QString filename() const;
+    [[nodiscard]] QString extension() const;
 
+    bool readExtraTagsToVector(QDataStream& stream, Track::ExtraTags& out) const;
+    static bool readPropsToVector(QDataStream& stream, Track::ExtraProperties& out);
+    [[nodiscard]] StringPool& stringPool() const;
+
+    std::shared_ptr<TrackMetadataStore> metadataStore;
     int libraryId{-1};
     bool enabled{true};
     int id{-1};
     QString hash;
-    QString codec;
+    StringPool::StringId codec{StringPool::EmptyStringId};
     QString filepath;
-    QString directory;
-    QString filename;
-    QString extension;
     QString title;
-    QStringList artists;
-    QString album;
-    QStringList albumArtists;
+    StringPool::StringListRef artists;
+    StringPool::StringId album{StringPool::EmptyStringId};
+    StringPool::StringListRef albumArtists;
     QString trackNumber;
     QString trackTotal;
     QString discNumber;
     QString discTotal;
-    QStringList genres;
-    QStringList composers;
-    QStringList performers;
+    StringPool::StringListRef genres;
+    StringPool::StringListRef composers;
+    StringPool::StringListRef performers;
     QString comment;
     QString date;
     int year{-1};
-    int64_t dateSinceEpoch;
-    int64_t yearSinceEpoch;
+    int64_t dateSinceEpoch{0};
+    int64_t yearSinceEpoch{0};
     Track::ExtraTags extraTags;
     QStringList removedTags;
     Track::ExtraProperties extraProps;
@@ -124,10 +381,12 @@ public:
     QString codecProfile;
     QString tool;
     QStringList tagTypes;
-    QString encoding;
+    StringPool::StringId encoding{StringPool::EmptyStringId};
 
+    bool loved{false};
     float rating{-1};
     int playcount{0};
+    uint64_t createdTime{0};
     uint64_t addedTime{0};
     uint64_t modifiedTime{0};
     uint64_t firstPlayed{0};
@@ -138,10 +397,8 @@ public:
     float rgTrackPeak{Constants::InvalidPeak};
     float rgAlbumPeak{Constants::InvalidPeak};
 
-    QString sort;
-
+    bool metadataWasRead{false};
     bool metadataWasModified{false};
-    bool isNewTrack{true};
 
     // Archive related
     bool isInArchive{false};
@@ -163,28 +420,166 @@ void TrackPrivate::splitArchiveUrl()
 
     archivePath           = path.left(archivePathLength);
     filepathWithinArchive = path.mid(archivePathLength + 1);
+}
 
-    const QFileInfo info{filepathWithinArchive};
-    filename  = info.completeBaseName();
-    extension = info.suffix().toLower();
-    directory = info.dir().dirName();
-    if(directory == "."_L1) {
-        directory = QFileInfo{archivePath}.fileName();
+QString TrackPrivate::directory() const
+{
+    if(isRemoteTrackPath(filepath)) {
+        return remoteTrackDirectory(filepath);
     }
+    if(isVirtualTrackPath(filepath)) {
+        const QString parent = virtualUrlPath(filepath);
+        const QString name   = virtualUrlName(parent);
+        return !name.isEmpty() ? name : parent;
+    }
+
+    const QFileInfo info{isInArchive ? filepathWithinArchive : filepath};
+    QString dir = info.dir().dirName();
+    if(isInArchive && dir == "."_L1) {
+        dir = QFileInfo{archivePath}.fileName();
+    }
+    return dir;
+}
+
+QString TrackPrivate::filename() const
+{
+    if(isRemoteTrackPath(filepath)) {
+        return remoteTrackFilename(filepath);
+    }
+    if(isVirtualTrackPath(filepath)) {
+        return virtualUrlName(filepath);
+    }
+
+    return QFileInfo{isInArchive ? filepathWithinArchive : filepath}.completeBaseName();
+}
+
+QString TrackPrivate::extension() const
+{
+    if(isRemoteTrackPath(filepath)) {
+        return remoteTrackExtension(filepath);
+    }
+    if(isVirtualTrackPath(filepath)) {
+        return QUrl{filepath, QUrl::StrictMode}.scheme().toLower();
+    }
+
+    return QFileInfo{isInArchive ? filepathWithinArchive : filepath}.suffix().toLower();
+}
+
+bool TrackPrivate::readExtraTagsToVector(QDataStream& stream, Track::ExtraTags& out) const
+{
+    out.clear();
+
+    return readFlatStringMap(stream, out, [this](const QString& key) {
+        return stringPool().intern(StringPool::Domain::ExtraTagKey, key.toUpper());
+    });
+}
+
+bool TrackPrivate::readPropsToVector(QDataStream& stream, Track::ExtraProperties& out)
+{
+    out.clear();
+
+    return readFlatStringMap(stream, out, [](const QString& key) { return key; });
+}
+
+StringPool& TrackPrivate::stringPool() const
+{
+    return metadataStore->stringPool();
+}
+
+QString internString(const TrackPrivate& track, StringPool::Domain domain, const QString& value)
+{
+    return track.stringPool().intern(domain, value);
+}
+
+Fooyin::StringPool::StringId internStringId(const TrackPrivate& track, StringPool::Domain domain, const QString& value)
+{
+    return track.stringPool().internId(domain, value);
+}
+
+Fooyin::StringPool::StringListRef internStrings(const TrackPrivate& track, StringPool::Domain domain,
+                                                const QStringList& values)
+{
+    return track.stringPool().internList(domain, values);
+}
+
+QString resolveString(const TrackPrivate& track, StringPool::Domain domain, StringPool::StringId id)
+{
+    return track.stringPool().resolve(domain, id);
+}
+
+QStringList resolveStrings(const TrackPrivate& track, StringPool::Domain domain, StringPool::StringListRef ref)
+{
+    return track.stringPool().resolveList(domain, ref);
+}
+
+QString joinStrings(const TrackPrivate& track, StringPool::Domain domain, StringPool::StringListRef ref,
+                    const QString& separator)
+{
+    return track.stringPool().joined(domain, ref, separator);
+}
+
+QString stringAt(const TrackPrivate& track, StringPool::Domain domain, StringPool::StringListRef ref, qsizetype index)
+{
+    return track.stringPool().valueAt(domain, ref, index);
+}
+
+bool containsString(const TrackPrivate& track, StringPool::Domain domain, StringPool::StringListRef ref,
+                    const QString& value)
+{
+    return track.stringPool().contains(domain, ref, value);
+}
+
+QString internExtraTagKey(const TrackPrivate& track, const QString& tag)
+{
+    return internString(track, StringPool::Domain::ExtraTagKey, tag.toUpper());
+}
+
+Track::ExtraTags internExtraTags(const TrackPrivate& track, const Track::ExtraTags& tags)
+{
+    Track::ExtraTags interned;
+    interned.reserve(tags.size());
+
+    for(const auto& [key, value] : tags) {
+        interned.insertOrAssign(internExtraTagKey(track, key), value);
+    }
+
+    return interned;
+}
+
+template <typename Map>
+bool sameFlatStringMap(const Map& lhs, const Map& rhs)
+{
+    return lhs.size() == rhs.size() && std::ranges::equal(lhs, rhs, [](const auto& lhsItem, const auto& rhsItem) {
+               return lhsItem.first == rhsItem.first && lhsItem.second == rhsItem.second;
+           });
 }
 
 Track::Track()
-    : Track{{}}
+    : Track{std::shared_ptr<TrackMetadataStore>{}}
 { }
 
-Track::Track(const QString& filepath)
+Track::Track(std::shared_ptr<TrackMetadataStore> store)
     : p{new TrackPrivate()}
+{
+    p->metadataStore = store ? std::move(store) : std::make_shared<TrackMetadataStore>();
+}
+
+Track::Track(const QString& filepath)
+    : Track{filepath, std::shared_ptr<TrackMetadataStore>{}}
+{ }
+
+Track::Track(const QString& filepath, std::shared_ptr<TrackMetadataStore> store)
+    : Track{std::move(store)}
 {
     setFilePath(filepath);
 }
 
 Track::Track(const QString& filepath, int subsong)
-    : Track{filepath}
+    : Track{filepath, subsong, std::shared_ptr<TrackMetadataStore>{}}
+{ }
+
+Track::Track(const QString& filepath, int subsong, std::shared_ptr<TrackMetadataStore> store)
+    : Track{filepath, std::move(store)}
 {
     setSubsong(subsong);
 }
@@ -208,15 +603,71 @@ bool Track::operator<(const Track& other) const
     return uniqueFilepath() < other.uniqueFilepath();
 }
 
+bool Track::sameIdentityAs(const Track& other) const
+{
+    if(!isValid() || !other.isValid()) {
+        return false;
+    }
+
+    if(id() >= 0 && other.id() >= 0) {
+        return id() == other.id();
+    }
+
+    return uniqueFilepath() == other.uniqueFilepath() && subsong() == other.subsong() && offset() == other.offset()
+        && duration() == other.duration();
+}
+
+bool Track::sameDataAs(const Track& other) const
+{
+    return p->libraryId == other.p->libraryId && p->enabled == other.p->enabled && p->id == other.p->id
+        && p->hash == other.p->hash
+        && resolveString(*p, StringPool::Domain::Codec, p->codec)
+               == resolveString(*other.p, StringPool::Domain::Codec, other.p->codec)
+        && p->filepath == other.p->filepath && p->title == other.p->title
+        && resolveStrings(*p, StringPool::Domain::Artist, p->artists)
+               == resolveStrings(*other.p, StringPool::Domain::Artist, other.p->artists)
+        && resolveString(*p, StringPool::Domain::Album, p->album)
+               == resolveString(*other.p, StringPool::Domain::Album, other.p->album)
+        && resolveStrings(*p, StringPool::Domain::AlbumArtist, p->albumArtists)
+               == resolveStrings(*other.p, StringPool::Domain::AlbumArtist, other.p->albumArtists)
+        && p->trackNumber == other.p->trackNumber && p->trackTotal == other.p->trackTotal
+        && p->discNumber == other.p->discNumber && p->discTotal == other.p->discTotal
+        && resolveStrings(*p, StringPool::Domain::Genre, p->genres)
+               == resolveStrings(*other.p, StringPool::Domain::Genre, other.p->genres)
+        && resolveStrings(*p, StringPool::Domain::Composer, p->composers)
+               == resolveStrings(*other.p, StringPool::Domain::Composer, other.p->composers)
+        && resolveStrings(*p, StringPool::Domain::Performer, p->performers)
+               == resolveStrings(*other.p, StringPool::Domain::Performer, other.p->performers)
+        && p->comment == other.p->comment && p->date == other.p->date && p->year == other.p->year
+        && p->dateSinceEpoch == other.p->dateSinceEpoch && p->yearSinceEpoch == other.p->yearSinceEpoch
+        && sameFlatStringMap(p->extraTags, other.p->extraTags) && p->removedTags == other.p->removedTags
+        && sameFlatStringMap(p->extraProps, other.p->extraProps) && p->cuePath == other.p->cuePath
+        && p->subsong == other.p->subsong && p->offset == other.p->offset && p->duration == other.p->duration
+        && p->filesize == other.p->filesize && p->bitrate == other.p->bitrate && p->sampleRate == other.p->sampleRate
+        && p->channels == other.p->channels && p->bitDepth == other.p->bitDepth
+        && p->codecProfile == other.p->codecProfile && p->tool == other.p->tool && p->tagTypes == other.p->tagTypes
+        && resolveString(*p, StringPool::Domain::Encoding, p->encoding)
+               == resolveString(*other.p, StringPool::Domain::Encoding, other.p->encoding)
+        && p->loved == other.p->loved && p->rating == other.p->rating && p->playcount == other.p->playcount
+        && p->createdTime == other.p->createdTime && p->addedTime == other.p->addedTime
+        && p->modifiedTime == other.p->modifiedTime && p->firstPlayed == other.p->firstPlayed
+        && p->lastPlayed == other.p->lastPlayed && p->rgTrackGain == other.p->rgTrackGain
+        && p->rgAlbumGain == other.p->rgAlbumGain && p->rgTrackPeak == other.p->rgTrackPeak
+        && p->rgAlbumPeak == other.p->rgAlbumPeak && p->metadataWasRead == other.p->metadataWasRead
+        && p->metadataWasModified == other.p->metadataWasModified && p->isInArchive == other.p->isInArchive
+        && p->archivePath == other.p->archivePath && p->filepathWithinArchive == other.p->filepathWithinArchive;
+}
+
 QString Track::generateHash()
 {
     QString title = p->title;
     if(title.isEmpty()) {
-        title = p->directory + p->filename;
+        title = p->directory() + p->filename();
     }
 
-    p->hash = Utils::generateHash(p->artists.join(","_L1), p->album, p->discNumber, p->trackNumber, title,
-                                  QString::number(p->subsong));
+    p->hash = Utils::generateHash(joinStrings(*p, StringPool::Domain::Artist, p->artists, ","_L1),
+                                  resolveString(*p, StringPool::Domain::Album, p->album), p->discNumber, p->trackNumber,
+                                  title, QString::number(p->subsong));
     return p->hash;
 }
 
@@ -242,8 +693,7 @@ bool Track::isInDatabase() const
 
 bool Track::metadataWasRead() const
 {
-    // Assume read if basic properties are valid
-    return p->filesize > 0 && p->modifiedTime > 0;
+    return p->metadataWasRead;
 }
 
 bool Track::metadataWasModified() const
@@ -253,15 +703,14 @@ bool Track::metadataWasModified() const
 
 bool Track::exists() const
 {
+    if(isRemote() || isVirtual()) {
+        return true;
+    }
+
     if(isInArchive()) {
         return QFileInfo::exists(archivePath());
     }
     return QFileInfo::exists(filepath());
-}
-
-bool Track::isNewTrack() const
-{
-    return p->isNewTrack;
 }
 
 int Track::libraryId() const
@@ -272,6 +721,16 @@ int Track::libraryId() const
 bool Track::isInArchive() const
 {
     return p->isInArchive;
+}
+
+bool Track::isRemote() const
+{
+    return isRemotePath(p->filepath);
+}
+
+bool Track::isVirtual() const
+{
+    return isVirtualPath(p->filepath);
 }
 
 QString Track::archivePath() const
@@ -289,6 +748,11 @@ QString Track::relativeArchivePath() const
     return QFileInfo{p->filepathWithinArchive}.path();
 }
 
+QUrl Track::url() const
+{
+    return isRemote() ? QUrl{p->filepath} : QUrl{};
+}
+
 int Track::id() const
 {
     return p->id;
@@ -303,21 +767,25 @@ QString Track::albumHash() const
 {
     QStringList hash;
 
+    const auto albumArtists = this->albumArtists();
+    const auto artists      = this->artists();
+    const auto album        = this->album();
+
     if(!p->date.isEmpty()) {
         hash.append(p->date);
     }
-    if(!p->albumArtists.isEmpty()) {
-        hash.append(p->albumArtists.join(","_L1));
+    if(!albumArtists.isEmpty()) {
+        hash.append(albumArtists.join(","_L1));
     }
-    if(!p->artists.isEmpty()) {
-        hash.append(p->artists.join(","_L1));
+    if(!artists.isEmpty()) {
+        hash.append(artists.join(","_L1));
     }
 
-    if(!p->album.isEmpty()) {
-        hash.append(p->album);
+    if(!album.isEmpty()) {
+        hash.append(album);
     }
     else {
-        hash.append(p->directory);
+        hash.append(p->directory());
     }
 
     return hash.join("|"_L1);
@@ -335,8 +803,31 @@ QString Track::uniqueFilepath() const
     if(hasCue()) {
         path.append(QString::number(p->offset));
     }
+    else if(segmentType() == SegmentType::Chapter) {
+        path.append(u"#chapter="_s);
+        path.append(QString::number(p->subsong));
+        path.append(u':');
+        path.append(QString::number(p->offset));
+    }
 
     return path;
+}
+
+QString Track::identityKey() const
+{
+    if(id() >= 0) {
+        return u"id:%1"_s.arg(id());
+    }
+
+    static constexpr QLatin1StringView separator{Constants::UnitSeparator};
+    QString key = u"path:"_s + uniqueFilepath();
+    key += separator;
+    key += QString::number(subsong());
+    key += separator;
+    key += QString::number(offset());
+    key += separator;
+    key += QString::number(duration());
+    return key;
 }
 
 QString Track::prettyFilepath() const
@@ -344,17 +835,28 @@ QString Track::prettyFilepath() const
     if(isInArchive()) {
         return archivePath() + "/"_L1 + pathInArchive();
     }
+    if(isVirtual()) {
+        return prettyVirtualUrl(p->filepath);
+    }
 
     return p->filepath;
 }
 
 QString Track::filename() const
 {
-    return p->filename;
+    return p->filename();
 }
 
 QString Track::path() const
 {
+    if(isRemote()) {
+        return {};
+    }
+
+    if(isVirtual()) {
+        return virtualUrlPath(p->filepath);
+    }
+
     if(isInArchive()) {
         return QFileInfo{prettyFilepath()}.dir().path();
     }
@@ -364,16 +866,25 @@ QString Track::path() const
 
 QString Track::directory() const
 {
-    return p->directory;
+    return p->directory();
 }
 
 QString Track::extension() const
 {
-    return p->extension;
+    return p->extension();
 }
 
 QString Track::filenameExt() const
 {
+    if(isRemote()) {
+        const QUrl remoteUrl{p->filepath};
+        const QString filename = QFileInfo{remoteUrl.path()}.fileName();
+        return !filename.isEmpty() ? filename : remoteUrl.host();
+    }
+    if(isVirtual()) {
+        return virtualUrlName(p->filepath);
+    }
+
     return QFileInfo{p->filepath}.fileName();
 }
 
@@ -384,36 +895,59 @@ QString Track::title() const
 
 QString Track::effectiveTitle() const
 {
-    return !p->title.isEmpty() ? p->title : p->filename;
+    return !p->title.isEmpty() ? p->title : p->filename();
+}
+
+bool Track::hasArtists() const
+{
+    return !p->artists.isEmpty();
+}
+
+qsizetype Track::artistCount() const
+{
+    return p->artists.size;
+}
+
+QString Track::artistAt(qsizetype index) const
+{
+    return stringAt(*p, StringPool::Domain::Artist, p->artists, index);
 }
 
 QStringList Track::artists() const
 {
-    return p->artists;
+    return resolveStrings(*p, StringPool::Domain::Artist, p->artists);
+}
+
+QString Track::artistsJoined(const QString& sep) const
+{
+    return joinStrings(*p, StringPool::Domain::Artist, p->artists, sep);
 }
 
 QStringList Track::uniqueArtists() const
 {
-    QStringList artists;
-    for(const QString& artist : p->artists) {
-        if(!p->albumArtists.contains(artist)) {
-            artists.emplace_back(artist);
+    QStringList uniqueArtists;
+    uniqueArtists.reserve(artistCount());
+
+    for(qsizetype index{0}; index < artistCount(); ++index) {
+        const QString artist = artistAt(index);
+        if(!containsString(*p, StringPool::Domain::AlbumArtist, p->albumArtists, artist)) {
+            uniqueArtists.emplace_back(artist);
         }
     }
-    return artists;
+    return uniqueArtists;
 }
 
 QString Track::artist() const
 {
-    return p->artists.empty() ? QString{} : p->artists.join(QLatin1String{Constants::UnitSeparator});
+    return artistsJoined(QLatin1String{Constants::UnitSeparator});
 }
 
 QString Track::primaryArtist() const
 {
-    if(!artists().empty()) {
+    if(hasArtists()) {
         return artist();
     }
-    if(!albumArtists().empty()) {
+    if(hasAlbumArtists()) {
         return albumArtist();
     }
     if(!composer().isEmpty()) {
@@ -430,22 +964,42 @@ QString Track::uniqueArtist() const
 
 QString Track::album() const
 {
-    return p->album;
+    return resolveString(*p, StringPool::Domain::Album, p->album);
+}
+
+bool Track::hasAlbumArtists() const
+{
+    return !p->albumArtists.isEmpty();
+}
+
+qsizetype Track::albumArtistCount() const
+{
+    return p->albumArtists.size;
+}
+
+QString Track::albumArtistAt(qsizetype index) const
+{
+    return stringAt(*p, StringPool::Domain::AlbumArtist, p->albumArtists, index);
 }
 
 QStringList Track::albumArtists() const
 {
-    return p->albumArtists;
+    return resolveStrings(*p, StringPool::Domain::AlbumArtist, p->albumArtists);
+}
+
+QString Track::albumArtistsJoined(const QString& sep) const
+{
+    return joinStrings(*p, StringPool::Domain::AlbumArtist, p->albumArtists, sep);
 }
 
 QString Track::albumArtist() const
 {
-    return p->albumArtists.empty() ? QString{} : p->albumArtists.join(QLatin1String{Constants::UnitSeparator});
+    return albumArtistsJoined(QLatin1String{Constants::UnitSeparator});
 }
 
 QString Track::effectiveAlbumArtist(bool useVarious) const
 {
-    if(!albumArtists().empty()) {
+    if(hasAlbumArtists()) {
         return albumArtist();
     }
     if(useVarious && hasExtraTag(u"COMPILATION"_s)) {
@@ -454,7 +1008,7 @@ QString Track::effectiveAlbumArtist(bool useVarious) const
             return u"Various Artists"_s;
         }
     }
-    if(!artists().empty()) {
+    if(hasArtists()) {
         return artist();
     }
     if(!composers().isEmpty()) {
@@ -483,34 +1037,54 @@ QString Track::discTotal() const
     return p->discTotal;
 }
 
+bool Track::hasGenres() const
+{
+    return !p->genres.isEmpty();
+}
+
+qsizetype Track::genreCount() const
+{
+    return p->genres.size;
+}
+
+QString Track::genreAt(qsizetype index) const
+{
+    return stringAt(*p, StringPool::Domain::Genre, p->genres, index);
+}
+
 QStringList Track::genres() const
 {
-    return p->genres;
+    return resolveStrings(*p, StringPool::Domain::Genre, p->genres);
+}
+
+QString Track::genresJoined(const QString& sep) const
+{
+    return joinStrings(*p, StringPool::Domain::Genre, p->genres, sep);
 }
 
 QString Track::genre() const
 {
-    return p->genres.empty() ? QString{} : p->genres.join(QLatin1String{Constants::UnitSeparator});
+    return genresJoined(QLatin1String{Constants::UnitSeparator});
 }
 
 QStringList Track::composers() const
 {
-    return p->composers;
+    return resolveStrings(*p, StringPool::Domain::Composer, p->composers);
 }
 
 QString Track::composer() const
 {
-    return p->composers.empty() ? QString{} : p->composers.join(QLatin1String{Constants::UnitSeparator});
+    return joinStrings(*p, StringPool::Domain::Composer, p->composers, QLatin1String{Constants::UnitSeparator});
 }
 
 QStringList Track::performers() const
 {
-    return p->performers;
+    return resolveStrings(*p, StringPool::Domain::Performer, p->performers);
 }
 
 QString Track::performer() const
 {
-    return p->performers.empty() ? QString{} : p->performers.join(QLatin1String{Constants::UnitSeparator});
+    return joinStrings(*p, StringPool::Domain::Performer, p->performers, QLatin1String{Constants::UnitSeparator});
 }
 
 QString Track::comment() const
@@ -535,7 +1109,24 @@ float Track::rating() const
 
 int Track::ratingStars() const
 {
-    return static_cast<int>(std::floor(p->rating * MaxStarCount));
+    // Round the product to binary32 before flooring, otherwise x87 may retain excess precision
+    const float scaledRating = std::fma(p->rating, static_cast<float>(MaxStarCount), 0.0F);
+    return static_cast<int>(std::floor(scaledRating));
+}
+
+QString Track::ratingStarsText() const
+{
+    return ::ratingStarsText(ratingStars());
+}
+
+bool Track::isLoved() const
+{
+    return p->loved;
+}
+
+void Track::setLoved(bool loved)
+{
+    p->loved = loved;
 }
 
 bool Track::hasRGInfo() const
@@ -545,22 +1136,22 @@ bool Track::hasRGInfo() const
 
 bool Track::hasTrackGain() const
 {
-    return p->rgTrackGain != Constants::InvalidGain;
+    return std::isfinite(p->rgTrackGain) && p->rgTrackGain != Constants::InvalidGain;
 }
 
 bool Track::hasAlbumGain() const
 {
-    return p->rgAlbumGain != Constants::InvalidGain;
+    return std::isfinite(p->rgAlbumGain) && p->rgAlbumGain != Constants::InvalidGain;
 }
 
 bool Track::hasTrackPeak() const
 {
-    return p->rgTrackPeak != Constants::InvalidPeak;
+    return std::isfinite(p->rgTrackPeak) && p->rgTrackPeak != Constants::InvalidPeak;
 }
 
 bool Track::hasAlbumPeak() const
 {
-    return p->rgAlbumPeak != Constants::InvalidPeak;
+    return std::isfinite(p->rgAlbumPeak) && p->rgAlbumPeak != Constants::InvalidPeak;
 }
 
 float Track::rgTrackGain() const
@@ -583,6 +1174,97 @@ float Track::rgAlbumPeak() const
     return p->rgAlbumPeak;
 }
 
+std::optional<int16_t> Track::opusHeaderGainQ78() const
+{
+    if(const auto gainQ78 = ::opusHeaderGainQ78(*this); gainQ78.has_value()
+                                                        && *gainQ78 >= std::numeric_limits<int16_t>::min()
+                                                        && *gainQ78 <= std::numeric_limits<int16_t>::max()) {
+        return static_cast<int16_t>(*gainQ78);
+    }
+
+    return {};
+}
+
+bool Track::hasOpusHeaderGain() const
+{
+    if(const auto gainQ78 = opusHeaderGainQ78(); gainQ78.has_value()) {
+        return *gainQ78 != 0;
+    }
+
+    return false;
+}
+
+float Track::opusHeaderGainDb() const
+{
+    if(const auto gainQ78 = opusHeaderGainQ78(); gainQ78.has_value()) {
+        return static_cast<float>(*gainQ78) / 256.0F;
+    }
+
+    return 0.0F;
+}
+
+bool Track::hasEffectiveTrackGain() const
+{
+    return hasTrackGain() || hasOpusHeaderGain();
+}
+
+bool Track::hasEffectiveAlbumGain() const
+{
+    return hasAlbumGain() || hasOpusHeaderGain();
+}
+
+bool Track::hasEffectiveTrackPeak() const
+{
+    return hasTrackPeak();
+}
+
+bool Track::hasEffectiveAlbumPeak() const
+{
+    return hasAlbumPeak();
+}
+
+float Track::effectiveRGTrackGain() const
+{
+    if(!hasEffectiveTrackGain()) {
+        return Constants::InvalidGain;
+    }
+
+    return (hasTrackGain() ? rgTrackGain() : 0.0F) + opusHeaderGainDb();
+}
+
+float Track::effectiveRGAlbumGain() const
+{
+    if(!hasEffectiveAlbumGain()) {
+        return Constants::InvalidGain;
+    }
+
+    return (hasAlbumGain() ? rgAlbumGain() : 0.0F) + opusHeaderGainDb();
+}
+
+float Track::effectiveRGTrackPeak() const
+{
+    if(!hasTrackPeak()) {
+        return Constants::InvalidPeak;
+    }
+
+    return rgTrackPeak() / opusHeaderLinearGain(*this);
+}
+
+float Track::effectiveRGAlbumPeak() const
+{
+    if(!hasAlbumPeak()) {
+        return Constants::InvalidPeak;
+    }
+
+    return rgAlbumPeak() / opusHeaderLinearGain(*this);
+}
+
+bool Track::isOpus() const
+{
+    return extension().compare(u"opus"_s, Qt::CaseInsensitive) == 0
+        || codec().compare(u"Opus"_s, Qt::CaseInsensitive) == 0;
+}
+
 bool Track::hasCue() const
 {
     return !p->cuePath.isEmpty();
@@ -598,20 +1280,55 @@ QString Track::cuePath() const
     return p->cuePath;
 }
 
+Track::SegmentType Track::segmentType() const
+{
+    if(hasCue()) {
+        return SegmentType::Cue;
+    }
+
+    if(p->extraProps.contains(ChapterProperty)) {
+        return SegmentType::Chapter;
+    }
+
+    return SegmentType::None;
+}
+
+bool Track::isBoundedSegment() const
+{
+    return segmentType() != SegmentType::None;
+}
+
+bool Track::isSameStreamSegment() const
+{
+    switch(segmentType()) {
+        case SegmentType::Cue:
+        case SegmentType::Chapter:
+            return true;
+        case SegmentType::None:
+            return false;
+    }
+
+    return false;
+}
+
 bool Track::isArchivePath(const QString& path)
 {
     return path.startsWith("unpack://"_L1);
 }
 
+bool Track::isRemotePath(const QString& path)
+{
+    return isRemoteTrackPath(path);
+}
+
+bool Track::isVirtualPath(const QString& path)
+{
+    return isVirtualTrackPath(path);
+}
+
 bool Track::isMultiValueTag(const QString& tag)
 {
     const QString trackTag = tag.toUpper();
-
-    const auto map = metaMap();
-    if(!map.contains(trackTag)) {
-        return true;
-    }
-
     return trackTag == QLatin1String{Constants::MetaData::Artist}
         || trackTag == QLatin1String{Constants::MetaData::AlbumArtist}
         || trackTag == QLatin1String{Constants::MetaData::Genre}
@@ -623,21 +1340,18 @@ bool Track::isExtraTag(const QString& tag)
 {
     const QString trackTag = tag.toUpper();
 
-    const auto map = metaMap();
+    const auto& map = metaMap();
     return !map.contains(trackTag);
 }
 
 bool Track::hasExtraTag(const QString& tag) const
 {
-    return p->extraTags.contains(tag);
+    return p->extraTags.contains(tag.toUpper());
 }
 
 QStringList Track::extraTag(const QString& tag) const
 {
-    if(p->extraTags.contains(tag)) {
-        return p->extraTags.value(tag);
-    }
-    return {};
+    return p->extraTags.value(tag.toUpper());
 }
 
 Track::ExtraTags Track::extraTags() const
@@ -660,7 +1374,7 @@ QByteArray Track::serialiseExtraTags() const
     QDataStream stream(&out, QIODevice::WriteOnly);
     stream.setVersion(QDataStream::Qt_6_0);
 
-    stream << p->extraTags;
+    DataStream::writeContainer(stream, p->extraTags);
 
     return out;
 }
@@ -688,7 +1402,7 @@ QMap<QString, QString> Track::metadata() const
     static const QString ArtistKey      = QString::fromLatin1(MetaData::Artist);
     static const QString AlbumKey       = QString::fromLatin1(MetaData::Album);
     static const QString AlbumArtistKey = QString::fromLatin1(MetaData::AlbumArtist);
-    static const QString TrackKey       = QString::fromLatin1(MetaData::Track);
+    static const QString TrackKey       = QString::fromLatin1(MetaData::TrackNumber);
     static const QString TrackTotalKey  = QString::fromLatin1(MetaData::TrackTotal);
     static const QString DiscKey        = QString::fromLatin1(MetaData::Disc);
     static const QString DiscTotalKey   = QString::fromLatin1(MetaData::DiscTotal);
@@ -699,16 +1413,16 @@ QMap<QString, QString> Track::metadata() const
     static const QString DateKey        = QString::fromLatin1(MetaData::Date);
 
     addField(TitleKey, p->title);
-    addField(ArtistKey, p->artists);
-    addField(AlbumKey, p->album);
-    addField(AlbumArtistKey, p->albumArtists);
+    addField(ArtistKey, artists());
+    addField(AlbumKey, album());
+    addField(AlbumArtistKey, albumArtists());
     addField(TrackKey, p->trackNumber);
     addField(TrackTotalKey, p->trackTotal);
     addField(DiscKey, p->discNumber);
     addField(DiscTotalKey, p->discTotal);
-    addField(GenreKey, p->genres);
-    addField(ComposerKey, p->composers);
-    addField(PerformerKey, p->performers);
+    addField(GenreKey, genres());
+    addField(ComposerKey, composers());
+    addField(PerformerKey, performers());
     addField(CommentKey, p->comment);
     addField(DateKey, p->date);
 
@@ -731,11 +1445,17 @@ QByteArray Track::serialiseExtraProperties() const
         return {};
     }
 
+    ExtraProperties props{p->extraProps};
+    ::normaliseExtraProperties(props);
+    if(props.empty()) {
+        return {};
+    }
+
     QByteArray out;
     QDataStream stream(&out, QIODevice::WriteOnly);
     stream.setVersion(QDataStream::Qt_6_0);
 
-    stream << p->extraProps;
+    DataStream::writeContainer(stream, props);
 
     return out;
 }
@@ -782,7 +1502,7 @@ int Track::bitDepth() const
 
 QString Track::codec() const
 {
-    return p->codec;
+    return resolveString(*p, StringPool::Domain::Codec, p->codec);
 }
 
 QString Track::codecProfile() const
@@ -808,12 +1528,17 @@ QStringList Track::tagTypes() const
 
 QString Track::encoding() const
 {
-    return p->encoding;
+    return resolveString(*p, StringPool::Domain::Encoding, p->encoding);
 }
 
 int Track::playCount() const
 {
     return p->playcount;
+}
+
+uint64_t Track::createdTime() const
+{
+    return p->createdTime;
 }
 
 uint64_t Track::addedTime() const
@@ -841,15 +1566,12 @@ uint64_t Track::lastPlayed() const
     return p->lastPlayed;
 }
 
-QString Track::sort() const
-{
-    return p->sort;
-}
-
 bool Track::hasMatch(const QString& term) const
 {
-    const auto contains = [&term](const QString& text) {
-        return text.contains(term, Qt::CaseInsensitive);
+    const QString foldedTerm = Utils::foldForSearch(term);
+
+    const auto contains = [&foldedTerm](const QString& text) {
+        return Utils::foldForSearch(text).contains(foldedTerm);
     };
 
     // clang-format off
@@ -860,8 +1582,14 @@ bool Track::hasMatch(const QString& term) const
            contains(performer()) ||
            contains(composer()) ||
            contains(genre()) ||
+           contains(comment()) ||
            contains(filepath());
     // clang-format on
+}
+
+std::shared_ptr<TrackMetadataStore> Track::metadataStore() const
+{
+    return p->metadataStore;
 }
 
 void Track::setLibraryId(int id)
@@ -869,9 +1597,57 @@ void Track::setLibraryId(int id)
     p->libraryId = id;
 }
 
+void Track::setMetadataStore(std::shared_ptr<TrackMetadataStore> store)
+{
+    if(!store) {
+        store = std::make_shared<TrackMetadataStore>();
+    }
+
+    if(p.constData()->metadataStore == store) {
+        return;
+    }
+
+    p.detach();
+
+    const auto oldStore = p->metadataStore;
+
+    const auto resolveOld = [&oldStore](StringPool::Domain domain, StringPool::StringId id) {
+        return oldStore ? oldStore->stringPool().resolve(domain, id) : QString{};
+    };
+    const auto resolveOldList = [&oldStore](StringPool::Domain domain, StringPool::StringListRef ref) {
+        return oldStore ? oldStore->stringPool().resolveList(domain, ref) : QStringList{};
+    };
+
+    p->codec = store->stringPool().internId(StringPool::Domain::Codec, resolveOld(StringPool::Domain::Codec, p->codec));
+    p->artists = store->stringPool().internList(StringPool::Domain::Artist,
+                                                resolveOldList(StringPool::Domain::Artist, p->artists));
+    p->album = store->stringPool().internId(StringPool::Domain::Album, resolveOld(StringPool::Domain::Album, p->album));
+    p->albumArtists = store->stringPool().internList(StringPool::Domain::AlbumArtist,
+                                                     resolveOldList(StringPool::Domain::AlbumArtist, p->albumArtists));
+    p->genres       = store->stringPool().internList(StringPool::Domain::Genre,
+                                                     resolveOldList(StringPool::Domain::Genre, p->genres));
+    p->composers    = store->stringPool().internList(StringPool::Domain::Composer,
+                                                     resolveOldList(StringPool::Domain::Composer, p->composers));
+    p->performers   = store->stringPool().internList(StringPool::Domain::Performer,
+                                                     resolveOldList(StringPool::Domain::Performer, p->performers));
+    p->encoding     = store->stringPool().internId(StringPool::Domain::Encoding,
+                                                   resolveOld(StringPool::Domain::Encoding, p->encoding));
+
+    p->metadataStore = store;
+
+    if(!p->extraTags.empty()) {
+        p->extraTags = internExtraTags(*p, p->extraTags);
+    }
+}
+
 void Track::setIsEnabled(bool enabled)
 {
     p->enabled = enabled;
+}
+
+void Track::setMetadataWasRead(bool wasRead)
+{
+    p->metadataWasRead = wasRead;
 }
 
 void Track::setId(int id)
@@ -898,10 +1674,8 @@ void Track::setFilePath(const QString& path)
     }
     else {
         p->isInArchive = false;
-        const QFileInfo info{p->filepath};
-        p->filename  = info.completeBaseName();
-        p->extension = info.suffix().toLower();
-        p->directory = info.dir().dirName();
+        p->archivePath.clear();
+        p->filepathWithinArchive.clear();
     }
 }
 
@@ -917,10 +1691,10 @@ void Track::setTitle(const QString& title)
 void Track::setArtists(const QStringList& artists)
 {
     if(artists.size() == 1 && artists.front().isEmpty()) {
-        p->artists.clear();
+        p->artists = {};
     }
     else {
-        p->artists = artists;
+        p->artists = internStrings(*p, StringPool::Domain::Artist, artists);
     }
 
     if(!p->hash.isEmpty()) {
@@ -930,7 +1704,7 @@ void Track::setArtists(const QStringList& artists)
 
 void Track::setAlbum(const QString& title)
 {
-    p->album = title;
+    p->album = internStringId(*p, StringPool::Domain::Album, title);
 
     if(!p->hash.isEmpty()) {
         generateHash();
@@ -940,10 +1714,10 @@ void Track::setAlbum(const QString& title)
 void Track::setAlbumArtists(const QStringList& artists)
 {
     if(artists.size() == 1 && artists.front().isEmpty()) {
-        p->albumArtists.clear();
+        p->albumArtists = {};
     }
     else {
-        p->albumArtists = artists;
+        p->albumArtists = internStrings(*p, StringPool::Domain::AlbumArtist, artists);
     }
 }
 
@@ -1000,21 +1774,31 @@ void Track::setDiscTotal(const QString& total)
 void Track::setGenres(const QStringList& genres)
 {
     if(genres.size() == 1 && genres.front().isEmpty()) {
-        p->genres.clear();
+        p->genres = {};
     }
     else {
-        p->genres = genres;
+        p->genres = internStrings(*p, StringPool::Domain::Genre, genres);
     }
 }
 
 void Track::setComposers(const QStringList& composers)
 {
-    p->composers = composers;
+    if(composers.size() == 1 && composers.front().isEmpty()) {
+        p->composers = {};
+    }
+    else {
+        p->composers = internStrings(*p, StringPool::Domain::Composer, composers);
+    }
 }
 
 void Track::setPerformers(const QStringList& performers)
 {
-    p->performers = performers;
+    if(performers.size() == 1 && performers.front().isEmpty()) {
+        p->performers = {};
+    }
+    else {
+        p->performers = internStrings(*p, StringPool::Domain::Performer, performers);
+    }
 }
 
 void Track::setComment(const QString& comment)
@@ -1024,9 +1808,15 @@ void Track::setComment(const QString& comment)
 
 void Track::setDate(const QString& date)
 {
+    const auto clearDerivedDateFields = [this]() {
+        p->year           = -1;
+        p->dateSinceEpoch = 0;
+        p->yearSinceEpoch = 0;
+    };
+
     p->date = date;
     if(date.isEmpty()) {
-        p->year = -1;
+        clearDerivedDateFields();
         return;
     }
 
@@ -1091,6 +1881,8 @@ void Track::setDate(const QString& date)
             return;
         }
     }
+
+    clearDerivedDateFields();
 }
 
 void Track::setYear(int year)
@@ -1118,24 +1910,52 @@ void Track::setRatingStars(int rating)
     }
 }
 
+void Track::clearWritableTags()
+{
+    setTitle({});
+    setArtists({});
+    setAlbum({});
+    setAlbumArtists({});
+    setTrackNumber({});
+    setTrackTotal({});
+    setDiscNumber({});
+    setDiscTotal({});
+    setGenres({});
+    setComposers({});
+    setPerformers({});
+    setComment({});
+    setDate({});
+    clearExtraTags();
+}
+
 void Track::setRGTrackGain(float gain)
 {
-    p->rgTrackGain = gain;
+    p->rgTrackGain = std::isfinite(gain) ? gain : Constants::InvalidGain;
 }
 
 void Track::setRGAlbumGain(float gain)
 {
-    p->rgAlbumGain = gain;
+    p->rgAlbumGain = std::isfinite(gain) ? gain : Constants::InvalidGain;
 }
 
 void Track::setRGTrackPeak(float peak)
 {
-    p->rgTrackPeak = peak;
+    p->rgTrackPeak = std::isfinite(peak) ? peak : Constants::InvalidPeak;
 }
 
 void Track::setRGAlbumPeak(float peak)
 {
-    p->rgAlbumPeak = peak;
+    p->rgAlbumPeak = std::isfinite(peak) ? peak : Constants::InvalidPeak;
+}
+
+void Track::setOpusHeaderGainQ78(int16_t gainQ78)
+{
+    p->extraProps.insertOrAssign(QString::fromLatin1(Fooyin::Constants::OpusHeaderGainQ78), QString::number(gainQ78));
+}
+
+void Track::clearOpusHeaderGain()
+{
+    removeExtraProperty(QString::fromLatin1(Fooyin::Constants::OpusHeaderGainQ78));
 }
 
 void Track::clearRGInfo()
@@ -1146,11 +1966,37 @@ void Track::clearRGInfo()
     p->rgAlbumPeak = Constants::InvalidPeak;
 }
 
+QStringList Track::metaValues(const QString& name) const
+{
+    const QString tag = name.toUpper();
+
+    if(const QString rawRating = rawRatingTag(tag); !rawRating.isEmpty()) {
+        return {rawRating};
+    }
+
+    const auto& listMap = metaListMap();
+    if(listMap.contains(tag)) {
+        return listMap.at(tag)(*this);
+    }
+
+    const auto& map = metaMap();
+    if(map.contains(tag)) {
+        const QString value = map.at(tag)(*this);
+        return value.isEmpty() ? QStringList{} : QStringList{value};
+    }
+
+    return extraTag(tag);
+}
+
 QString Track::metaValue(const QString& name) const
 {
     const QString tag = name.toUpper();
 
-    const auto map = metaMap();
+    if(const QString rawRating = rawRatingTag(tag); !rawRating.isEmpty()) {
+        return rawRating;
+    }
+
+    const auto& map = metaMap();
     if(map.contains(tag)) {
         return map.at(tag)(*this);
     }
@@ -1176,17 +2022,18 @@ QString Track::techInfo(const QString& name) const
         {QString::fromLatin1(Codec),        [](const Track& track) { return track.codec(); }},
         {QString::fromLatin1(CodecProfile), [](const Track& track) { return track.codecProfile(); }},
         {QString::fromLatin1(Tool),         [](const Track& track) { return track.tool(); }},
-        {QString::fromLatin1(Encoding),     [](const Track& track) { return track.tagType(u","_s); }},
-        {QString::fromLatin1(TagType),      [](const Track& track) { return track.encoding(); }},
+        {QString::fromLatin1(Encoding),     [](const Track& track) { return track.encoding(); }},
+        {QString::fromLatin1(TagType),      [](const Track& track) { return track.tagType(u"|"_s); }},
         {QString::fromLatin1(SampleRate),   [validNum](const Track& track) { return validNum(track.sampleRate()); }},
         {QString::fromLatin1(Bitrate),      [validNum](const Track& track) { return validNum(track.bitrate()); }},
         {QString::fromLatin1(Channels),     [validNum](const Track& track) { return validNum(track.channels()); }},
         {QString::fromLatin1(BitDepth),     [validNum](const Track& track) { return validNum(track.bitDepth()); }},
         {QString::fromLatin1(Duration),     [validNum](const Track& track) { return validNum(track.duration()); }},
-        {QString::fromLatin1(RGTrackGain),  [](const Track& track) { return track.hasTrackGain() ? QString::number(track.rgTrackGain()) : QString{}; }},
-        {QString::fromLatin1(RGTrackPeak),  [](const Track& track) { return track.hasTrackPeak() ? QString::number(track.rgTrackPeak()) : QString{}; }},
-        {QString::fromLatin1(RGAlbumGain),  [](const Track& track) { return track.hasAlbumGain() ? QString::number(track.rgAlbumGain()) : QString{}; }},
-        {QString::fromLatin1(RGAlbumPeak),  [](const Track& track) { return track.hasAlbumPeak() ? QString::number(track.rgAlbumPeak()) : QString{}; }}
+        {QString::fromLatin1(RGTrackGain),  [](const Track& track) { return track.hasEffectiveTrackGain() ? QString::number(track.effectiveRGTrackGain()) : QString{}; }},
+        {QString::fromLatin1(RGTrackPeak),  [](const Track& track) { return track.hasEffectiveTrackPeak() ? QString::number(track.effectiveRGTrackPeak()) : QString{}; }},
+        {QString::fromLatin1(RGAlbumGain),  [](const Track& track) { return track.hasEffectiveAlbumGain() ? QString::number(track.effectiveRGAlbumGain()) : QString{}; }},
+        {QString::fromLatin1(RGAlbumPeak),  [](const Track& track) { return track.hasEffectiveAlbumPeak() ? QString::number(track.effectiveRGAlbumPeak()) : QString{}; }},
+        {QString::fromLatin1(OpusHeaderGain), [](const Track& track) { return track.hasOpusHeaderGain() ? QString::number(track.opusHeaderGainDb()) : QString{}; }}
     };
     // clang-format on
 
@@ -1209,6 +2056,7 @@ std::optional<int64_t> Track::dateValue(const QString& name) const
         {QString::fromLatin1(Year),         [](const Fooyin::Track& track) { return track.p->yearSinceEpoch; }},
         {QString::fromLatin1(FirstPlayed),  [](const Fooyin::Track& track) { return track.firstPlayed(); }},
         {QString::fromLatin1(LastPlayed),   [](const Fooyin::Track& track) { return track.lastPlayed(); }},
+        {QString::fromLatin1(CreatedTime),  [](const Fooyin::Track& track) { return track.createdTime(); }},
         {QString::fromLatin1(AddedTime),    [](const Fooyin::Track& track) { return track.addedTime(); }},
         {QString::fromLatin1(LastModified), [](const Fooyin::Track& track) { return track.lastModified(); }}
     };
@@ -1226,12 +2074,50 @@ void Track::setCuePath(const QString& path)
     p->cuePath = path;
 }
 
+void Track::setIsChapter(bool isChapter)
+{
+    if(isChapter) {
+        setExtraProperty(ChapterProperty, ChapterValue);
+    }
+    else {
+        removeExtraProperty(ChapterProperty);
+    }
+}
+
+QString Track::rawRatingTag(const QString& tag) const
+{
+    const QString* value = p->extraProps.find(rawRatingTagProperty(tag));
+    return value ? *value : QString{};
+}
+
+void Track::setRawRatingTag(const QString& tag, const QString& value)
+{
+    const QString property = rawRatingTagProperty(tag);
+    if(value.isEmpty()) {
+        p->extraProps.erase(property);
+        return;
+    }
+    p->extraProps.insertOrAssign(property, value);
+}
+
+void Track::removeRawRatingTag(const QString& tag)
+{
+    p->extraProps.erase(rawRatingTagProperty(tag));
+}
+
 void Track::addExtraTag(const QString& tag, const QString& value)
 {
     if(tag.isEmpty() || value.isEmpty()) {
         return;
     }
-    p->extraTags[tag.toUpper()].push_back(value);
+
+    const QString extraTag = internExtraTagKey(*p, tag);
+    if(auto* values = p->extraTags.find(extraTag)) {
+        values->emplace_back(value);
+    }
+    else {
+        p->extraTags.insertOrAssign(extraTag, QStringList{value});
+    }
 }
 
 void Track::addExtraTag(const QString& tag, const QStringList& value)
@@ -1239,39 +2125,44 @@ void Track::addExtraTag(const QString& tag, const QStringList& value)
     if(tag.isEmpty() || value.isEmpty()) {
         return;
     }
-    p->extraTags[tag.toUpper()].append(value);
+
+    const QString extraTag = internExtraTagKey(*p, tag);
+    if(auto* values = p->extraTags.find(extraTag)) {
+        values->append(value);
+    }
+    else {
+        p->extraTags.insertOrAssign(extraTag, value);
+    }
 }
 
 void Track::removeExtraTag(const QString& tag)
 {
     const QString extraTag = tag.toUpper();
-    if(p->extraTags.contains(extraTag)) {
-        p->removedTags.append(extraTag);
-        p->extraTags.remove(extraTag);
+    if(p->extraTags.erase(extraTag)) {
+        p->removedTags.append(internExtraTagKey(*p, extraTag));
     }
 }
 
 void Track::replaceExtraTag(const QString& tag, const QString& value)
 {
-    const QString extraTag = tag.toUpper();
+    const QString extraTag = internExtraTagKey(*p, tag);
     if(value.isEmpty()) {
         removeExtraTag(extraTag);
+        return;
     }
-    else {
-        p->extraTags[extraTag] = {value};
-    }
+
+    p->extraTags.insertOrAssign(extraTag, QStringList{value});
 }
 
 void Track::replaceExtraTag(const QString& tag, const QStringList& value)
 {
-    const QString extraTag = tag.toUpper();
-
+    const QString extraTag = internExtraTagKey(*p, tag);
     if(value.isEmpty()) {
         removeExtraTag(extraTag);
+        return;
     }
-    else {
-        p->extraTags[extraTag] = value;
-    }
+
+    p->extraTags.insertOrAssign(extraTag, value);
 }
 
 void Track::clearExtraTags()
@@ -1281,25 +2172,40 @@ void Track::clearExtraTags()
 
 void Track::storeExtraTags(const QByteArray& tags)
 {
+    p->extraTags.clear();
+
     if(tags.isEmpty()) {
         return;
     }
 
     QByteArray in{tags};
-    QDataStream stream(&in, QIODevice::ReadOnly);
+    QDataStream stream{&in, QIODevice::ReadOnly};
     stream.setVersion(QDataStream::Qt_6_0);
 
-    stream >> p->extraTags;
+    ExtraTags loaded;
+    if(p->readExtraTagsToVector(stream, loaded)) {
+        p->extraTags = std::move(loaded);
+    }
 }
 
 void Track::setExtraProperty(const QString& prop, const QString& value)
 {
-    p->extraProps[prop] = value;
+    if(value.isEmpty()) {
+        removeExtraProperty(prop);
+        return;
+    }
+
+    p->extraProps.insertOrAssign(prop, value);
 }
 
 void Track::removeExtraProperty(const QString& prop)
 {
-    p->extraProps.remove(prop);
+    p->extraProps.erase(prop);
+}
+
+void Track::normaliseExtraProperties()
+{
+    ::normaliseExtraProperties(p->extraProps);
 }
 
 void Track::clearExtraProperties()
@@ -1309,6 +2215,8 @@ void Track::clearExtraProperties()
 
 void Track::storeExtraProperties(const QByteArray& props)
 {
+    p->extraProps.clear();
+
     if(props.isEmpty()) {
         return;
     }
@@ -1317,7 +2225,11 @@ void Track::storeExtraProperties(const QByteArray& props)
     QDataStream stream(&in, QIODevice::ReadOnly);
     stream.setVersion(QDataStream::Qt_6_0);
 
-    stream >> p->extraProps;
+    Track::ExtraProperties loaded;
+    if(p->readPropsToVector(stream, loaded)) {
+        ::normaliseExtraProperties(loaded);
+        p->extraProps = std::move(loaded);
+    }
 }
 
 void Track::setSubsong(int index)
@@ -1366,7 +2278,7 @@ void Track::setBitDepth(int depth)
 
 void Track::setCodec(const QString& codec)
 {
-    p->codec = codec;
+    p->codec = internStringId(*p, StringPool::Domain::Codec, codec);
 }
 
 void Track::setCodecProfile(const QString& profile)
@@ -1386,12 +2298,17 @@ void Track::setTagTypes(const QStringList& tagTypes)
 
 void Track::setEncoding(const QString& encoding)
 {
-    p->encoding = encoding;
+    p->encoding = internStringId(*p, StringPool::Domain::Encoding, encoding);
 }
 
 void Track::setPlayCount(int count)
 {
     p->playcount = count;
+}
+
+void Track::setCreatedTime(uint64_t time)
+{
+    p->createdTime = time;
 }
 
 void Track::setAddedTime(uint64_t time)
@@ -1409,7 +2326,7 @@ void Track::setModifiedTime(uint64_t time)
 
 void Track::setFirstPlayed(uint64_t time)
 {
-    if(p->firstPlayed == 0) {
+    if(p->firstPlayed == 0 || (time > 0 && time < p->firstPlayed)) {
         p->firstPlayed = time;
     }
 }
@@ -1419,12 +2336,6 @@ void Track::setLastPlayed(uint64_t time)
     if(time > p->lastPlayed) {
         p->lastPlayed = time;
     }
-}
-
-void Track::setSort(const QString& sort)
-{
-    p->sort       = sort;
-    p->isNewTrack = false;
 }
 
 void Track::clearWasModified()
@@ -1512,8 +2423,92 @@ QStringList Track::supportedMimeTypes()
     return supportedTypes;
 }
 
+Track prepareOpusRGWriteTrack(const Track& track, OpusRGWriteMode mode)
+{
+    if(!track.isOpus()) {
+        return track;
+    }
+
+    OpusGainState currentState{
+        .headerGain = static_cast<int16_t>(opusHeaderGainQ78(track).value_or(0)),
+        .trackGain  = track.hasTrackGain() ? replayGainToOpusR128Q78(track.rgTrackGain()) : std::optional<int16_t>{},
+        .albumGain  = track.hasAlbumGain() ? replayGainToOpusR128Q78(track.rgAlbumGain()) : std::optional<int16_t>{},
+    };
+
+    int headerDeltaQ78{0};
+    int commentDeltaQ78{0};
+
+    switch(mode) {
+        case OpusRGWriteMode::Track:
+            if(!currentState.trackGain.has_value()) {
+                return track;
+            }
+
+            commentDeltaQ78 = *currentState.trackGain;
+            headerDeltaQ78  = commentDeltaQ78;
+            break;
+        case OpusRGWriteMode::Album:
+            if(!currentState.albumGain.has_value()) {
+                return track;
+            }
+
+            commentDeltaQ78 = *currentState.albumGain;
+            headerDeltaQ78  = commentDeltaQ78;
+            break;
+        case OpusRGWriteMode::LeaveNull:
+            headerDeltaQ78  = -currentState.headerGain;
+            commentDeltaQ78 = headerDeltaQ78;
+            break;
+    }
+
+    const auto newHeader = static_cast<long long>(currentState.headerGain) + headerDeltaQ78;
+    if(newHeader < std::numeric_limits<int16_t>::min() || newHeader > std::numeric_limits<int16_t>::max()) {
+        return track;
+    }
+
+    Track updatedTrack{track};
+    updatedTrack.setRGTrackGain(Constants::InvalidGain);
+    updatedTrack.setRGAlbumGain(Constants::InvalidGain);
+    updatedTrack.clearOpusHeaderGain();
+
+    if(const auto newTrackGain = adjustCommentGain(currentState.trackGain, commentDeltaQ78); currentState.trackGain) {
+        if(!newTrackGain.has_value()) {
+            return track;
+        }
+        updatedTrack.setRGTrackGain(q78ToDb(*newTrackGain) + 5.0F);
+    }
+
+    if(const auto newAlbumGain = adjustCommentGain(currentState.albumGain, commentDeltaQ78); currentState.albumGain) {
+        if(!newAlbumGain.has_value()) {
+            return track;
+        }
+        updatedTrack.setRGAlbumGain(q78ToDb(*newAlbumGain) + 5.0F);
+    }
+
+    if(newHeader != 0) {
+        updatedTrack.setOpusHeaderGainQ78(static_cast<int16_t>(newHeader));
+    }
+
+    return updatedTrack;
+}
+
 size_t qHash(const Track& track)
 {
     return qHash(track.uniqueFilepath());
+}
+
+void mergeTrackStats(Track& track, const Track& updatedTrack, Track::Stats stats)
+{
+    if(stats.testFlag(Track::Stat::Loved)) {
+        track.setLoved(updatedTrack.isLoved());
+    }
+    if(stats.testFlag(Track::Stat::Rating)) {
+        track.setRating(updatedTrack.rating());
+    }
+    if(stats.testFlag(Track::Stat::Playcount)) {
+        track.setPlayCount(updatedTrack.playCount());
+        track.setFirstPlayed(updatedTrack.firstPlayed());
+        track.setLastPlayed(updatedTrack.lastPlayed());
+    }
 }
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,12 +23,65 @@
 #include <core/scripting/scriptscanner.h>
 #include <gui/scripting/scriptformatterregistry.h>
 
-#include <QApplication>
-#include <QPalette>
-
-#include <stack>
+#include <QRegularExpression>
 
 using namespace Qt::StringLiterals;
+
+namespace {
+struct FormatTag
+{
+    QString name;
+    QString option;
+};
+
+QString parseHtmlAttribute(const QString& attrs, const QString& name)
+{
+    const QRegularExpression attrRegex{
+        u"(?:^|\\s)%1\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s\"'>]+))"_s.arg(QRegularExpression::escape(name))};
+    const QRegularExpressionMatch match = attrRegex.match(attrs);
+    if(!match.hasMatch()) {
+        return {};
+    }
+
+    for(int i{1}; i <= 3; ++i) {
+        if(!match.captured(i).isEmpty()) {
+            return match.captured(i);
+        }
+    }
+
+    return {};
+}
+
+FormatTag parseFormatTag(const QString& content)
+{
+    if(content.isEmpty()) {
+        return {};
+    }
+
+    const QString trimmed = content.trimmed();
+    const int firstSpace  = static_cast<int>(trimmed.indexOf(u' '));
+    const int firstEquals = static_cast<int>(trimmed.indexOf(u'='));
+
+    if(firstEquals >= 0 && (firstSpace < 0 || firstEquals < firstSpace)) {
+        return {
+            .name   = trimmed.left(firstEquals).trimmed().toLower(),
+            .option = trimmed.mid(firstEquals + 1).trimmed(),
+        };
+    }
+
+    const QString name = (firstSpace < 0 ? trimmed : trimmed.left(firstSpace)).trimmed().toLower();
+    if(name.isEmpty()) {
+        return {};
+    }
+
+    FormatTag tag{.name = name, .option = {}};
+    if(firstSpace >= 0 && name == "a"_L1) {
+        tag.option = parseHtmlAttribute(trimmed.mid(firstSpace + 1), u"href"_s);
+    }
+
+    return tag;
+}
+} // namespace
 
 namespace Fooyin {
 class ScriptFormatterPrivate
@@ -44,21 +97,22 @@ public:
 
     void expression();
     void formatBlock();
-    void processFormat(const QString& func, const QString& option);
-    void addBlock();
-    void closeBlock();
+    void processFormat(const FormatTag& tag);
+    void flushCurrentBlock();
     void resetFormat();
+
+    [[nodiscard]] QString readTagContent();
+    [[nodiscard]] QString peekClosingTagName();
 
     ScriptScanner m_scanner;
     ScriptFormatterRegistry m_registry;
     QFont m_font;
+    QColor m_colour;
 
     ScriptScanner::Token m_current;
     ScriptScanner::Token m_previous;
 
     RichTextBlock m_currentBlock;
-    std::stack<RichTextBlock> m_blockStack;
-    std::vector<RichTextBlock> m_blockGroup;
 
     ErrorList m_errors;
     RichText m_formatResult;
@@ -70,7 +124,7 @@ void ScriptFormatterPrivate::advance()
 
     m_current = m_scanner.next();
     if(m_current.type == ScriptScanner::TokError) {
-        errorAtCurrent(m_current.value);
+        errorAtCurrent(m_current.value.toString());
     }
 }
 
@@ -108,13 +162,13 @@ void ScriptFormatterPrivate::errorAt(const ScriptScanner::Token& token, const QS
         errorMsg += u" at end of string"_s;
     }
     else {
-        errorMsg += u": '"_s + token.value + u"'"_s;
+        errorMsg += u": '"_s + token.value.toString() + u"'"_s;
     }
 
     errorMsg += u" (%1)"_s.arg(message);
 
     ScriptError currentError;
-    currentError.value    = token.value;
+    currentError.value    = token.value.toString();
     currentError.position = token.position;
     currentError.message  = errorMsg;
 
@@ -124,99 +178,81 @@ void ScriptFormatterPrivate::errorAt(const ScriptScanner::Token& token, const QS
 void ScriptFormatterPrivate::expression()
 {
     advance();
-    switch(m_previous.type) {
-        case(ScriptScanner::TokLeftAngle):
-            formatBlock();
-            break;
-        case(ScriptScanner::TokVar):
-        case(ScriptScanner::TokFunc):
-        case(ScriptScanner::TokQuote):
-        case(ScriptScanner::TokLeftSquare):
-        case(ScriptScanner::TokRightAngle):
-        case(ScriptScanner::TokComma):
-        case(ScriptScanner::TokLeftParen):
-        case(ScriptScanner::TokRightParen):
-        case(ScriptScanner::TokRightSquare):
-        case(ScriptScanner::TokSlash):
-        case(ScriptScanner::TokColon):
-        case(ScriptScanner::TokEquals):
-        case(ScriptScanner::TokNot):
-        case(ScriptScanner::TokLiteral):
-        case(ScriptScanner::TokAnd):
-        case(ScriptScanner::TokOr):
-        case(ScriptScanner::TokXOr):
-        case(ScriptScanner::TokMissing):
-        case(ScriptScanner::TokPresent):
-        case(ScriptScanner::TokAll):
-        case(ScriptScanner::TokSort):
-        case(ScriptScanner::TokBy):
-        case(ScriptScanner::TokBefore):
-        case(ScriptScanner::TokAfter):
-        case(ScriptScanner::TokSince):
-        case(ScriptScanner::TokDuring):
-        case(ScriptScanner::TokLast):
-        case(ScriptScanner::TokSecond):
-        case(ScriptScanner::TokMinute):
-        case(ScriptScanner::TokHour):
-        case(ScriptScanner::TokDay):
-        case(ScriptScanner::TokWeek):
-        case(ScriptScanner::TokAscending):
-        case(ScriptScanner::TokDescending):
-        case(ScriptScanner::TokPlus):
-        case(ScriptScanner::TokMinus):
-        case(ScriptScanner::TokLimit):
-            m_currentBlock.text += m_previous.value;
-            break;
-        case(ScriptScanner::TokEscape):
-            advance();
-            m_currentBlock.text += m_previous.value;
-            break;
-        case(ScriptScanner::TokEos):
-        case(ScriptScanner::TokError):
-            break;
+    if(m_previous.type == ScriptScanner::TokLeftAngle) {
+        formatBlock();
+    }
+    else if(m_previous.type == ScriptScanner::TokEscape) {
+        advance();
+        m_currentBlock.text += m_previous.value;
+    }
+    else if(m_previous.type != ScriptScanner::TokEos && m_previous.type != ScriptScanner::TokError) {
+        m_currentBlock.text += m_previous.value;
     }
 }
 
 void ScriptFormatterPrivate::formatBlock()
 {
-    QString func;
-    QString option;
+    const FormatTag tag = parseFormatTag(readTagContent());
+    consume(ScriptScanner::TokRightAngle, u"Expected '>' after expression"_s);
 
-    bool formatOption{false};
-    while(m_current.type != ScriptScanner::TokRightAngle && m_current.type != ScriptScanner::TokEos) {
-        advance();
-        if(m_previous.type == ScriptScanner::TokEquals) {
-            formatOption = true;
-            advance();
-        }
-
-        if(formatOption) {
-            option.append(m_previous.value);
-        }
-        else {
-            func.append(m_previous.value);
-        }
+    if(tag.name.isEmpty()) {
+        error(u"Format option not found"_s);
+        return;
     }
 
-    processFormat(func, option);
-    closeBlock();
+    processFormat(tag);
 }
 
-void ScriptFormatterPrivate::processFormat(const QString& func, const QString& option)
+QString ScriptFormatterPrivate::readTagContent()
 {
-    if(m_registry.isFormatFunc(func)) {
-        addBlock();
-        m_registry.format(m_currentBlock.format, func, option);
+    QString content;
+
+    while(m_current.type != ScriptScanner::TokRightAngle && m_current.type != ScriptScanner::TokEos) {
+        content.append(m_current.value);
+        advance();
+    }
+
+    return content.trimmed();
+}
+
+QString ScriptFormatterPrivate::peekClosingTagName()
+{
+    if(m_current.type != ScriptScanner::TokLeftAngle || m_scanner.peekNext().type != ScriptScanner::TokSlash) {
+        return {};
+    }
+
+    QString content;
+    int delta = 2;
+    while(true) {
+        const auto token = m_scanner.peekNext(delta++);
+        if(token.type == ScriptScanner::TokRightAngle || token.type == ScriptScanner::TokEos) {
+            break;
+        }
+        content.append(token.value);
+    }
+
+    return content.trimmed().toLower();
+}
+
+void ScriptFormatterPrivate::processFormat(const FormatTag& tag)
+{
+    const RichFormatting previousFormatting{m_currentBlock.format};
+    RichFormatting nextFormatting{m_currentBlock.format};
+
+    const bool formatApplied = ScriptFormatterRegistry::format(nextFormatting, tag.name, tag.option);
+
+    if(formatApplied) {
+        flushCurrentBlock();
+        m_currentBlock.format = std::move(nextFormatting);
     }
     else {
         error(u"Format option not found"_s);
     }
 
-    consume(ScriptScanner::TokRightAngle, u"Expected '>' after expression"_s);
-
-    while(m_current.type != ScriptScanner::TokEos
-          && (m_current.type != ScriptScanner::TokLeftAngle
-              || (m_scanner.peekNext().type != ScriptScanner::TokSlash && m_scanner.peekNext(2).value != func))) {
+    while(m_current.type != ScriptScanner::TokEos) {
+        if(m_current.type == ScriptScanner::TokLeftAngle && peekClosingTagName() == tag.name) {
+            break;
+        }
         expression();
     }
 
@@ -224,6 +260,7 @@ void ScriptFormatterPrivate::processFormat(const QString& func, const QString& o
     consume(ScriptScanner::TokSlash);
 
     QString closeOption;
+    closeOption.reserve(tag.name.size());
 
     while(m_current.type != ScriptScanner::TokRightAngle && m_current.type != ScriptScanner::TokEos) {
         advance();
@@ -231,49 +268,28 @@ void ScriptFormatterPrivate::processFormat(const QString& func, const QString& o
     }
 
     consume(ScriptScanner::TokRightAngle);
+
+    if(formatApplied) {
+        flushCurrentBlock();
+        m_currentBlock.format = previousFormatting;
+    }
 }
 
-void ScriptFormatterPrivate::addBlock()
+void ScriptFormatterPrivate::flushCurrentBlock()
 {
     if(!m_currentBlock.text.isEmpty()) {
-        if(m_blockGroup.empty()) {
-            m_formatResult.blocks.emplace_back(m_currentBlock);
-        }
-        else {
-            m_blockStack.emplace(m_currentBlock);
-        }
+        m_formatResult.blocks.emplace_back(m_currentBlock);
         m_currentBlock.text.clear();
-    }
-}
-
-void ScriptFormatterPrivate::closeBlock()
-{
-    if(!m_currentBlock.text.isEmpty()) {
-        if(m_blockStack.empty()) {
-            m_formatResult.blocks.emplace_back(m_currentBlock);
-        }
-        else {
-            m_blockGroup.emplace_back(m_currentBlock);
-        }
-    }
-
-    if(!m_blockStack.empty()) {
-        m_currentBlock = m_blockStack.top();
-        m_blockStack.pop();
-    }
-    else {
-        std::ranges::reverse(m_blockGroup);
-        m_formatResult.blocks.insert(m_formatResult.blocks.end(), m_blockGroup.cbegin(), m_blockGroup.cend());
-        m_blockGroup.clear();
-        resetFormat();
     }
 }
 
 void ScriptFormatterPrivate::resetFormat()
 {
-    m_currentBlock               = {};
-    m_currentBlock.format.font   = m_font;
-    m_currentBlock.format.colour = QApplication::palette().text().color();
+    m_currentBlock             = {};
+    m_currentBlock.format.font = m_font;
+    if(m_colour.isValid()) {
+        m_currentBlock.format.colour.setColour(m_colour);
+    }
 }
 
 ScriptFormatter::ScriptFormatter()
@@ -290,6 +306,13 @@ RichText ScriptFormatter::evaluate(const QString& input)
 
     p->resetFormat();
     p->m_formatResult.clear();
+
+    if(!input.contains(u'<') && !input.contains(u'\\')) {
+        p->m_currentBlock.text = input;
+        p->m_formatResult.blocks.emplace_back(p->m_currentBlock);
+        return p->m_formatResult;
+    }
+
     p->m_scanner.setup(input);
 
     p->advance();
@@ -299,15 +322,17 @@ RichText ScriptFormatter::evaluate(const QString& input)
 
     p->consume(ScriptScanner::TokEos, u"Expected end of expression"_s);
 
-    if(!p->m_currentBlock.text.isEmpty()) {
-        p->m_formatResult.blocks.emplace_back(p->m_currentBlock);
-    }
+    p->flushCurrentBlock();
 
     return p->m_formatResult;
 }
-
 void ScriptFormatter::setBaseFont(const QFont& font)
 {
     p->m_font = font;
+}
+
+void ScriptFormatter::setBaseColour(const QColor& colour)
+{
+    p->m_colour = colour;
 }
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,9 @@
 #include "artworkrow.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/overlaywidget.h>
+#include <utils/stringutils.h>
 #include <utils/utils.h>
 
 #include <QBuffer>
@@ -30,9 +32,12 @@
 #include <QHBoxLayout>
 #include <QImageReader>
 #include <QLabel>
+#include <QLoggingCategory>
 #include <QMenu>
 #include <QMimeDatabase>
 #include <QPushButton>
+
+Q_LOGGING_CATEGORY(ARTWORK_ROW, "fy.artworkrow")
 
 using namespace Qt::StringLiterals;
 
@@ -45,8 +50,8 @@ ArtworkRow::ArtworkRow(const QString& name, Track::Cover cover, bool readOnly, Q
     , m_name{new QLabel(name, parent)}
     , m_image{new QLabel(parent)}
     , m_details{new QLabel(parent)}
-    , m_addButton{new QPushButton(Utils::iconFromTheme(Constants::Icons::Add), tr("Add"), parent)}
-    , m_removeButton{new QPushButton(Utils::iconFromTheme(Constants::Icons::Remove), tr("Remove"), parent)}
+    , m_addButton{new QPushButton(Gui::iconFromTheme(Constants::Icons::Add), tr("Add"), parent)}
+    , m_removeButton{new QPushButton(Gui::iconFromTheme(Constants::Icons::Remove), tr("Remove"), parent)}
     , m_readOnly{readOnly}
     , m_status{Status::None}
     , m_multipleImages{false}
@@ -84,9 +89,11 @@ ArtworkRow::ArtworkRow(const QString& name, Track::Cover cover, bool readOnly, Q
 
 void ArtworkRow::replaceImage()
 {
-    const QString filepath
-        = QFileDialog::getOpenFileName(this, tr("Open Image"), QDir::homePath(), tr("Images") + " (*.png *.jpg)"_L1,
-                                       nullptr, QFileDialog::DontResolveSymlinks);
+    static const QStringList imagePatterns = {u"*.png"_s, u"*.jpg"_s, u"*.jpeg"_s, u"*.webp"_s, u"*.bmp"_s, u"*.gif"_s};
+    const QString filter                   = tr("Images") + u" (%1)"_s.arg(imagePatterns.join(u' '));
+
+    const QString filepath = QFileDialog::getOpenFileName(this, tr("Open Image"), QDir::homePath(), filter, nullptr,
+                                                          QFileDialog::DontResolveSymlinks);
     if(filepath.isEmpty()) {
         return;
     }
@@ -100,6 +107,7 @@ void ArtworkRow::replaceImage()
 
     m_multipleImages = false;
     m_status         = (m_imageData.isEmpty() ? Status::Added : Status::Changed);
+
     loadImage(imageData, true);
     finalise(0);
 }
@@ -155,16 +163,50 @@ void ArtworkRow::loadImage(const QByteArray& imageData, bool replace)
     m_mimeType = mimeDb.mimeTypeForData(m_imageData).name();
 }
 
+void ArtworkRow::setLoadedState(const QByteArray& imageData, int imageCount, int trackCount, bool multipleImages)
+{
+    m_status         = Status::None;
+    m_multipleImages = multipleImages;
+    m_addedCount     = 0;
+    m_imageCount     = imageCount;
+    m_imageData      = (m_multipleImages ? QByteArray{} : imageData);
+
+    if(m_imageData.isEmpty()) {
+        m_imageHash.clear();
+        m_mimeType.clear();
+    }
+    else {
+        QCryptographicHash hash{QCryptographicHash::Sha256};
+        hash.addData(m_imageData);
+        m_imageHash = hash.result();
+
+        const QMimeDatabase mimeDb;
+        m_mimeType = mimeDb.mimeTypeForData(m_imageData).name();
+    }
+
+    finalise(trackCount);
+}
+
 void ArtworkRow::finalise(int trackCount)
 {
     m_addedCount = 0;
 
     if(m_multipleImages) {
+        m_image->setPixmap({});
         m_image->setText(tr("Multiple images"));
-        m_details->setText(tr("%1 of %2 files have artwork").arg(m_imageCount).arg(trackCount));
+        m_details->setText(tr("Artwork found in %Ln file(s)", nullptr, m_imageCount) + u"\n"_s
+                           + tr("%Ln file(s) selected", nullptr, trackCount));
         m_image->show();
         m_addButton->hide();
         m_removeButton->show();
+    }
+    else if(m_imageData.isEmpty()) {
+        m_image->hide();
+        m_image->setPixmap({});
+        m_image->setText({});
+        m_addButton->show();
+        m_removeButton->hide();
+        m_details->setText(tr("No artwork present"));
     }
     else if(!m_imageData.isEmpty()) {
         QBuffer buffer{&m_imageData};
@@ -175,21 +217,25 @@ void ArtworkRow::finalise(int trackCount)
         QImageReader reader{&buffer, formatHint};
 
         if(!reader.canRead()) {
+            qCDebug(ARTWORK_ROW) << "Failed to use format hint" << formatHint << "when trying to load artwork row data";
             reader.setFormat({});
             reader.setDevice(&buffer);
             if(!reader.canRead()) {
+                qCWarning(ARTWORK_ROW) << u"Failed to decode artwork row image data (%1): %2"_s.arg(
+                    mimeType.name(), reader.errorString());
                 return;
             }
         }
 
         if(reader.canRead()) {
+            const auto size = reader.size();
             reader.setScaledSize(m_image->size());
+            m_image->setText({});
             m_image->setPixmap(QPixmap::fromImageReader(&reader));
             m_image->show();
             m_addButton->hide();
             m_removeButton->show();
 
-            const auto size          = reader.size();
             const QString format     = mimeType.comment();
             const qint64 sizeInKB    = m_imageData.size() / 1024;
             const QString resolution = u"%1x%2"_s.arg(size.width()).arg(size.height());
@@ -230,7 +276,8 @@ QByteArray ArtworkRow::image() const
 
 void ArtworkRow::contextMenuEvent(QContextMenuEvent* event)
 {
-    if(m_readOnly) {
+    const bool hasExistingImage = !m_imageData.isEmpty();
+    if(m_readOnly && !hasExistingImage) {
         return;
     }
 
@@ -243,17 +290,29 @@ void ArtworkRow::contextMenuEvent(QContextMenuEvent* event)
     overlay->raise();
     overlay->show();
 
-    const bool hasExistingImage = m_image->isVisible();
-
-    auto* add = new QAction(hasExistingImage ? tr("Replace image") : tr("Add image"), menu);
-    QObject::connect(add, &QAction::triggered, this, &ArtworkRow::replaceImage);
-
-    menu->addAction(add);
+    if(!m_readOnly) {
+        auto* add = new QAction(hasExistingImage ? tr("Replace image") : tr("Add image"), menu);
+        QObject::connect(add, &QAction::triggered, this, &ArtworkRow::replaceImage);
+        menu->addAction(add);
+    }
 
     if(hasExistingImage) {
-        auto* remove = new QAction(tr("Remove"), menu);
-        QObject::connect(remove, &QAction::triggered, this, &ArtworkRow::removeImage);
-        menu->addAction(remove);
+        auto* extractFile = new QAction(tr("Auto-export to file"), menu);
+        auto* extractAs   = new QAction(tr("Export as…"), menu);
+        extractFile->setStatusTip(
+            tr("Export this embedded artwork to a file in the track directory without prompting"));
+        extractAs->setStatusTip(tr("Choose where to export this embedded artwork"));
+        QObject::connect(extractFile, &QAction::triggered, this, &ArtworkRow::requestExtract);
+        QObject::connect(extractAs, &QAction::triggered, this, &ArtworkRow::requestExtractAs);
+        menu->addAction(extractFile);
+        menu->addAction(extractAs);
+
+        if(!m_readOnly) {
+            auto* remove = new QAction(tr("Remove"), menu);
+            remove->setStatusTip(tr("Remove this artwork"));
+            QObject::connect(remove, &QAction::triggered, this, &ArtworkRow::removeImage);
+            menu->addAction(remove);
+        }
     }
 
     menu->popup(event->globalPos());

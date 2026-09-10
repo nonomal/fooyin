@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,9 @@
 namespace Fooyin {
 class ActionManager;
 class MainMenuBar;
+class MusicLibrary;
 class SettingsManager;
+struct ScanProgress;
 class StatusWidget;
 class Track;
 
@@ -51,8 +53,8 @@ public:
     };
     Q_ENUM(WindowState)
 
-    explicit MainWindow(ActionManager* actionManager, MainMenuBar* menubar, SettingsManager* settings,
-                        QWidget* parent = nullptr);
+    explicit MainWindow(ActionManager* actionManager, MainMenuBar* menubar, MusicLibrary* library,
+                        SettingsManager* settings, QWidget* parent = nullptr);
     ~MainWindow() override;
 
     void open();
@@ -71,15 +73,19 @@ protected:
     bool event(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
 
 private:
+    void showScanProgress(const ScanProgress& progress);
     WindowState currentState();
     void saveWindowGeometry();
     void restoreWindowGeometry();
     void restoreState(WindowState state);
     void hideToTray(bool hide);
 
+    ActionManager* m_actionManager;
     MainMenuBar* m_mainMenu;
+    MusicLibrary* m_library;
     SettingsManager* m_settings;
     QPointer<StatusWidget> m_statusWidget;
 

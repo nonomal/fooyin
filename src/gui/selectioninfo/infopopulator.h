@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,9 +20,13 @@
 #pragma once
 
 #include "infoitem.h"
+#include "selectioninfofield.h"
 
 #include <core/track.h>
 #include <utils/worker.h>
+
+#include <memory>
+#include <vector>
 
 namespace Fooyin {
 class InfoPopulatorPrivate;
@@ -40,6 +44,8 @@ struct InfoData
     }
 };
 
+using InfoDataPtr = std::shared_ptr<InfoData>;
+
 class InfoPopulator : public Worker
 {
     Q_OBJECT
@@ -48,12 +54,14 @@ public:
     explicit InfoPopulator(LibraryManager* libraryManager, QObject* parent = nullptr);
     ~InfoPopulator() override;
 
-    void run(InfoItem::Options options, const TrackList& tracks);
+    void run(InfoItem::Options options, const TrackList& tracks, const std::vector<SelectionInfoField>& fields);
 
-signals:
-    void populated(Fooyin::InfoData data);
+Q_SIGNALS:
+    void populated(Fooyin::InfoDataPtr data);
 
 private:
     std::unique_ptr<InfoPopulatorPrivate> p;
 };
 } // namespace Fooyin
+
+Q_DECLARE_METATYPE(Fooyin::InfoDataPtr)

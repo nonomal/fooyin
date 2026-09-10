@@ -1,6 +1,7 @@
 /*
  * Fooyin
  * Copyright © 2025, Carter Li <zhangsongcui@live.cn>
+ * Copyright © 2026, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +22,8 @@
 
 #include <core/engine/enginecontroller.h>
 #include <core/player/playercontroller.h>
-#include <core/playlist/playlisthandler.h>
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QEvent>
@@ -59,9 +60,8 @@ ThumbnailToolbarPlugin::~ThumbnailToolbarPlugin() = default;
 void ThumbnailToolbarPlugin::initialise(const CorePluginContext& context)
 {
     m_playerController = context.playerController;
-    m_playlistHandler  = context.playlistHandler;
 
-    QObject::connect(m_playerController, &PlayerController::playlistTrackChanged, this,
+    QObject::connect(m_playerController, &PlayerController::playlistTrackUpdated, this,
                      &ThumbnailToolbarPlugin::trackChanged);
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this,
                      &ThumbnailToolbarPlugin::playStateChanged);
@@ -116,24 +116,29 @@ void ThumbnailToolbarPlugin::trackChanged(const PlaylistTrack& /*playlistTrack*/
 
 void ThumbnailToolbarPlugin::playStateChanged()
 {
+    if(!m_taskbarList) {
+        return;
+    }
+
+    TBPFLAG state{TBPF_NORMAL};
+
     switch(m_playerController->playState()) {
-        case Player::PlayState::Playing:
-            m_taskbarList->SetProgressState(reinterpret_cast<HWND>(m_windowController->mainWindow()->winId()),
-                                            TBPF_NORMAL);
+        case(Player::PlayState::Playing):
+            state = TBPF_NORMAL;
             break;
-        case Player::PlayState::Paused:
-            m_taskbarList->SetProgressState(reinterpret_cast<HWND>(m_windowController->mainWindow()->winId()),
-                                            TBPF_PAUSED);
+        case(Player::PlayState::Paused):
+            state = TBPF_PAUSED;
             break;
-        case Player::PlayState::Stopped:
-            m_taskbarList->SetProgressState(reinterpret_cast<HWND>(m_windowController->mainWindow()->winId()),
-                                            TBPF_ERROR);
+        case(Player::PlayState::Stopped):
+            state = TBPF_ERROR;
             break;
         default:
-            m_taskbarList->SetProgressState(reinterpret_cast<HWND>(m_windowController->mainWindow()->winId()),
-                                            TBPF_INDETERMINATE);
+            state = TBPF_INDETERMINATE;
             break;
     }
+
+    m_taskbarList->SetProgressState(reinterpret_cast<HWND>(m_windowController->mainWindow()->winId()), state);
+
     updateToolbarButtons();
 }
 
@@ -155,23 +160,23 @@ void ThumbnailToolbarPlugin::updateToolbarButtons()
     }
 
     // Previous button
-    buttons[PREVIOUS_BUTTON_ID].hIcon = QIcon2HICON(Utils::iconFromTheme(Constants::Icons::Prev));
+    buttons[PREVIOUS_BUTTON_ID].hIcon = QIcon2HICON(Gui::iconFromTheme(Constants::Icons::Prev));
     wcscpy_s(buttons[PREVIOUS_BUTTON_ID].szTip,
              reinterpret_cast<LPCWSTR>(tr("Previous").utf16())); // On Windows, wchar_t is UTF-16
-    buttons[PREVIOUS_BUTTON_ID].dwFlags = m_playlistHandler->previousTrack().isValid() ? THBF_ENABLED : THBF_DISABLED;
+    buttons[PREVIOUS_BUTTON_ID].dwFlags = m_playerController->hasPreviousTrack() ? THBF_ENABLED : THBF_DISABLED;
 
     // Play/Pause button
     bool isPlaying = m_playerController->playState() == Player::PlayState::Playing;
     buttons[PLAYPAUSE_BUTTON_ID].hIcon
-        = QIcon2HICON(Utils::iconFromTheme(isPlaying ? Constants::Icons::Pause : Constants::Icons::Play));
+        = QIcon2HICON(Gui::iconFromTheme(isPlaying ? Constants::Icons::Pause : Constants::Icons::Play));
     wcscpy_s(buttons[PLAYPAUSE_BUTTON_ID].szTip, reinterpret_cast<LPCWSTR>(tr(isPlaying ? "Pause" : "Play").utf16()));
     buttons[PLAYPAUSE_BUTTON_ID].dwFlags
         = m_playerController->currentPlaylistTrack().isValid() ? THBF_ENABLED : THBF_DISABLED;
 
     // Next button
-    buttons[NEXT_BUTTON_ID].hIcon = QIcon2HICON(Utils::iconFromTheme(Constants::Icons::Next));
+    buttons[NEXT_BUTTON_ID].hIcon = QIcon2HICON(Gui::iconFromTheme(Constants::Icons::Next));
     wcscpy_s(buttons[NEXT_BUTTON_ID].szTip, reinterpret_cast<LPCWSTR>(tr("Next").utf16()));
-    buttons[NEXT_BUTTON_ID].dwFlags = m_playlistHandler->nextTrack().isValid() ? THBF_ENABLED : THBF_DISABLED;
+    buttons[NEXT_BUTTON_ID].dwFlags = m_playerController->hasNextTrack() ? THBF_ENABLED : THBF_DISABLED;
 
     m_taskbarList->ThumbBarUpdateButtons(hWnd, 3, buttons);
 
@@ -200,14 +205,14 @@ void ThumbnailToolbarPlugin::setupToolbar()
         buttons[i].dwFlags = THBF_DISABLED;
     }
 
-    buttons[PREVIOUS_BUTTON_ID].hIcon = QIcon2HICON(Utils::iconFromTheme(Constants::Icons::Prev));
+    buttons[PREVIOUS_BUTTON_ID].hIcon = QIcon2HICON(Gui::iconFromTheme(Constants::Icons::Prev));
     wcscpy_s(buttons[PREVIOUS_BUTTON_ID].szTip,
              reinterpret_cast<LPCWSTR>(tr("Previous").utf16())); // On Windows, wchar_t is UTF-16
 
-    buttons[PLAYPAUSE_BUTTON_ID].hIcon = QIcon2HICON(Utils::iconFromTheme(Constants::Icons::Play));
+    buttons[PLAYPAUSE_BUTTON_ID].hIcon = QIcon2HICON(Gui::iconFromTheme(Constants::Icons::Play));
     wcscpy_s(buttons[PLAYPAUSE_BUTTON_ID].szTip, reinterpret_cast<LPCWSTR>(tr("Play").utf16()));
 
-    buttons[NEXT_BUTTON_ID].hIcon = QIcon2HICON(Utils::iconFromTheme(Constants::Icons::Next));
+    buttons[NEXT_BUTTON_ID].hIcon = QIcon2HICON(Gui::iconFromTheme(Constants::Icons::Next));
     wcscpy_s(buttons[NEXT_BUTTON_ID].szTip, reinterpret_cast<LPCWSTR>(tr("Next").utf16()));
 
     HRESULT hr = m_taskbarList->ThumbBarAddButtons(hWnd, 3, buttons);

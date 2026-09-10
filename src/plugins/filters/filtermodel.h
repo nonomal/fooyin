@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +21,10 @@
 
 #include "filterfwd.h"
 #include "filteritem.h"
+#include "filterrows.h"
 
 #include <core/track.h>
+#include <gui/coverprovider.h>
 #include <utils/stringcollator.h>
 #include <utils/treemodel.h>
 
@@ -30,7 +32,7 @@
 
 namespace Fooyin {
 class CoverProvider;
-class LibraryManager;
+class MusicLibrary;
 class SettingsManager;
 
 namespace Filters {
@@ -55,18 +57,22 @@ class FilterModel : public TreeModel<FilterItem>
     Q_OBJECT
 
 public:
-    explicit FilterModel(LibraryManager* libraryManager, CoverProvider* coverProvider, SettingsManager* settings,
+    explicit FilterModel(MusicLibrary* library, CoverProvider* coverProvider, SettingsManager* settings,
                          QObject* parent = nullptr);
     ~FilterModel() override;
 
     [[nodiscard]] bool showSummary() const;
     [[nodiscard]] Track::Cover coverType() const;
+    [[nodiscard]] std::optional<ArtworkSourcePreference> coverSource() const;
+    [[nodiscard]] CoverProvider* coverProvider() const;
 
     void setRowHeight(int height);
+    void setIconSize(const QSize& size);
     void setShowSummary(bool show);
     void setShowDecoration(bool show);
     void setShowLabels(bool show);
     void setCoverType(Track::Cover type);
+    void setCoverSource(std::optional<ArtworkSourcePreference> source);
     void setColumnOrder(const std::vector<int>& order);
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
@@ -86,16 +92,9 @@ public:
 
     [[nodiscard]] QModelIndexList indexesForKeys(const std::vector<Md5Hash>& keys) const;
 
-    void addTracks(const TrackList& tracks);
-    void updateTracks(const TrackList& tracks);
-    void refreshTracks(const TrackList& tracks);
-    void removeTracks(const TrackList& tracks);
     bool removeColumn(int column);
 
-    void reset(const FilterColumnList& columns, const TrackList& tracks);
-
-signals:
-    void modelUpdated();
+    void setRows(const FilterColumnList& columns, const FilterRowList& rows);
 
 protected:
     friend class FilterModelPrivate;

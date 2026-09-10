@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include <gui/widgets/customisableinput.h>
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QApplication>
@@ -56,7 +57,7 @@ public:
 CustomisableInputPrivate::CustomisableInputPrivate(CustomisableInput* self)
     : m_self{self}
     , m_input{new QLineEdit(m_self)}
-    , m_optionsButton{new QPushButton(Utils::iconFromTheme(Constants::Icons::Font), {}, m_self)}
+    , m_optionsButton{new QPushButton(Gui::iconFromTheme(Constants::Icons::Font), {}, m_self)}
     , m_fontButton{new QPushButton(m_self)}
     , m_colourButton{new QPushButton(m_self)}
 {

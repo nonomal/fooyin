@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,6 +30,8 @@
 #include <QSortFilterProxyModel>
 
 namespace Fooyin {
+class CoverRepository;
+class GuiStyleProvider;
 class LibraryManager;
 class LibraryTreeModelPrivate;
 class SettingsManager;
@@ -41,11 +43,16 @@ class LibraryTreeSortModel : public QSortFilterProxyModel
 public:
     explicit LibraryTreeSortModel(QObject* parent = nullptr);
 
+    void appendTracksForIndexes(const QModelIndexList& indexes, TrackList& tracks) const;
+    void setDragTracks(TrackList tracks);
+    [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
+
 protected:
     [[nodiscard]] bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 
 private:
     StringCollator m_collator;
+    mutable TrackList m_dragTracks;
 };
 
 class LibraryTreeModel : public TreeModel<LibraryTreeItem>
@@ -54,11 +61,13 @@ class LibraryTreeModel : public TreeModel<LibraryTreeItem>
 
 public:
     explicit LibraryTreeModel(LibraryManager* libraryManager, const std::shared_ptr<AudioLoader>& audioLoader,
-                              SettingsManager* settings, QObject* parent = nullptr);
+                              CoverRepository* coverRepository, SettingsManager* settings,
+                              GuiStyleProvider* styleProvider, QObject* parent = nullptr);
     ~LibraryTreeModel() override;
 
     void resetPalette();
     void setRowHeight(int height);
+    void setSummaryNodeConfig(bool show, const QString& title);
     void setPlayState(Player::PlayState state);
     void setPlayingPath(const QString& parentNode, const QString& path);
 
@@ -69,11 +78,17 @@ public:
     void fetchMore(const QModelIndex& parent) override;
     [[nodiscard]] bool canFetchMore(const QModelIndex& parent) const override;
 
+    void ensureChildrenAvailable(const QModelIndex& parent);
+    [[nodiscard]] std::vector<LibraryTreeItem*> childItemsForTraversal(const Md5Hash& key) const;
+    void appendTracksForIndexes(const QModelIndexList& indexes, TrackList& tracks) const;
+    [[nodiscard]] QMimeData* mimeDataForTracks(const TrackList& tracks) const;
+
     [[nodiscard]] QStringList mimeTypes() const override;
     [[nodiscard]] Qt::DropActions supportedDragActions() const override;
     [[nodiscard]] QMimeData* mimeData(const QModelIndexList& indexes) const override;
 
     [[nodiscard]] QModelIndexList findIndexes(const QStringList& values) const;
+    [[nodiscard]] QModelIndexList indexesForKeys(const std::vector<Md5Hash>& keys);
     [[nodiscard]] QModelIndexList indexesForTracks(const TrackList& tracks) const;
 
     void addTracks(const TrackList& tracks);
@@ -86,8 +101,9 @@ public:
 
     [[nodiscard]] QModelIndex indexForKey(const Md5Hash& key);
 
-signals:
+Q_SIGNALS:
     void modelLoaded();
+    void modelResetFinished();
     void modelUpdated();
     // QSortFilterProxyModel won't forward dataChanged if indexes are invalid, so use a custom signal
     void dataUpdated(const QModelIndex& topLeft, const QModelIndex& bottomRight, const QList<int>& roles = {});

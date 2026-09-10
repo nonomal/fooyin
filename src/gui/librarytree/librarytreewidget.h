@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,16 +19,51 @@
 
 #pragma once
 
-#include "gui/fywidget.h"
+#include "librarytreecontroller.h"
+#include "librarytreegroup.h"
+#include "librarytreescriptenvironment.h"
+
+#include <core/track.h>
+#include <gui/fywidget.h>
+#include <utils/crypto.h>
+
+#include <QByteArray>
+#include <QModelIndex>
+#include <QSize>
+
+#include <map>
+#include <vector>
+
+class QAction;
+class QItemSelection;
+class QJsonObject;
+class QMenu;
+class QModelIndex;
+class QPoint;
+class QVBoxLayout;
 
 namespace Fooyin {
 class ActionManager;
 class Application;
+class CoverRepository;
 class LibraryTreeController;
-class LibraryTreeWidgetPrivate;
+class LibraryTreeGroupRegistry;
+class LibraryTreeDelegate;
+class LibraryTreeModel;
+class LibraryTreeSortModel;
+class LibraryTreeView;
 class MusicLibrary;
+class GuiStyleProvider;
+class PlayerController;
+class Playlist;
 class PlaylistController;
+class PlaylistHandler;
+struct PlaylistTrack;
 class SettingsManager;
+class SignalThrottler;
+class TrackSelectionController;
+class WidgetContext;
+enum class TrackAction;
 
 class LibraryTreeWidget : public FyWidget
 {
@@ -36,7 +71,8 @@ class LibraryTreeWidget : public FyWidget
 
 public:
     LibraryTreeWidget(ActionManager* actionManager, PlaylistController* playlistController,
-                      LibraryTreeController* controller, Application* core, QWidget* parent = nullptr);
+                      TrackSelectionController* trackSelection, LibraryTreeController* controller, Application* core,
+                      CoverRepository* coverRepository, GuiStyleProvider* styleProvider, QWidget* parent = nullptr);
     ~LibraryTreeWidget() override;
 
     [[nodiscard]] QString name() const override;
@@ -45,13 +81,128 @@ public:
     void saveLayoutData(QJsonObject& layout) override;
     void loadLayoutData(const QJsonObject& layout) override;
 
-    void searchEvent(const QString& search) override;
+    void searchEvent(const SearchRequest& request) override;
+
+    struct ConfigData
+    {
+        int doubleClickAction{0};
+        int middleClickAction{0};
+        bool sendPlayback{true};
+        bool playlistEnabled{false};
+        bool autoSwitch{true};
+        bool preservePlaybackPlaylist{true};
+        QString playlistName{LibraryTreeController::defaultPlaylistName()};
+        bool restoreState{true};
+        bool expandOnSingleClick{false};
+        int autoExpandSearchResultLimit{10};
+        bool animated{true};
+        bool showHeader{true};
+        bool showScrollbar{true};
+        bool alternatingRows{false};
+        bool showSummaryNode{true};
+        QString summaryNodeTitle{defaultLibraryTreeSummaryTitle()};
+        int rowHeight{0};
+        QSize iconSize{36, 36};
+        int artworkCornerRadius{0};
+    };
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
+
+Q_SIGNALS:
+    void configChanged();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
 
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    static void saveConfigToLayout(const ConfigData& config, QJsonObject& layout);
+    void openConfigDialog() override;
+
 private:
-    std::unique_ptr<LibraryTreeWidgetPrivate> p;
+    void setupConnections();
+    void reset();
+    void populateContextMenu(QMenu* menu);
+
+    void changeGrouping(const LibraryTreeGrouping& newGrouping);
+
+    void activePlaylistChanged(Playlist* playlist) const;
+    void playlistTrackChanged(const PlaylistTrack& track);
+
+    void addGroupMenu(QMenu* parent);
+    void addOpenMenu(QMenu* menu);
+
+    void setScrollbarEnabled(bool enabled) const;
+    void setupHeaderContextMenu(const QPoint& pos);
+    void selectionChanged(const QItemSelection& selected, const QItemSelection& deselected) const;
+    void applySelectedTracks(const TrackList& selectedTracks) const;
+    void syncSelectionPlaylist(const TrackList& tracks) const;
+    void queueSelectedTracks(bool next) const;
+    void dequeueSelectedTracks() const;
+
+    void searchChanged(const SearchRequest& request);
+    [[nodiscard]] bool shouldAutoExpandSearchResults(const TrackList& tracks) const;
+    void expandSearchResults();
+
+    void handlePlayback(const QModelIndexList& indexes, int row = 0);
+    void handlePlaySelection();
+    void handlePlayTrack(const QModelIndex& index);
+    void handleDoubleClick(const QModelIndex& index);
+    void handleMiddleClick(const QModelIndex& index) const;
+
+    void handleTracksAdded(const TrackList& tracks);
+    void handleTracksUpdated(const TrackList& tracks);
+
+    void restoreSelection(const std::vector<Md5Hash>& expandedKeys, const std::vector<Md5Hash>& selectedKeys);
+    [[nodiscard]] QByteArray saveState() const;
+    void restoreIndexState(const QByteArray& topKey, const std::vector<QByteArray>& keys, int currentIndex = 0);
+    void restoreState(const QByteArray& state, bool force = false);
+
+    ActionManager* m_actionManager;
+    MusicLibrary* m_library;
+    PlaylistHandler* m_playlistHandler;
+    PlayerController* m_playerController;
+    PlaylistController* m_playlistController;
+    LibraryTreeGroupRegistry* m_groupsRegistry;
+    TrackSelectionController* m_trackSelection;
+    SettingsManager* m_settings;
+    GuiStyleProvider* m_styleProvider;
+    bool m_styleInitialised;
+
+    SignalThrottler* m_resetThrottler;
+    LibraryTreeGrouping m_grouping;
+
+    QVBoxLayout* m_layout;
+    LibraryTreeView* m_libraryTree;
+    LibraryTreeDelegate* m_delegate;
+    LibraryTreeModel* m_model;
+    LibraryTreeSortModel* m_sortProxy;
+
+    WidgetContext* m_widgetContext;
+
+    QAction* m_addToQueueAction;
+    QAction* m_queueNextAction;
+    QAction* m_removeFromQueueAction;
+    QAction* m_playAction;
+
+    TrackAction m_doubleClickAction;
+    TrackAction m_middleClickAction;
+
+    QString m_currentSearch;
+    EmptySearchMode m_currentEmptySearchMode;
+    TrackList m_filteredTracks;
+
+    bool m_updating;
+    QByteArray m_pendingState;
+    QByteArray m_pendingResetState;
+    ConfigData m_config;
+
+    Playlist* m_playlist;
+    std::map<int, QString> m_playlistGroups;
 };
 } // namespace Fooyin

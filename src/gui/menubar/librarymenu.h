@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,8 @@
 
 #include <QObject>
 
+class QString;
+
 namespace Fooyin {
 class Application;
 class ActionManager;
@@ -36,8 +38,8 @@ class LibraryMenu : public QObject
 public:
     LibraryMenu(Application* core, ActionManager* actionManager, QObject* parent = nullptr);
 
-signals:
-    void requestSearch();
+Q_SIGNALS:
+    void requestSearch(const QString& search);
     void requestQuickSearch();
 
 private:
@@ -49,5 +51,6 @@ private:
     MusicLibrary* m_library;
 
     WriteRequest m_deleteRequest;
+    int m_activeLibraryScanId;
 };
 } // namespace Fooyin

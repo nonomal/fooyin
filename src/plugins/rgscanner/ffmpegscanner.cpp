@@ -1,6 +1,7 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
+ * Copyright © 2024, Gustav Oechler <gustavoechler@gmail.com>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +22,8 @@
 
 #include <core/constants.h>
 #include <core/coresettings.h>
-#include <core/engine/ffmpeg/ffmpeginput.h>
-#include <core/engine/ffmpeg/ffmpegutils.h>
+#include <core/engine/input/ffmpeg/ffmpeginput.h>
+#include <core/engine/input/ffmpeg/ffmpegutils.h>
 #include <core/scripting/scriptparser.h>
 #include <core/track.h>
 #include <utils/settings/settingsmanager.h>
@@ -59,16 +60,17 @@ constexpr auto FrameFlags   = AV_BUFFERSRC_FLAG_KEEP_REF | AV_BUFFERSRC_FLAG_NO_
 constexpr auto DecoderFlags = Fooyin::AudioDecoder::NoSeeking | Fooyin::AudioDecoder::NoLooping;
 
 namespace {
-struct FilterContextDeleter
+bool storesReplayGainPeak(const Fooyin::Track& track)
 {
-    void operator()(AVFilterContext* filter) const
-    {
-        if(filter) {
-            avfilter_free(filter);
-        }
+    return !track.isOpus();
+}
+
+void clearReplayGain(Fooyin::TrackList& tracks)
+{
+    for(Fooyin::Track& track : tracks) {
+        track.clearRGInfo();
     }
-};
-using FilterContextPtr = std::unique_ptr<AVFilterContext, FilterContextDeleter>;
+}
 
 struct FilterGraphDeleter
 {
@@ -81,17 +83,6 @@ struct FilterGraphDeleter
 };
 using FilterGraphPtr = std::unique_ptr<AVFilterGraph, FilterGraphDeleter>;
 
-struct FilterInOutDeleter
-{
-    void operator()(AVFilterInOut* inout) const
-    {
-        if(inout) {
-            avfilter_inout_free(&inout);
-        }
-    }
-};
-using FilterInOutPtr = std::unique_ptr<AVFilterInOut, FilterInOutDeleter>;
-
 struct ReplayGainResult
 {
     double gain{Fooyin::Constants::InvalidGain};
@@ -101,7 +92,6 @@ struct ReplayGainResult
 struct ReplayGainFilter
 {
     AVFilterContext* filterContext{nullptr};
-    AVFilterInOut* filterOutput{nullptr};
     FilterGraphPtr filterGraph;
 };
 
@@ -114,14 +104,8 @@ struct FFmpegContext
     ~FFmpegContext()
     {
         decoder.stop();
-        if(trackFilter.filterContext) {
-            avfilter_free(trackFilter.filterContext);
-            trackFilter.filterContext = nullptr;
-        }
-        if(albumFilter.filterContext) {
-            avfilter_free(albumFilter.filterContext);
-            albumFilter.filterContext = nullptr;
-        }
+        trackFilter.filterContext = nullptr;
+        albumFilter.filterContext = nullptr;
     }
 
     Fooyin::AudioFormat format;
@@ -149,7 +133,7 @@ ReplayGainResult extractRGValues(AVFilterGraph* graph, bool truePeak)
     return result;
 }
 
-ReplayGainFilter initialiseRGFilter(const Fooyin::AudioFormat& format, bool truePeak)
+ReplayGainFilter initialiseRGFilter(const Fooyin::AudioFormat& format, bool isPlanar, bool truePeak)
 {
     int rc{0};
     ReplayGainFilter filter;
@@ -164,13 +148,12 @@ ReplayGainFilter initialiseRGFilter(const Fooyin::AudioFormat& format, bool true
     const auto sampleFmt  = format.sampleFormat();
     const auto sampleRate = format.sampleRate();
 
-    const auto sampleFmtName
-        = std::string{av_get_sample_fmt_name(Fooyin::Utils::sampleFormat(sampleFmt, format.sampleFormatIsPlanar()))};
-    const auto args = QString{u"time_base=%1/%2:sample_rate=%2:sample_fmt=%3:channel_layout=0x%4"_s}
-                          .arg(1)
-                          .arg(sampleRate)
-                          .arg(QString::fromStdString(sampleFmtName))
-                          .arg(AV_CH_LAYOUT_STEREO, 0, 16);
+    const auto sampleFmtName = std::string{av_get_sample_fmt_name(Fooyin::Utils::sampleFormat(sampleFmt, isPlanar))};
+    const auto args          = QString{u"time_base=%1/%2:sample_rate=%2:sample_fmt=%3:channel_layout=0x%4"_s}
+                                   .arg(1)
+                                   .arg(sampleRate)
+                                   .arg(QString::fromStdString(sampleFmtName))
+                                   .arg(AV_CH_LAYOUT_STEREO, 0, 16);
 
     // Allocate and configure filter
     AVFilterContext* filterCtx{nullptr};
@@ -192,11 +175,10 @@ ReplayGainFilter initialiseRGFilter(const Fooyin::AudioFormat& format, bool true
     outputs->filter_ctx = filterCtx;
     outputs->pad_idx    = 0;
     outputs->next       = nullptr;
-    filter.filterOutput = outputs;
 
     AVFilterInOut* inputs   = nullptr;
     const auto filterParams = QString{u"ebur128=peak=%1,anullsink"_s}.arg(truePeak ? "true"_L1 : "sample"_L1);
-    rc = avfilter_graph_parse_ptr(filterGraph, filterParams.toUtf8().constData(), &inputs, &outputs, nullptr);
+    rc = avfilter_graph_parse(filterGraph, filterParams.toUtf8().constData(), inputs, outputs, nullptr);
     if(rc < 0) {
         Fooyin::Utils::printError(rc);
         return {};
@@ -230,8 +212,13 @@ bool setupTrack(FFmpegContext& context, const Fooyin::Track& track, ReplayGainFi
         return false;
     }
 
+    bool isPlanar{false};
+    if(const auto planar = context.decoder.isPlanar()) {
+        isPlanar = planar.value();
+    }
+
     context.format = format.value();
-    filter         = initialiseRGFilter(context.format, context.truePeak);
+    filter         = initialiseRGFilter(context.format, isPlanar, context.truePeak);
     if(!filter.filterContext || !filter.filterGraph) {
         return false;
     }
@@ -245,6 +232,7 @@ ReplayGainResult handleTrack(FFmpegContext& context, bool inAlbum)
 {
     int rc{0};
     Fooyin::Frame frame;
+
     while((frame = context.decoder.readFrame()).isValid()) {
         rc = av_buffersrc_add_frame_flags(context.trackFilter.filterContext, frame.avFrame(), FrameFlags);
         if(rc < 0) {
@@ -313,12 +301,14 @@ void FFmpegReplayGainPrivate::scanAlbum(FFmpegContext& context, TrackList& track
             return;
         }
         QMetaObject::invokeMethod(
-            m_self, [this, filepath = track.prettyFilepath()]() { emit m_self->startingCalculation(filepath); });
+            m_self, [this, filepath = track.prettyFilepath()]() { Q_EMIT m_self->startingCalculation(filepath); });
 
         if(setupTrack(context, track, context.trackFilter)) {
             const ReplayGainResult trackResult = handleTrack(context, true);
             track.setRGTrackGain(static_cast<float>(trackResult.gain));
-            track.setRGTrackPeak(static_cast<float>(trackResult.peak));
+            if(storesReplayGainPeak(track)) {
+                track.setRGTrackPeak(static_cast<float>(trackResult.peak));
+            }
         }
     }
 
@@ -329,8 +319,10 @@ void FFmpegReplayGainPrivate::scanAlbum(FFmpegContext& context, TrackList& track
     const auto albumResult = extractRGValues(context.albumFilter.filterGraph.get(), context.truePeak);
 
     for(Track& track : tracks) {
-        track.setRGAlbumPeak(static_cast<float>(albumResult.peak));
         track.setRGAlbumGain(static_cast<float>(albumResult.gain));
+        if(storesReplayGainPeak(track)) {
+            track.setRGAlbumPeak(static_cast<float>(albumResult.peak));
+        }
     }
 }
 
@@ -348,7 +340,7 @@ void FFmpegScanner::closeThread()
             p->m_future->cancel();
             p->m_future->waitForFinished();
         }
-        emit closed();
+        Q_EMIT closed();
     });
 }
 
@@ -367,10 +359,11 @@ void FFmpegScanner::calculatePerTrack(const TrackList& tracks, bool truePeak)
 
     p->m_tracks        = tracks;
     p->m_scannedTracks = tracks;
+    clearReplayGain(p->m_scannedTracks);
 
     QObject::connect(p->m_future, &QFutureWatcher<void>::progressValueChanged, this, [this](const int val) {
         if(val >= 0 && std::cmp_less(val, p->m_tracks.size())) {
-            emit startingCalculation(p->m_tracks.at(val).prettyFilepath());
+            Q_EMIT startingCalculation(p->m_tracks.at(val).prettyFilepath());
         }
     });
 
@@ -380,7 +373,9 @@ void FFmpegScanner::calculatePerTrack(const TrackList& tracks, bool truePeak)
         if(setupTrack(context, track, context.trackFilter)) {
             const ReplayGainResult result = handleTrack(context, false);
             track.setRGTrackGain(static_cast<float>(result.gain));
-            track.setRGTrackPeak(static_cast<float>(result.peak));
+            if(storesReplayGainPeak(track)) {
+                track.setRGTrackPeak(static_cast<float>(result.peak));
+            }
         }
     });
 
@@ -389,10 +384,10 @@ void FFmpegScanner::calculatePerTrack(const TrackList& tracks, bool truePeak)
     future.then(this, [this]() {
         if(mayRun()) {
             qCDebug(FFMPEG) << "Finished calculating RG for" << p->m_scannedTracks.size() << "tracks";
-            emit calculationFinished(p->m_scannedTracks);
+            Q_EMIT calculationFinished(p->m_scannedTracks);
         }
 
-        emit finished();
+        Q_EMIT finished();
         setState(Idle);
     });
 }
@@ -406,14 +401,15 @@ void FFmpegScanner::calculateAsAlbum(const TrackList& tracks, bool truePeak)
     FFmpegContext context{truePeak};
 
     TrackList scannedTracks{tracks};
+    clearReplayGain(scannedTracks);
     p->scanAlbum(context, scannedTracks);
 
     if(mayRun()) {
         qCDebug(FFMPEG) << "Finished calculating RG for" << p->m_scannedTracks.size() << "tracks";
-        emit calculationFinished(scannedTracks);
+        Q_EMIT calculationFinished(scannedTracks);
     }
 
-    emit finished();
+    Q_EMIT finished();
     setState(Idle);
 }
 
@@ -424,10 +420,14 @@ void FFmpegScanner::calculateByAlbumTags(const TrackList& tracks, const QString&
     qCDebug(FFMPEG) << "Calculating RG using ffmpeg for" << tracks.size() << "tracks";
 
     p->m_future = new QFutureWatcher<void>(this);
+    p->m_scannedTracks.clear();
+    p->m_albums.clear();
 
     for(const auto& track : tracks) {
         const QString album = p->m_parser.evaluate(groupScript, track);
-        p->m_albums[album].push_back(track);
+        auto scannedTrack   = track;
+        scannedTrack.clearRGInfo();
+        p->m_albums[album].push_back(std::move(scannedTrack));
     }
 
     auto future = QtConcurrent::map(p->m_albums, [this, truePeak](auto& album) {
@@ -443,10 +443,10 @@ void FFmpegScanner::calculateByAlbumTags(const TrackList& tracks, const QString&
                 p->m_scannedTracks.insert(p->m_scannedTracks.end(), album.cbegin(), album.cend());
             }
             qCDebug(FFMPEG) << "Finished calculating RG for" << p->m_scannedTracks.size() << "tracks";
-            emit calculationFinished(p->m_scannedTracks);
+            Q_EMIT calculationFinished(p->m_scannedTracks);
         }
 
-        emit finished();
+        Q_EMIT finished();
         setState(Idle);
     });
 }

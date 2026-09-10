@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,23 +21,25 @@
 
 #include "fygui_export.h"
 
-#include <core/scripting/scriptregistry.h>
 #include <gui/scripting/richtext.h>
 
 namespace Fooyin {
-struct FormattedTextBlock;
-class ScriptFormatterRegistryPrivate;
-
+/*!
+ * Resolves built-in rich-text formatting tags used by `ScriptFormatter`.
+ */
 class FYGUI_EXPORT ScriptFormatterRegistry
 {
 public:
-    ScriptFormatterRegistry();
-    ~ScriptFormatterRegistry();
+    /*!
+     * Returns `true` if the formatter command `func` is recognised.
+     */
+    [[nodiscard]] static bool isKnown(const QString& func);
 
-    [[nodiscard]] bool isFormatFunc(const QString& option) const;
-    void format(RichFormatting& formatting, const QString& func, const QString& option = {}) const;
-
-private:
-    std::unique_ptr<ScriptFormatterRegistryPrivate> p;
+    /*!
+     * Applies the formatter command `func` with optional `option` to `formatting`.
+     *
+     * Returns `true` if the formatter command was recognised.
+     */
+    [[nodiscard]] static bool format(RichFormatting& formatting, const QString& func, const QString& option = {});
 };
 } // namespace Fooyin

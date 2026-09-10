@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,13 +25,16 @@ namespace Fooyin {
 class SettingsManager;
 class EditableLayout;
 class LayoutProvider;
+class PresetRegistry;
+class ThemeRegistry;
 
 class GuiGeneralPage : public SettingsPage
 {
     Q_OBJECT
 
 public:
-    explicit GuiGeneralPage(LayoutProvider* layoutProvider, EditableLayout* editableLayout, SettingsManager* settings,
+    explicit GuiGeneralPage(LayoutProvider* layoutProvider, EditableLayout* editableLayout,
+                            ThemeRegistry* themeRegistry, PresetRegistry* presetRegistry, SettingsManager* settings,
                             QObject* parent = nullptr);
 };
 } // namespace Fooyin

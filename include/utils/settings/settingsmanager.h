@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -255,6 +255,44 @@ public:
     }
 
     /*!
+     * Returns the persistent settings key associated with a registered enum setting.
+     */
+    template <auto key>
+        requires IsEnumType<key>
+    QString settingKey() const
+    {
+        const auto mapKey = getMapKey(key);
+
+        const std::shared_lock lock{m_lock};
+
+        if(!m_settings.contains(mapKey)) {
+            return {};
+        }
+
+        const SettingsEntry* setting = m_settings.at(mapKey);
+        return setting ? setting->key() : QString{};
+    }
+
+    /*!
+     * Returns the default value associated with a registered enum setting.
+     */
+    template <auto key>
+        requires IsEnumType<key>
+    QVariant defaultValue() const
+    {
+        const auto mapKey = getMapKey(key);
+
+        const std::shared_lock lock{m_lock};
+
+        if(!m_settings.contains(mapKey)) {
+            return {};
+        }
+
+        const SettingsEntry* setting = m_settings.at(mapKey);
+        return setting ? setting->defaultValue() : QVariant{};
+    }
+
+    /*!
      * Sets the value of the setting at the given key.
      * @tparam key an enum value representing a setting key.
      * @tparam Value the value to set.
@@ -287,6 +325,28 @@ public:
     }
 
     /*!
+     * Sets the value of the setting without notifying subscribers.
+     * @tparam key an enum value representing a setting key.
+     * @tparam Value the value to set.
+     * @returns true if the stored value changed.
+     */
+    template <auto key, typename Value>
+        requires ValidValueType<key, Value>
+    bool setSilently(Value value)
+    {
+        const QString mapKey = getMapKey(key);
+
+        const std::unique_lock lock(m_lock);
+
+        if(!m_settings.contains(mapKey)) {
+            return false;
+        }
+
+        SettingsEntry* setting = m_settings.at(mapKey);
+        return setting && setting->setValue(value);
+    }
+
+    /*!
      * Resets the value of the setting at the given key.
      * @tparam key an enum value representing a setting key.
      * @returns true if the setting was successfully changed.
@@ -316,6 +376,34 @@ public:
         }
 
         return success;
+    }
+
+    /*!
+     * Re-emits the current value of the setting to all subscribers without changing the stored value.
+     * @tparam key an enum value representing a setting key.
+     * @returns true if the setting exists and subscribers were notified.
+     */
+    template <auto key>
+    bool refresh()
+    {
+        const auto mapKey = getMapKey(key);
+
+        std::shared_lock lock{m_lock};
+
+        if(!m_settings.contains(mapKey)) {
+            return false;
+        }
+
+        SettingsEntry* setting = m_settings.at(mapKey);
+
+        lock.unlock();
+
+        if(setting) {
+            setting->notifySubscribers();
+            return true;
+        }
+
+        return false;
     }
 
     /*!

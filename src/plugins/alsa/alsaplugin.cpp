@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +25,17 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::Alsa {
+namespace {
+class AlsaPluginSettingsProvider : public PluginSettingsProvider
+{
+private:
+    QDialog* createSettings(QWidget* parent) override
+    {
+        return new AlsaSettings(parent);
+    }
+};
+} // namespace
+
 QString AlsaPlugin::name() const
 {
     return u"ALSA"_s;
@@ -37,16 +48,9 @@ OutputCreator AlsaPlugin::creator() const
     };
 }
 
-bool AlsaPlugin::hasSettings() const
+std::unique_ptr<PluginSettingsProvider> AlsaPlugin::settingsProvider() const
 {
-    return true;
-}
-
-void AlsaPlugin::showSettings(QWidget* parent)
-{
-    auto* dialog = new AlsaSettings(parent);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    dialog->show();
+    return std::make_unique<AlsaPluginSettingsProvider>();
 }
 } // namespace Fooyin::Alsa
 

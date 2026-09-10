@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "fycore_export.h"
 
 #include <core/track.h>
+#include <utils/containers.h>
 #include <utils/id.h>
 
 #include <QObject>
@@ -29,6 +30,10 @@
 
 namespace Fooyin {
 class PlaylistPrivate;
+class PlaylistNavigator;
+namespace Testing {
+class PlaylistTestUtils;
+}
 struct PlaylistTrack;
 class SettingsManager;
 
@@ -38,21 +43,24 @@ struct FYCORE_EXPORT PlaylistTrack
 {
     Track track;
     UId playlistId;
+    UId entryId;
     int indexInPlaylist{-1};
 
     [[nodiscard]] bool isValid() const;
     [[nodiscard]] bool isInPlaylist() const;
+    [[nodiscard]] bool hasEntryId() const;
 
     static PlaylistTrackList fromTracks(const TrackList& tracks, const UId& playlistId);
     static TrackList toTracks(const PlaylistTrackList& playlistTracks);
     static PlaylistTrackList updateIndexes(const PlaylistTrackList& playlistTracks);
 
-    static Track& extractor(PlaylistTrack& item);
-    static const Track& extractorConst(const PlaylistTrack& item);
+    static const Track& extractor(const PlaylistTrack& item);
 
-    bool operator==(const PlaylistTrack& other) const;
-    bool operator!=(const PlaylistTrack& other) const;
+    bool operator==(const PlaylistTrack& other) const = default;
     bool operator<(const PlaylistTrack& other) const;
+
+    [[nodiscard]] bool sameIdentityAs(const PlaylistTrack& other) const;
+    [[nodiscard]] bool sameOccurrenceAs(const PlaylistTrack& other) const;
 
     operator QVariant() const
     {
@@ -64,7 +72,8 @@ struct FYCORE_EXPORT PlaylistTrack
         size_t operator()(const PlaylistTrack& plTrack) const
         {
             return (std::hash<QString>{}(plTrack.track.uniqueFilepath()))
-                 ^ (std::hash<int>{}(plTrack.indexInPlaylist) << 11) ^ (qHash(plTrack.playlistId) << 22);
+                 ^ (std::hash<int>{}(plTrack.indexInPlaylist) << 11) ^ (qHash(plTrack.playlistId) << 22)
+                 ^ (qHash(plTrack.entryId) << 7);
         }
     };
 };
@@ -79,6 +88,8 @@ class FYCORE_EXPORT Playlist final
     struct PrivateKey;
 
 public:
+    using ExtraProperties = FlatStringMap<QString>;
+
     enum PlayMode : uint16_t
     {
         Default        = 0,
@@ -103,11 +114,13 @@ public:
     [[nodiscard]] QString name() const;
     [[nodiscard]] int index() const;
 
-    [[nodiscard]] TrackList tracks() const;
+    [[nodiscard]] const TrackList& tracks() const;
     [[nodiscard]] PlaylistTrackList playlistTracks() const;
     [[nodiscard]] std::optional<Track> track(int index) const;
     [[nodiscard]] std::optional<PlaylistTrack> playlistTrack(int index) const;
+    [[nodiscard]] std::optional<PlaylistTrack> playlistTrack(const UId& entryId) const;
     [[nodiscard]] int trackCount() const;
+    [[nodiscard]] int indexOfTrackEntry(const UId& entryId) const;
 
     [[nodiscard]] int currentTrackIndex() const;
     [[nodiscard]] Track currentTrack() const;
@@ -120,13 +133,38 @@ public:
     [[nodiscard]] bool isTemporary() const;
     /** Returns @c true if this an autoplaylist (generated from a query). */
     [[nodiscard]] bool isAutoPlaylist() const;
+    /** Returns @c true if changes to this playlist's contents are disabled. */
+    [[nodiscard]] bool isLocked() const;
     /** Returns the query used to generate this autoplaylist, else an empty string. */
     [[nodiscard]] QString query() const;
+    /** Returns the optional sort pattern used to order this autoplaylist. */
+    [[nodiscard]] QString sortQuery() const;
+    /** Returns @c true if this autoplaylist should be fully resorted on regeneration. */
+    [[nodiscard]] bool forceSorted() const;
+    /** Returns the tracks this autoplaylist would contain after regeneration with @p tracks. */
+    [[nodiscard]] TrackList autoPlaylistTracks(const TrackList& tracks) const;
+
+    [[nodiscard]] bool hasExtraProperty(const QString& prop) const;
+    [[nodiscard]] ExtraProperties extraProperties() const;
+
+    void setExtraProperty(const QString& prop, const QString& value);
+    void removeExtraProperty(const QString& prop);
+    void clearExtraProperties();
+
+    [[nodiscard]] QByteArray serialiseExtraProperties() const;
+    void storeExtraProperties(const QByteArray& props);
 
     /** Regenerates this autoplaylist using the tracks @p tracks. */
     bool regenerateTracks(const TrackList& tracks);
 
     int nextIndex(int delta, PlayModes mode);
+    int nextIndexFrom(int currentIndex, int delta, PlayModes mode);
+    int firstIndex(PlayModes mode);
+    int lastIndex(PlayModes mode);
+    int randomTrackIndexFrom(int currentIndex);
+    int randomAlbumIndexFrom(int currentIndex);
+    int previousAlbumIndexFrom(int currentIndex, PlayModes mode);
+    int nextAlbumIndexFrom(int currentIndex, PlayModes mode);
     /*!
      * Returns the next track to be played based on the @p delta from the current
      * index and the @p mode.
@@ -134,6 +172,8 @@ public:
      * the index +- delta is out of range.
      */
     Track nextTrack(int delta, PlayModes mode);
+    Track nextTrackFrom(int currentIndex, int delta, PlayModes mode);
+    Track nextTrackChangeFrom(int currentIndex, int delta, PlayModes mode);
     /*!
      * Changes to and returns the next track to be played based on the @p delta from the current
      * index and the @p mode.
@@ -154,20 +194,27 @@ public:
 private:
     friend class PlaylistHandler;
     friend class PlaylistHandlerPrivate;
+    friend class PlaylistNavigator;
+    friend class Testing::PlaylistTestUtils;
 
     static std::unique_ptr<Playlist> create(const QString& name, SettingsManager* settings);
     static std::unique_ptr<Playlist> create(int dbId, const QString& name, int index, SettingsManager* settings);
     static std::unique_ptr<Playlist> createAuto(int dbId, const QString& name, int index, const QString& query,
-                                                SettingsManager* settings);
+                                                const QString& sortQuery, bool forceSorted, SettingsManager* settings);
 
     void setName(const QString& name);
+    void setDbId(int id);
     void setIndex(int index);
     void setQuery(const QString& query);
+    void setSortQuery(const QString& query);
+    void setForceSorted(bool forceSorted);
+    void setLocked(bool locked);
 
     void setModified(bool modified);
     void setTracksModified(bool modified);
 
     void replaceTracks(const TrackList& tracks);
+    void replaceTracks(const PlaylistTrackList& tracks);
     void appendTracks(const TrackList& tracks);
     void updateTrackAtIndex(int index, const Track& track);
     std::vector<int> removeTracks(const std::vector<int>& indexes);

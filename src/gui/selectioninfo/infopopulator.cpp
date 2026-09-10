@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,18 +23,42 @@
 
 #include <core/library/librarymanager.h>
 #include <core/track.h>
-#include <utils/enum.h>
+#include <utils/fileutils.h>
 #include <utils/stringutils.h>
 #include <utils/utils.h>
 
-#include <QFileInfo>
+#include <QDir>
 
 #include <set>
+#include <tuple>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 using ItemParent = InfoModel::ItemParent;
+
+namespace {
+QString parentKey(ItemParent parent)
+{
+    switch(parent) {
+        case ItemParent::Root:
+            return u"Root"_s;
+        case ItemParent::Metadata:
+            return u"Metadata"_s;
+        case ItemParent::Location:
+            return u"Location"_s;
+        case ItemParent::General:
+            return u"General"_s;
+        case ItemParent::PlayStats:
+            return u"PlayStats"_s;
+        case ItemParent::ReplayGain:
+            return u"ReplayGain"_s;
+        case ItemParent::Other:
+            return u"Other"_s;
+    }
+    return {};
+}
+} // namespace
 
 class InfoPopulatorPrivate
 {
@@ -49,7 +73,6 @@ public:
     InfoItem* getOrAddNode(const QString& key, const QString& name, ItemParent parent, InfoItem::ItemType type,
                            InfoItem::ValueType valueType = InfoItem::Concat, const InfoItem::FormatFunc& numFunc = {});
     void checkAddParentNode(InfoModel::ItemParent parent);
-    void checkAddEntryNode(const QString& key, const QString& name, InfoModel::ItemParent parent);
 
     template <typename Value>
     void checkAddEntryNode(const QString& key, const QString& name, InfoModel::ItemParent parent, Value&& value,
@@ -73,13 +96,16 @@ public:
         }
     }
 
-    void addTrackMetadata(const Track& track, bool extended);
+    void addTrackMetadata(const Track& track, bool extended, const std::vector<SelectionInfoField>& fields);
     void addTrackLocation(int total, const Track& track);
     void addTrackGeneral(int total, const Track& track);
+    void addTrackPlayStats(const Track& track);
     void addTrackReplayGain(int total);
     void addTrackOther(const Track& track);
+    uint64_t fileSize(const Track& track);
 
-    void addTrackNodes(InfoItem::Options options, const TrackList& tracks);
+    void addTrackNodes(InfoItem::Options options, const TrackList& tracks,
+                       const std::vector<SelectionInfoField>& fields);
 
     InfoPopulator* m_self;
     LibraryManager* m_libraryManager;
@@ -89,6 +115,9 @@ public:
     std::set<float> m_trackPeak;
     std::set<float> m_albumGain;
     std::set<float> m_albumPeak;
+    std::set<float> m_opusHeaderGain;
+    std::set<QString> m_seenSegmentFileSizePaths;
+    int m_opusTrackCount{0};
 };
 
 void InfoPopulatorPrivate::reset()
@@ -98,6 +127,9 @@ void InfoPopulatorPrivate::reset()
     m_trackPeak.clear();
     m_albumGain.clear();
     m_albumPeak.clear();
+    m_opusHeaderGain.clear();
+    m_seenSegmentFileSizePaths.clear();
+    m_opusTrackCount = 0;
 }
 
 InfoItem* InfoPopulatorPrivate::getOrAddNode(const QString& key, const QString& name, ItemParent parent,
@@ -112,55 +144,57 @@ InfoItem* InfoPopulatorPrivate::getOrAddNode(const QString& key, const QString& 
         return &m_data.nodes.at(key);
     }
 
-    const InfoItem item{type, name, nullptr, valueType, numFunc};
-    InfoItem* node = &m_data.nodes.emplace(key, std::move(item)).first->second;
-    m_data.parents[Utils::Enum::toString(parent)].emplace_back(key);
+    auto [it, inserted] = m_data.nodes.emplace(std::piecewise_construct, std::forward_as_tuple(key),
+                                               std::forward_as_tuple(type, name, nullptr, valueType, numFunc));
+    InfoItem* node      = &it->second;
+    m_data.parents[parentKey(parent)].emplace_back(key);
 
     return node;
 }
 
 void InfoPopulatorPrivate::checkAddParentNode(InfoModel::ItemParent parent)
 {
-    if(parent == InfoModel::ItemParent::Metadata) {
+    if(parent == ItemParent::Metadata) {
         getOrAddNode(u"Metadata"_s, InfoPopulator::tr("Metadata"), ItemParent::Root, InfoItem::Header);
     }
-    else if(parent == InfoModel::ItemParent::Location) {
+    else if(parent == ItemParent::Location) {
         getOrAddNode(u"Location"_s, InfoPopulator::tr("Location"), ItemParent::Root, InfoItem::Header);
     }
-    else if(parent == InfoModel::ItemParent::General) {
+    else if(parent == ItemParent::General) {
         getOrAddNode(u"General"_s, InfoPopulator::tr("General"), ItemParent::Root, InfoItem::Header);
     }
-    else if(parent == InfoModel::ItemParent::ReplayGain) {
+    else if(parent == ItemParent::PlayStats) {
+        getOrAddNode(u"PlayStats"_s, InfoPopulator::tr("Playback Statistics"), ItemParent::Root, InfoItem::Header);
+    }
+    else if(parent == ItemParent::ReplayGain) {
         getOrAddNode(u"ReplayGain"_s, InfoPopulator::tr("ReplayGain"), ItemParent::Root, InfoItem::Header);
     }
-    else if(parent == InfoModel::ItemParent::Other) {
+    else if(parent == ItemParent::Other) {
         getOrAddNode(u"Other"_s, InfoPopulator::tr("Other"), ItemParent::Root, InfoItem::Header);
     }
 }
 
-void InfoPopulatorPrivate::checkAddEntryNode(const QString& key, const QString& name, InfoModel::ItemParent parent)
+void InfoPopulatorPrivate::addTrackMetadata(const Track& track, bool extended,
+                                            const std::vector<SelectionInfoField>& fields)
 {
-    checkAddParentNode(parent);
-    getOrAddNode(key, name, parent, InfoItem::Entry);
-}
+    for(const auto& field : fields) {
+        if(!field.enabled || field.name.isEmpty() || field.scriptField.isEmpty()) {
+            continue;
+        }
 
-void InfoPopulatorPrivate::addTrackMetadata(const Track& track, bool extended)
-{
-    checkAddEntryNode(u"Artist"_s, InfoPopulator::tr("Artist"), ItemParent::Metadata, track.artists());
-    checkAddEntryNode(u"Title"_s, InfoPopulator::tr("Title"), ItemParent::Metadata, track.title());
-    checkAddEntryNode(u"Album"_s, InfoPopulator::tr("Album"), ItemParent::Metadata, track.album());
-    checkAddEntryNode(u"Date"_s, InfoPopulator::tr("Date"), ItemParent::Metadata, track.date());
-    checkAddEntryNode(u"Genre"_s, InfoPopulator::tr("Genre"), ItemParent::Metadata, track.genres());
-    checkAddEntryNode(u"AlbumArtist"_s, InfoPopulator::tr("Album Artist"), ItemParent::Metadata, track.albumArtists());
-
-    if(!track.trackNumber().isEmpty()) {
-        checkAddEntryNode(u"TrackNumber"_s, InfoPopulator::tr("Track Number"), ItemParent::Metadata,
-                          track.trackNumber());
+        checkAddEntryNode(u"Metadata/%1"_s.arg(field.scriptField.toUpper()), field.name, ItemParent::Metadata,
+                          track.metaValues(field.scriptField));
     }
 
     if(extended) {
         const auto extras = track.extraTags();
-        for(const auto& [tag, values] : Utils::asRange(extras)) {
+        for(const auto& [tag, values] : extras) {
+            const bool isConfigured = std::ranges::any_of(fields, [&tag](const auto& field) {
+                return field.enabled && field.scriptField.compare(tag, Qt::CaseInsensitive) == 0;
+            });
+            if(isConfigured) {
+                continue;
+            }
             const auto extraTag = u"<%1>"_s.arg(tag);
             checkAddEntryNode(extraTag, extraTag, ItemParent::Metadata, values);
         }
@@ -169,26 +203,41 @@ void InfoPopulatorPrivate::addTrackMetadata(const Track& track, bool extended)
 
 void InfoPopulatorPrivate::addTrackLocation(int total, const Track& track)
 {
+    const bool isRemote    = track.isRemote();
+    const bool isVirtual   = track.isVirtual();
+    const bool isLocalFile = !isRemote && !isVirtual;
+    const QString path     = isLocalFile ? QDir::toNativeSeparators(track.path()) : track.path();
+    const QString filepath = isLocalFile ? QDir::toNativeSeparators(track.prettyFilepath()) : track.prettyFilepath();
+
     checkAddEntryNode(u"FileName"_s, total > 1 ? InfoPopulator::tr("File Names") : InfoPopulator::tr("File Name"),
                       ItemParent::Location, track.filename());
-    checkAddEntryNode(u"FolderName"_s, total > 1 ? InfoPopulator::tr("Folder Names") : InfoPopulator::tr("Folder Name"),
-                      ItemParent::Location, track.path());
+    if(!isRemote) {
+        checkAddEntryNode(u"FolderName"_s,
+                          total > 1 ? InfoPopulator::tr("Folder Names") : InfoPopulator::tr("Folder Name"),
+                          ItemParent::Location, path);
+    }
 
     if(total == 1) {
-        checkAddEntryNode(u"FilePath"_s, InfoPopulator::tr("File Path"), ItemParent::Location, track.prettyFilepath());
-        if(track.subsong() >= 0) {
+        checkAddEntryNode(isRemote ? u"Url"_s : u"FilePath"_s,
+                          isRemote ? InfoPopulator::tr("URL") : InfoPopulator::tr("File Path"), ItemParent::Location,
+                          filepath);
+        if(track.subsong() > 0 || (isVirtual && track.subsong() >= 0)) {
+            const int displayedSubsong = track.subsong() + (isVirtual ? 1 : 0);
             checkAddEntryNode(u"SubsongIndex"_s, InfoPopulator::tr("Subsong Index"), ItemParent::Location,
-                              track.subsong());
+                              QString::number(displayedSubsong));
         }
     }
 
-    checkAddEntryNode(u"FileSize"_s, total > 1 ? InfoPopulator::tr("Total Size") : InfoPopulator::tr("File Size"),
-                      ItemParent::Location, track.fileSize(), InfoItem::Total,
-                      InfoItem::FormatUIntFunc{[](uint64_t size) -> QString {
-                          return Utils::formatFileSize(size, true);
-                      }});
-    checkAddEntryNode(u"LastModified"_s, InfoPopulator::tr("Last Modified"), ItemParent::Location, track.modifiedTime(),
-                      InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+    if(isLocalFile) {
+        checkAddEntryNode(
+            u"FileSize"_s, total > 1 ? InfoPopulator::tr("Total Size") : InfoPopulator::tr("File Size"),
+            ItemParent::Location, fileSize(track), InfoItem::Total,
+            InfoItem::FormatUIntFunc{[](uint64_t size) -> QString { return Utils::formatFileSize(size, true); }});
+        if(track.modifiedTime() > 0) {
+            checkAddEntryNode(u"LastModified"_s, InfoPopulator::tr("Last Modified"), ItemParent::Location,
+                              track.modifiedTime(), InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+        }
+    }
 
     if(track.isInLibrary()) {
         if(const auto library = m_libraryManager->libraryInfo(track.libraryId())) {
@@ -197,8 +246,14 @@ void InfoPopulatorPrivate::addTrackLocation(int total, const Track& track)
     }
 
     if(total == 1) {
-        checkAddEntryNode(u"Added"_s, InfoPopulator::tr("Added"), ItemParent::Location, track.addedTime(),
-                          InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+        if(isLocalFile && track.createdTime() > 0) {
+            checkAddEntryNode(u"Created"_s, InfoPopulator::tr("Created"), ItemParent::Location, track.createdTime(),
+                              InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+        }
+        if(track.addedTime() > 0) {
+            checkAddEntryNode(u"Added"_s, InfoPopulator::tr("Added"), ItemParent::Location, track.addedTime(),
+                              InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+        }
     }
 }
 
@@ -209,22 +264,46 @@ void InfoPopulatorPrivate::addTrackGeneral(int total, const Track& track)
     }
 
     checkAddEntryNode(u"Duration"_s, InfoPopulator::tr("Duration"), ItemParent::General, track.duration(),
-                      InfoItem::Total, InfoItem::FormatUIntFunc{[](uint64_t ms) {
-                          return Utils::msToString(ms);
-                      }});
+                      InfoItem::Total, InfoItem::FormatUIntFunc{[](uint64_t ms) { return Utils::msToString(ms); }});
     checkAddEntryNode(u"Channels"_s, InfoPopulator::tr("Channels"), ItemParent::General, track.channels(),
                       InfoItem::Percentage);
     checkAddEntryNode(u"BitDepth"_s, InfoPopulator::tr("Bit Depth"), ItemParent::General, track.bitDepth(),
                       InfoItem::Percentage);
     if(track.bitrate() > 0) {
-        checkAddEntryNode(u"Bitrate"_s, total > 1 ? InfoPopulator::tr("Avg. Bitrate") : InfoPopulator::tr("Bitrate"),
-                          ItemParent::General, track.bitrate(), InfoItem::Average,
-                          InfoItem::FormatUIntFunc{[](uint64_t bitrate) -> QString {
-                              return u"%1 kbps"_s.arg(bitrate);
-                          }});
+        checkAddEntryNode(
+            u"Bitrate"_s, total > 1 ? InfoPopulator::tr("Avg. Bitrate") : InfoPopulator::tr("Bitrate"),
+            ItemParent::General, track.bitrate(), InfoItem::Average,
+            InfoItem::FormatUIntFunc{[](uint64_t bitrate) -> QString { return u"%1 kbps"_s.arg(bitrate); }});
     }
-    checkAddEntryNode(u"SampleRate"_s, InfoPopulator::tr("Sample Rate"), ItemParent::General,
-                      u"%1 Hz"_s.arg(track.sampleRate()), InfoItem::Percentage);
+    if(track.sampleRate() > 0) {
+        checkAddEntryNode(u"SampleRate"_s, InfoPopulator::tr("Sample Rate"), ItemParent::General,
+                          u"%1 Hz"_s.arg(track.sampleRate()), InfoItem::Percentage);
+    }
+
+    if(track.hasEffectiveTrackGain()) {
+        m_trackGain.emplace(track.effectiveRGTrackGain());
+    }
+    if(track.hasEffectiveTrackPeak()) {
+        m_trackPeak.emplace(track.effectiveRGTrackPeak());
+    }
+    if(track.hasEffectiveAlbumGain()) {
+        m_albumGain.emplace(track.effectiveRGAlbumGain());
+    }
+    if(track.hasEffectiveAlbumPeak()) {
+        m_albumPeak.emplace(track.effectiveRGAlbumPeak());
+    }
+    if(track.isOpus()) {
+        ++m_opusTrackCount;
+        m_opusHeaderGain.emplace(track.opusHeaderGainDb());
+    }
+
+    if(m_opusTrackCount == total && m_opusHeaderGain.size() == 1) {
+        checkAddEntryNode(
+            u"OpusHeaderGain"_s, InfoPopulator::tr("Opus header gain"), ItemParent::General,
+            QString::number(*m_opusHeaderGain.cbegin()), InfoItem::Total,
+            InfoItem::FormatFloatFunc{[](double gain) { return u"%1 dB"_s.arg(QString::number(gain, 'f', 2)); }}, true);
+    }
+
     checkAddEntryNode(u"Codec"_s, InfoPopulator::tr("Codec"), ItemParent::General,
                       !track.codec().isEmpty() ? track.codec() : track.extension().toUpper(), InfoItem::Percentage);
     checkAddEntryNode(u"CodecProfile"_s, InfoPopulator::tr("Codec Profile"), ItemParent::General, track.codecProfile(),
@@ -232,6 +311,24 @@ void InfoPopulatorPrivate::addTrackGeneral(int total, const Track& track)
     checkAddEntryNode(u"Tool"_s, InfoPopulator::tr("Tool"), ItemParent::General, track.tool(), InfoItem::Percentage);
     checkAddEntryNode(u"TagTypes"_s, InfoPopulator::tr("Tag Types"), ItemParent::General, track.tagType(u" | "_s),
                       InfoItem::Percentage);
+}
+
+void InfoPopulatorPrivate::addTrackPlayStats(const Track& track)
+{
+    checkAddEntryNode(u"Loved"_s, InfoPopulator::tr("Loved"), ItemParent::PlayStats,
+                      track.isLoved() ? InfoPopulator::tr("Yes") : InfoPopulator::tr("No"));
+    if(track.playCount() > 0) {
+        checkAddEntryNode(u"PlayCount"_s, InfoPopulator::tr("Playcount"), ItemParent::PlayStats,
+                          QString::number(std::max(track.playCount(), 0)), InfoItem::Total);
+    }
+    if(track.firstPlayed() > 0) {
+        checkAddEntryNode(u"FirstPlayed"_s, InfoPopulator::tr("First Played"), ItemParent::PlayStats,
+                          track.firstPlayed(), InfoItem::Min, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+    }
+    if(track.lastPlayed() > 0) {
+        checkAddEntryNode(u"LastPlayed"_s, InfoPopulator::tr("Last Played"), ItemParent::PlayStats, track.lastPlayed(),
+                          InfoItem::Max, InfoItem::FormatUIntFunc{Utils::formatTimeMs});
+    }
 }
 
 void InfoPopulatorPrivate::addTrackReplayGain(int total)
@@ -273,13 +370,32 @@ void InfoPopulatorPrivate::addTrackReplayGain(int total)
 void InfoPopulatorPrivate::addTrackOther(const Track& track)
 {
     const auto props = track.extraProperties();
-    for(const auto& [prop, value] : Utils::asRange(props)) {
+    for(const auto& [prop, value] : props) {
+        if(prop.startsWith("_"_L1)) {
+            continue;
+        }
         const auto extraProp = u"<%1>"_s.arg(prop);
         checkAddEntryNode(extraProp, extraProp, ItemParent::Other, value, InfoItem::Percentage);
     }
 }
 
-void InfoPopulatorPrivate::addTrackNodes(InfoItem::Options options, const TrackList& tracks)
+uint64_t InfoPopulatorPrivate::fileSize(const Track& track)
+{
+    if(!track.isBoundedSegment()) {
+        return track.fileSize();
+    }
+
+    const QString sourcePath = Utils::File::cleanPath(track.filepath());
+    if(sourcePath.isEmpty()) {
+        return track.fileSize();
+    }
+
+    const auto [_, inserted] = m_seenSegmentFileSizePaths.emplace(sourcePath);
+    return inserted ? track.fileSize() : 0;
+}
+
+void InfoPopulatorPrivate::addTrackNodes(InfoItem::Options options, const TrackList& tracks,
+                                         const std::vector<SelectionInfoField>& fields)
 {
     const int total = static_cast<int>(tracks.size());
 
@@ -289,7 +405,7 @@ void InfoPopulatorPrivate::addTrackNodes(InfoItem::Options options, const TrackL
         }
 
         if(options & InfoItem::Metadata) {
-            addTrackMetadata(track, options & InfoItem::ExtendedMetadata);
+            addTrackMetadata(track, options & InfoItem::ExtendedMetadata, fields);
         }
         if(options & InfoItem::Location) {
             addTrackLocation(total, track);
@@ -297,21 +413,11 @@ void InfoPopulatorPrivate::addTrackNodes(InfoItem::Options options, const TrackL
         if(options & InfoItem::General) {
             addTrackGeneral(total, track);
         }
+        if(options & InfoItem::PlayStats) {
+            addTrackPlayStats(track);
+        }
         if(options & InfoItem::Other) {
             addTrackOther(track);
-        }
-
-        if(track.hasTrackGain()) {
-            m_trackGain.emplace(track.rgTrackGain());
-        }
-        if(track.hasTrackPeak()) {
-            m_trackPeak.emplace(track.rgTrackPeak());
-        }
-        if(track.hasAlbumGain()) {
-            m_albumGain.emplace(track.rgAlbumGain());
-        }
-        if(track.hasAlbumPeak()) {
-            m_albumPeak.emplace(track.rgAlbumPeak());
         }
     }
 
@@ -327,19 +433,21 @@ InfoPopulator::InfoPopulator(LibraryManager* libraryManager, QObject* parent)
 
 InfoPopulator::~InfoPopulator() = default;
 
-void InfoPopulator::run(InfoItem::Options options, const TrackList& tracks)
+void InfoPopulator::run(InfoItem::Options options, const TrackList& tracks,
+                        const std::vector<SelectionInfoField>& fields)
 {
     setState(Running);
 
     p->reset();
 
-    p->addTrackNodes(options, tracks);
+    p->addTrackNodes(options, tracks, fields);
 
     if(mayRun()) {
-        emit populated(p->m_data);
-        emit finished();
+        Q_EMIT populated(std::make_shared<InfoData>(std::move(p->m_data)));
+        Q_EMIT finished();
     }
 
+    p->m_data = {};
     p->reset();
 
     setState(Idle);

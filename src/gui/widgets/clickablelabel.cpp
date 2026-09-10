@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,7 +28,7 @@ void ClickableLabel::mousePressEvent(QMouseEvent* event)
     QLabel::mousePressEvent(event);
 
     if(event->button() == Qt::LeftButton) {
-        emit clicked();
+        Q_EMIT clicked();
     }
 }
 
@@ -36,14 +36,14 @@ void ClickableLabel::enterEvent(QEnterEvent* event)
 {
     QLabel::enterEvent(event);
 
-    emit mouseEntered();
+    Q_EMIT mouseEntered();
 }
 
 void ClickableLabel::leaveEvent(QEvent* event)
 {
     QLabel::leaveEvent(event);
 
-    emit mouseLeft();
+    Q_EMIT mouseLeft();
 }
 } // namespace Fooyin
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,8 @@
 namespace Fooyin {
 SettingsPage::SettingsPage(SettingsDialogController* controller, QObject* parent)
     : QObject{parent}
+    , m_position{SettingsPagePosition::Default}
+    , m_relativePosition{SettingsPageRelativePosition::None}
     , m_widget{nullptr}
 {
     if(controller) {
@@ -46,6 +48,21 @@ QStringList SettingsPage::category() const
     return m_category;
 }
 
+SettingsPagePosition SettingsPage::position() const
+{
+    return m_position;
+}
+
+SettingsPageRelativePosition SettingsPage::relativePosition() const
+{
+    return m_relativePosition;
+}
+
+Id SettingsPage::positionPage() const
+{
+    return m_positionPage;
+}
+
 void SettingsPage::setWidgetCreator(const WidgetCreator& widgetCreator)
 {
     m_widgetCreator = widgetCreator;
@@ -55,6 +72,9 @@ QWidget* SettingsPage::widget()
 {
     if(!m_widget && m_widgetCreator) {
         m_widget = m_widgetCreator();
+        if(auto* pageWidget = qobject_cast<SettingsPageWidget*>(m_widget); pageWidget && !m_state.isEmpty()) {
+            pageWidget->restoreState(m_state);
+        }
     }
 
     return m_widget;
@@ -83,6 +103,7 @@ void SettingsPage::finish()
     if(m_widget) {
         if(auto* pageWidget = qobject_cast<SettingsPageWidget*>(m_widget)) {
             pageWidget->finish();
+            m_state = pageWidget->saveState();
         }
         delete m_widget;
         m_widget = nullptr;
@@ -98,6 +119,31 @@ void SettingsPage::reset()
     }
 }
 
+QByteArray SettingsPage::state() const
+{
+    return m_state;
+}
+
+void SettingsPage::setState(const QByteArray& state)
+{
+    m_state = state;
+    if(m_widget) {
+        if(auto* pageWidget = qobject_cast<SettingsPageWidget*>(m_widget)) {
+            pageWidget->restoreState(m_state);
+        }
+    }
+}
+
+QString SettingsPage::validationError() const
+{
+    if(m_widget) {
+        if(auto* pageWidget = qobject_cast<SettingsPageWidget*>(m_widget)) {
+            return pageWidget->validationError();
+        }
+    }
+    return {};
+}
+
 void SettingsPage::setId(const Id& id)
 {
     m_id = id;
@@ -111,6 +157,25 @@ void SettingsPage::setName(const QString& name)
 void SettingsPage::setCategory(const QStringList& category)
 {
     m_category = category;
+}
+
+void SettingsPage::setPosition(SettingsPagePosition position)
+{
+    m_position         = position;
+    m_relativePosition = SettingsPageRelativePosition::None;
+    m_positionPage     = {};
+}
+
+void SettingsPage::setRelativePosition(SettingsPageRelativePosition position, const Id& page)
+{
+    if(position == SettingsPageRelativePosition::None || !page.isValid()) {
+        setPosition(SettingsPagePosition::Default);
+        return;
+    }
+
+    m_position         = SettingsPagePosition::Default;
+    m_relativePosition = position;
+    m_positionPage     = page;
 }
 } // namespace Fooyin
 

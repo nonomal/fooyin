@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
 
 namespace Fooyin::Lyrics::Constants {
 namespace Page {
-constexpr auto LyricsGeneral   = "Fooyin.Page.Lyrics.General";
 constexpr auto LyricsInterface = "Fooyin.Page.Lyrics.Interface";
 constexpr auto LyricsSources   = "Fooyin.Page.Lyrics.Sources";
 constexpr auto LyricsSearching = "Fooyin.Page.Lyrics.Searching";

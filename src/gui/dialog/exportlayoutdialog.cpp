@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -106,7 +106,7 @@ QSize ExportLayoutDialog::sizeHint() const
 
 void ExportLayoutDialog::accept()
 {
-    auto layout = m_editableLayout->saveCurrentToLayout(m_nameEdit->text());
+    auto layout = m_editableLayout->saveCurrentToLayout(m_nameEdit->text(), false);
     if(!layout.isValid()) {
         m_errorLabel->setText(tr("Failed to save the current layout"));
         return;
@@ -115,17 +115,31 @@ void ExportLayoutDialog::accept()
     if(m_saveWindowSize->isChecked()) {
         layout.saveWindowSize();
     }
+    else {
+        layout.removeWindowSize();
+    }
 
-    const auto currentTheme = m_settings->value<Settings::Gui::Theme>().value<FyTheme>();
+    const auto currentTheme = m_settings->value<Settings::Gui::CustomTheme>().value<FyTheme>();
     if(currentTheme.isValid()) {
-        FyLayout::ThemeOptions themeOptions;
+        FyLayout::ThemeOptions themeOptions{};
         if(m_saveColours->isChecked()) {
             themeOptions |= FyLayout::SaveColours;
         }
         if(m_saveFonts->isChecked()) {
             themeOptions |= FyLayout::SaveFonts;
         }
-        layout.saveTheme(currentTheme, themeOptions);
+        if(themeOptions) {
+            layout.saveTheme(currentTheme, themeOptions);
+        }
+        else {
+            layout.removeTheme();
+        }
+    }
+    else if(m_saveColours->isChecked() || m_saveFonts->isChecked()) {
+        FyLayout::ThemeOptions themeOptions{};
+        themeOptions.setFlag(FyLayout::SaveColours, m_saveColours->isChecked());
+        themeOptions.setFlag(FyLayout::SaveFonts, m_saveFonts->isChecked());
+        layout.setThemeOptions(themeOptions);
     }
 
     if(QFileInfo(m_pathEdit->text()).isDir() && !m_pathEdit->text().endsWith(QDir::separator())) {
@@ -146,9 +160,8 @@ void ExportLayoutDialog::accept()
 void ExportLayoutDialog::exportLayout()
 {
     const QString path = !m_pathEdit->text().isEmpty() ? m_pathEdit->text() : Gui::layoutsPath() + m_nameEdit->text();
-    const QString saveFile
-        = QFileDialog::getSaveFileName(this, tr("Save Layout"), path, tr("%1 Layout %2").arg("fooyin"_L1, "(*.fyl)"_L1),
-                                       nullptr, QFileDialog::DontResolveSymlinks);
+    const QString saveFile = QFileDialog::getSaveFileName(this, tr("Save Layout"), path, tr("fooyin Layout (*.fyl)"),
+                                                          nullptr, QFileDialog::DontResolveSymlinks);
     if(saveFile.isEmpty()) {
         return;
     }

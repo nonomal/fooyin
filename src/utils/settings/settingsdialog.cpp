@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,18 +21,24 @@
 
 #include "settingsmodel.h"
 
+#include <utils/modelutils.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/settings/settingspage.h>
 #include <utils/utils.h>
 
+#include <QDataStream>
 #include <QDialogButtonBox>
 #include <QEvent>
+#include <QIODevice>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedLayout>
 #include <QTreeView>
+#include <QVBoxLayout>
 
 namespace Fooyin {
 class ScrollArea : public QScrollArea
@@ -42,11 +48,13 @@ class ScrollArea : public QScrollArea
 public:
     explicit ScrollArea(QWidget* parent);
 
-private:
-    void resizeEvent(QResizeEvent* event) override;
     [[nodiscard]] QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
     bool event(QEvent* event) override;
 
+private:
     [[nodiscard]] int scrollBarWidth() const;
 };
 
@@ -59,41 +67,46 @@ ScrollArea::ScrollArea(QWidget* parent)
     setAutoFillBackground(true);
 }
 
+QSize ScrollArea::minimumSizeHint() const
+{
+    const QWidget* child = widget();
+    if(!child) {
+        return {0, 0};
+    }
+
+    const int width = frameWidth() * 2;
+    QSize minSize   = child->minimumSizeHint();
+
+    minSize += QSize{width, width};
+    minSize += QSize{scrollBarWidth(), 0};
+
+    minSize.setWidth(std::min(minSize.width(), 250));
+    minSize.setHeight(std::min(minSize.height(), 250));
+
+    return minSize;
+}
+
 void ScrollArea::resizeEvent(QResizeEvent* event)
 {
     QWidget* child = widget();
-    if(child) {
-        const QSize chilSizeHint = child->minimumSizeHint();
-        const int width          = frameWidth() * 2;
-        QSize innerSize          = event->size() - QSize{width, width};
-
-        if(chilSizeHint.height() > innerSize.height()) {
-            // Child widget is bigger
-            innerSize.setWidth(innerSize.width() - scrollBarWidth());
-            innerSize.setHeight(chilSizeHint.height());
-        }
-        // Resize to fit scroll area
-        child->resize(innerSize);
+    if(!child) {
+        QScrollArea::resizeEvent(event);
+        return;
     }
+
+    const QSize chilSizeHint = child->minimumSizeHint();
+    const int width          = frameWidth() * 2;
+    QSize innerSize          = event->size() - QSize{width, width};
+
+    if(chilSizeHint.height() > innerSize.height()) {
+        // Child widget is bigger
+        innerSize.setWidth(innerSize.width() - scrollBarWidth());
+        innerSize.setHeight(chilSizeHint.height());
+    }
+
+    // Resize to fit scroll area
+    child->resize(innerSize);
     QScrollArea::resizeEvent(event);
-}
-
-QSize ScrollArea::minimumSizeHint() const
-{
-    QWidget* child = widget();
-    if(child) {
-        const int width = frameWidth() * 2;
-        QSize minSize   = child->minimumSizeHint();
-
-        minSize += QSize{width, width};
-        minSize += QSize{scrollBarWidth(), 0};
-
-        minSize.setWidth(std::min(minSize.width(), 250));
-        minSize.setHeight(std::min(minSize.height(), 250));
-
-        return minSize;
-    }
-    return {0, 0};
 }
 
 bool ScrollArea::event(QEvent* event)
@@ -137,7 +150,7 @@ SimpleTreeView::SimpleTreeView(QWidget* parent)
 QSize SimpleTreeView::sizeHint() const
 {
     const int maxWidth = calculateMaxItemWidth({});
-    return {maxWidth, 100};
+    return {maxWidth + verticalScrollBar()->sizeHint().width() + (2 * frameWidth()), 100};
 }
 
 int SimpleTreeView::calculateMaxItemWidth(const QModelIndex& index) const
@@ -168,7 +181,6 @@ SettingsDialog::SettingsDialog(PageList pages, QWidget* parent)
     , m_pages{std::move(pages)}
 {
     setWindowTitle(tr("Settings"));
-    setModal(true);
 
     m_stackedLayout->setContentsMargins(0, 0, 0, 0);
 
@@ -177,7 +189,6 @@ SettingsDialog::SettingsDialog(PageList pages, QWidget* parent)
     m_categoryTree->setHeaderHidden(true);
     m_categoryTree->setModel(m_model);
     m_categoryTree->setFocus();
-    m_categoryTree->expandAll();
 
     m_buttonBox->button(QDialogButtonBox::Ok)->setDefault(true);
     m_buttonBox->button(QDialogButtonBox::RestoreDefaults)->setText(tr("Reset Page"));
@@ -204,7 +215,8 @@ SettingsDialog::SettingsDialog(PageList pages, QWidget* parent)
 
 void SettingsDialog::openSettings()
 {
-    open();
+    setWindowModality(Qt::NonModal);
+    show();
 }
 
 void SettingsDialog::openPage(const Id& id)
@@ -236,6 +248,34 @@ Id SettingsDialog::currentPage() const
     return m_currentPage;
 }
 
+QByteArray SettingsDialog::saveState() const
+{
+    QByteArray stateData;
+    QDataStream stream{&stateData, QIODeviceBase::WriteOnly};
+    stream.setVersion(QDataStream::Qt_6_0);
+
+    const QStringList expandedCategories = Utils::saveExpansionState(m_categoryTree, categoryKey);
+    stream << expandedCategories;
+
+    return qCompress(stateData, 9);
+}
+
+void SettingsDialog::restoreState(const QByteArray& state)
+{
+    if(state.isEmpty()) {
+        return;
+    }
+
+    QByteArray stateData = qUncompress(state);
+    QDataStream stream{&stateData, QIODeviceBase::ReadOnly};
+    stream.setVersion(QDataStream::Qt_6_0);
+
+    QStringList expandedCategories;
+    stream >> expandedCategories;
+
+    Utils::restoreExpansionState(m_categoryTree, expandedCategories, categoryKey);
+}
+
 void SettingsDialog::done(int value)
 {
     QDialog::done(value);
@@ -243,7 +283,9 @@ void SettingsDialog::done(int value)
 
 void SettingsDialog::accept()
 {
-    apply();
+    if(!apply()) {
+        return;
+    }
     for(const auto& page : m_pages) {
         page->finish();
     }
@@ -260,14 +302,25 @@ void SettingsDialog::reject()
 
 QSize SettingsDialog::sizeHint() const
 {
-    return Utils::proportionateSize(this, 0.3, 0.4);
+    return Utils::proportionateSize(this, 0.3, 0.5);
 }
 
-void SettingsDialog::apply()
+bool SettingsDialog::apply()
 {
+    for(const auto& page : m_visitedPages) {
+        const QString error = page->validationError();
+        if(!error.isEmpty()) {
+            openPage(page->id());
+            QMessageBox::warning(this, tr("Settings"), error);
+            return false;
+        }
+    }
+
     for(const auto& page : m_visitedPages) {
         page->apply();
     }
+
+    return true;
 }
 
 void SettingsDialog::reset()
@@ -308,13 +361,16 @@ void SettingsDialog::showCategory(const QModelIndex& index)
     checkCategoryWidget(category);
 
     m_currentCategory = category->id;
+    m_currentPage     = {};
 
-    const int currentTabIndex = category->tabWidget->currentIndex();
-    if(currentTabIndex != -1) {
+    const int currentTabIndex = category->tabWidget ? category->tabWidget->currentIndex() : -1;
+    if(currentTabIndex != -1 && std::cmp_less(currentTabIndex, category->pages.size())) {
         auto* page    = category->pages.at(currentTabIndex);
         m_currentPage = page->id();
         m_visitedPages.emplace(page);
     }
+
+    m_buttonBox->button(QDialogButtonBox::RestoreDefaults)->setEnabled(m_currentPage.isValid());
     m_stackedLayout->setCurrentIndex(category->index);
 
     setWindowTitle(tr("Settings") + QLatin1String(": ") + category->name);
@@ -322,13 +378,34 @@ void SettingsDialog::showCategory(const QModelIndex& index)
 
 void SettingsDialog::checkCategoryWidget(SettingsCategory* category)
 {
-    if(category->tabWidget) {
+    if(category->index >= 0) {
         return;
+    }
+
+    if(category->pages.empty()) {
+        auto* placeholder = new QWidget();
+        auto* layout      = new QVBoxLayout(placeholder);
+        auto* label       = new QLabel(tr("Select a page from this category."), placeholder);
+
+        label->setAlignment(Qt::AlignCenter);
+        layout->addWidget(label);
+
+        category->index = m_stackedLayout->addWidget(placeholder);
+        return;
+    }
+
+    if(category->pages.size() == 1) {
+        auto* page = category->pages.front();
+        if(const QWidget* widget = page->widget()) {
+            if(auto* layout = widget->layout()) {
+                layout->setContentsMargins({});
+            }
+        }
     }
 
     auto* tabWidget = new QTabWidget();
     tabWidget->setTabBarAutoHide(true);
-    tabWidget->setDocumentMode(true);
+    tabWidget->setDocumentMode(category->pages.size() == 1);
 
     const auto addPageToTabWidget = [tabWidget](const auto& page) {
         if(QWidget* widget = page->widget()) {
@@ -361,6 +438,8 @@ void SettingsDialog::currentChanged(const QModelIndex& current)
 void SettingsDialog::currentTabChanged(int index)
 {
     if(index < 0) {
+        m_currentPage = {};
+        m_buttonBox->button(QDialogButtonBox::RestoreDefaults)->setDisabled(true);
         return;
     }
 
@@ -369,10 +448,17 @@ void SettingsDialog::currentTabChanged(int index)
         return;
     }
 
-    auto* category     = modelIndex.data(SettingsItem::Data).value<SettingsCategory*>();
+    auto* category = modelIndex.data(SettingsItem::Data).value<SettingsCategory*>();
+    if(!category || std::cmp_greater_equal(index, category->pages.size())) {
+        m_currentPage = {};
+        m_buttonBox->button(QDialogButtonBox::RestoreDefaults)->setDisabled(true);
+        return;
+    }
+
     SettingsPage* page = category->pages.at(index);
     m_currentPage      = page->id();
     m_visitedPages.emplace(page);
+    m_buttonBox->button(QDialogButtonBox::RestoreDefaults)->setEnabled(true);
 }
 
 SettingsPage* SettingsDialog::findPage(const Id& id)
@@ -383,6 +469,17 @@ SettingsPage* SettingsDialog::findPage(const Id& id)
     }
     return nullptr;
 }
+
+QString SettingsDialog::categoryKey(const QModelIndex& index)
+{
+    if(!index.isValid()) {
+        return {};
+    }
+
+    auto* category = index.data(SettingsItem::Data).value<SettingsCategory*>();
+    return category ? category->id.name() : QString{};
+}
+
 } // namespace Fooyin
 
 #include "moc_settingsdialog.cpp"

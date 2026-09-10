@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,9 @@
 #include "settings/tageditorfieldregistry.h"
 #include "settings/tageditorfieldsmodel.h"
 #include "tageditorconstants.h"
+#include "tageditorsettings.h"
 
+#include <gui/guiconstants.h>
 #include <gui/widgets/checkboxdelegate.h>
 #include <gui/widgets/extendabletableview.h>
 #include <utils/settings/settingsmanager.h>
@@ -40,7 +42,7 @@ class TagEditorFieldsPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit TagEditorFieldsPageWidget(TagEditorFieldRegistry* registry, ActionManager* actionManager);
+    explicit TagEditorFieldsPageWidget(TagEditorFieldRegistry* registry, SettingsManager* settings);
 
     void load() override;
     void apply() override;
@@ -48,43 +50,43 @@ public:
 
 private:
     void updateButtonState();
-
-    ActionManager* m_actionManager;
+    void updateHint();
 
     TagEditorFieldRegistry* m_registry;
+    SettingsManager* m_settings;
     ExtendableTableView* m_fieldList;
     TagEditorFieldsModel* m_model;
+    QLabel* m_hintLabel;
 };
 
-TagEditorFieldsPageWidget::TagEditorFieldsPageWidget(TagEditorFieldRegistry* registry, ActionManager* actionManager)
-    : m_actionManager{actionManager}
-    , m_registry{registry}
-    , m_fieldList{new ExtendableTableView(m_actionManager, this)}
+TagEditorFieldsPageWidget::TagEditorFieldsPageWidget(TagEditorFieldRegistry* registry, SettingsManager* settings)
+    : m_registry{registry}
+    , m_settings{settings}
+    , m_fieldList{new ExtendableTableView(this)}
     , m_model{new TagEditorFieldsModel(m_registry, this)}
+    , m_hintLabel{new QLabel(this)}
 {
     m_fieldList->setExtendableModel(m_model);
     m_fieldList->setTools(ExtendableTableView::Move);
 
     auto* checkDelegate = new CheckBoxDelegate(this);
-    m_fieldList->setItemDelegateForColumn(3, checkDelegate);
+    m_fieldList->setItemDelegateForColumn(1, checkDelegate);
     m_fieldList->setItemDelegateForColumn(4, checkDelegate);
+    m_fieldList->setItemDelegateForColumn(5, checkDelegate);
 
     // Hide index column
     m_fieldList->hideColumn(0);
 
-    m_fieldList->setExtendableColumn(1);
+    m_fieldList->setExtendableColumn(2);
     m_fieldList->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_fieldList->verticalHeader()->hide();
     m_fieldList->horizontalHeader()->setStretchLastSection(false);
     m_fieldList->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_fieldList->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
 
-    auto* hintLabel
-        = new QLabel(u"🛈 "_s + tr("Multiple values can be specified in the editor using %1").arg("\";\""_L1), this);
-
     auto* mainLayout = new QGridLayout(this);
     mainLayout->addWidget(m_fieldList, 0, 0, 1, 2);
-    mainLayout->addWidget(hintLabel, 1, 0, 1, 2);
+    mainLayout->addWidget(m_hintLabel, 1, 0, 1, 2);
     mainLayout->setColumnStretch(1, 1);
 
     QObject::connect(m_fieldList->selectionModel(), &QItemSelectionModel::selectionChanged, this,
@@ -95,6 +97,7 @@ TagEditorFieldsPageWidget::TagEditorFieldsPageWidget(TagEditorFieldRegistry* reg
 void TagEditorFieldsPageWidget::load()
 {
     m_model->populate();
+    updateHint();
     updateButtonState();
 }
 
@@ -107,6 +110,7 @@ void TagEditorFieldsPageWidget::reset()
 {
     m_registry->reset();
     m_registry->loadDefaultFields();
+    updateHint();
 }
 
 void TagEditorFieldsPageWidget::updateButtonState()
@@ -127,14 +131,21 @@ void TagEditorFieldsPageWidget::updateButtonState()
     m_fieldList->moveDownAction()->setEnabled(!isEmpty && canMoveDown);
 }
 
-TagEditorFieldsPage::TagEditorFieldsPage(TagEditorFieldRegistry* registry, ActionManager* actionManager,
-                                         SettingsManager* settings, QObject* parent)
+void TagEditorFieldsPageWidget::updateHint()
+{
+    const QStringList separators = multiValueSeparators(*m_settings);
+    m_hintLabel->setText(u"🛈 "_s
+                         + tr("Use any of \"%1\" in the editor to enter multiple values.").arg(separators.join(u' ')));
+}
+
+TagEditorFieldsPage::TagEditorFieldsPage(TagEditorFieldRegistry* registry, SettingsManager* settings, QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::TagEditorFields);
     setName(tr("Fields"));
-    setCategory({tr("Tag Editor")});
-    setWidgetCreator([registry, actionManager] { return new TagEditorFieldsPageWidget(registry, actionManager); });
+    setCategory({tr("Tagging"), tr("Tag Editor")});
+    setRelativePosition(SettingsPageRelativePosition::After, ::Fooyin::Constants::Page::PlaylistGeneral);
+    setWidgetCreator([registry, settings] { return new TagEditorFieldsPageWidget(registry, settings); });
 }
 } // namespace Fooyin::TagEditor
 

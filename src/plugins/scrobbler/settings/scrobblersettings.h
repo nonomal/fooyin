@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,6 +40,7 @@ enum ScrobblerSettings : uint32_t
     AlbumField           = 7 | Type::String,
     ArtistField          = 8 | Type::String,
     AlbumArtistField     = 9 | Type::String,
+    SyncPlaybackStats    = 10 | Type::Bool,
 };
 Q_ENUM_NS(ScrobblerSettings)
 } // namespace Settings::Scrobbler

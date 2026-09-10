@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -109,7 +109,7 @@ int PluginsModel::columnCount(const QModelIndex& /*parent*/) const
 QVariant PluginsModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole || orientation == Qt::Orientation::Vertical) {
@@ -226,7 +226,7 @@ bool PluginsModel::setData(const QModelIndex& index, const QVariant& value, int 
         }
     }
 
-    emit dataChanged(index, index, {role});
+    Q_EMIT dataChanged(index, index, {role});
 
     return true;
 }

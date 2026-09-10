@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,7 +19,9 @@
 
 #pragma once
 
+#include <QEvent>
 #include <QObject>
+#include <QPersistentModelIndex>
 #include <QTreeView>
 
 namespace Fooyin {
@@ -31,12 +33,17 @@ public:
     explicit LibraryTreeView(QWidget* parent = nullptr);
 
     void setLoading(bool isLoading);
+    void setExpandsOnSingleClick(bool enabled);
 
-signals:
+Q_SIGNALS:
     void middleClicked(const QModelIndex& index);
+    void displayAboutToChange();
+    void displayChanged();
 
 protected:
+    void changeEvent(QEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -44,5 +51,7 @@ protected:
 
 private:
     bool m_isLoading;
+    bool m_expandsOnSingleClick;
+    QPersistentModelIndex m_singleClickToggleIndex;
 };
 } // namespace Fooyin

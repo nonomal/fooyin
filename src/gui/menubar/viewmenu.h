@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,10 +21,17 @@
 
 #include <QObject>
 
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
 class QAction;
 
 namespace Fooyin {
 class ActionManager;
+class Command;
+class DspSettingsController;
+class DspSettingsRegistry;
 class SettingsManager;
 
 class ViewMenu : public QObject
@@ -34,14 +41,26 @@ class ViewMenu : public QObject
 public:
     explicit ViewMenu(ActionManager* actionManager, SettingsManager* settings, QObject* parent = nullptr);
 
-signals:
+    void registerDspSettingsActions(DspSettingsRegistry* registry, DspSettingsController* controller);
+
+Q_SIGNALS:
+    void focusSearchBar();
     void openQuickSetup();
+    void openPlaybackQueue();
+    void openPlaylistManager();
     void openLog();
     void openScriptEditor();
     void showNowPlaying();
 
 private:
+    void refreshDspSettingsActions(DspSettingsController* controller);
+
     ActionManager* m_actionManager;
     SettingsManager* m_settings;
+
+    QAction* m_dspInsertBefore;
+    std::unordered_set<QString> m_registeredDspActions;
+    std::unordered_map<QString, Command*> m_dspActions;
+    std::vector<QString> m_dspActionOrder;
 };
 } // namespace Fooyin

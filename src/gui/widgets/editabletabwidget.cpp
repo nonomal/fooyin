@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,10 +45,10 @@ void EditableTabWidget::mousePressEvent(QMouseEvent* event)
     const int index  = m_tabBar->tabAt(pos);
 
     if(event->button() & Qt::MiddleButton) {
-        emit middleClicked(index);
+        Q_EMIT middleClicked(index);
     }
     else {
-        emit tabBarClicked(index);
+        Q_EMIT tabBarClicked(index);
     }
 
     QTabWidget::mousePressEvent(event);

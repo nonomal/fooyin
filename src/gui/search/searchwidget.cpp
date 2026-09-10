@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,15 +21,17 @@
 
 #include "internalguisettings.h"
 #include "playlist/playlistcontroller.h"
+#include "playlist/playlistuicontroller.h"
 #include "playlist/playlistwidget.h"
 #include "searchcontroller.h"
 
 #include <core/coresettings.h>
 #include <core/library/musiclibrary.h>
 #include <core/playlist/playlisthandler.h>
-#include <core/scripting/scriptparser.h>
+#include <core/scripting/trackqueryfilter.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/popuplineedit.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/async.h>
@@ -60,10 +62,12 @@ SearchWidget::SearchWidget(SearchController* controller, PlaylistController* pla
     , m_searchBox{new QLineEdit(this)}
     , m_defaultPlaceholder{tr("Search library…")}
     , m_mode{SearchMode::Library}
+    , m_searchRequestToken{0}
     , m_forceNewPlaylist{false}
     , m_unconnected{true}
     , m_exclusivePlaylist{false}
     , m_autoSearch{!isQuickSearch()}
+    , m_showAll{false}
 {
     setObjectName(SearchWidget::name());
 
@@ -76,6 +80,7 @@ SearchWidget::SearchWidget(SearchController* controller, PlaylistController* pla
 
     m_searchController->registerSetFunction(id(), [this](const QString& search) { m_searchBox->setText(search); });
 
+    setFocusProxy(m_searchBox);
     loadColours();
 
     QObject::connect(m_searchBox, &QLineEdit::textChanged, this, [this]() {
@@ -89,12 +94,13 @@ SearchWidget::SearchWidget(SearchController* controller, PlaylistController* pla
         }
     });
 
-    auto* selectReceiver = new QAction(Utils::iconFromTheme(Constants::Icons::Options), tr("Options"), this);
+    auto* selectReceiver = new QAction(tr("Options"), this);
+    Gui::setThemeIcon(selectReceiver, Constants::Icons::Options);
     QObject::connect(selectReceiver, &QAction::triggered, this, [this]() { showOptionsMenu(); });
     m_searchBox->addAction(selectReceiver, QLineEdit::TrailingPosition);
 
-    m_settings->subscribe<Settings::Gui::IconTheme>(
-        this, [selectReceiver]() { selectReceiver->setIcon(Utils::iconFromTheme(Constants::Icons::Options)); });
+    m_settings->subscribe<Settings::Gui::IconTheme>(this,
+                                                    [selectReceiver]() { Gui::refreshThemeIcon(selectReceiver); });
     m_settings->subscribe<Settings::Gui::SearchErrorBg>(this, &SearchWidget::loadColours);
     m_settings->subscribe<Settings::Gui::SearchErrorFg>(this, &SearchWidget::loadColours);
 }
@@ -121,7 +127,7 @@ QString SearchWidget::layoutName() const
 
 void SearchWidget::layoutEditingMenu(QMenu* menu)
 {
-    auto* manageConnections = new QAction(tr("Manage connections"), this);
+    auto* manageConnections = new QAction(tr("Manage connected widgets"), this);
     QObject::connect(manageConnections, &QAction::triggered, this,
                      [this]() { m_searchController->setupWidgetConnections(id()); });
     menu->addAction(manageConnections);
@@ -130,6 +136,7 @@ void SearchWidget::layoutEditingMenu(QMenu* menu)
 void SearchWidget::saveLayoutData(QJsonObject& layout)
 {
     layout["AutoSearch"_L1] = m_autoSearch;
+    layout["ShowAll"_L1]    = m_showAll;
     layout["SearchMode"_L1] = static_cast<quint8>(m_mode);
 
     const QString placeholderText = m_searchBox->placeholderText();
@@ -153,6 +160,10 @@ void SearchWidget::loadLayoutData(const QJsonObject& layout)
 {
     if(layout.contains("AutoSearch"_L1)) {
         m_autoSearch = layout.value("AutoSearch"_L1).toBool();
+    }
+
+    if(layout.contains("ShowAll"_L1)) {
+        m_showAll = layout.value("ShowAll"_L1).toBool();
     }
 
     if(layout.contains("SearchMode"_L1)) {
@@ -202,6 +213,9 @@ void SearchWidget::showEvent(QShowEvent* event)
         const FyStateSettings stateSettings;
         const QJsonObject layoutData = stateSettings.value(QuickSearchState).toJsonObject();
         loadLayoutData(layoutData);
+        if(m_showAll && m_searchBox->text().isEmpty()) {
+            searchChanged();
+        }
     }
 
     FyWidget::showEvent(event);
@@ -245,8 +259,15 @@ void SearchWidget::keyPressEvent(QKeyEvent* event)
 
         searchChanged(true);
     }
-    else if(key == Qt::Key_Escape && isQuickSearch()) {
-        close();
+    else if(key == Qt::Key_Escape) {
+        if(isQuickSearch()) {
+            close();
+        }
+        else if(!m_searchBox->text().isEmpty()) {
+            m_searchBox->clear();
+        }
+        event->accept();
+        return;
     }
     else if(key == Qt::Key_Backspace && modifiers == Qt::ControlModifier) {
         deleteWord();
@@ -272,13 +293,15 @@ bool SearchWidget::isQuickSearch() const
 Playlist* SearchWidget::findOrAddPlaylist(const TrackList& tracks)
 {
     QString searchResultsName = m_settings->value<Settings::Gui::SearchPlaylistName>();
+    const QString searchText  = m_searchBox->text();
+    const bool appendSearch   = m_settings->value<Settings::Gui::SearchPlaylistAppendSearch>() && !searchText.isEmpty();
 
     if(!m_forceNewPlaylist) {
         const auto playlists = m_playlistHandler->playlists();
         for(auto* playlist : playlists) {
             if(playlist->name().startsWith(searchResultsName)) {
-                if(m_settings->value<Settings::Gui::SearchPlaylistAppendSearch>()) {
-                    searchResultsName.append(u" [%1]"_s.arg(m_searchBox->text()));
+                if(appendSearch) {
+                    searchResultsName.append(u" [%1]"_s.arg(searchText));
                 }
                 if(searchResultsName != playlist->name()) {
                     m_playlistHandler->renamePlaylist(playlist->id(), searchResultsName);
@@ -293,8 +316,8 @@ Playlist* SearchWidget::findOrAddPlaylist(const TrackList& tracks)
 
     if(auto* playlist = forceNew ? m_playlistHandler->createNewPlaylist(searchResultsName, tracks)
                                  : m_playlistHandler->createPlaylist(searchResultsName, tracks)) {
-        if(m_settings->value<Settings::Gui::SearchPlaylistAppendSearch>()) {
-            searchResultsName.append(u" (%1)"_s.arg(m_searchBox->text()));
+        if(appendSearch) {
+            searchResultsName.append(u" (%1)"_s.arg(searchText));
             m_playlistHandler->renamePlaylist(playlist->id(), searchResultsName);
         }
         m_playlistController->changeCurrentPlaylist(playlist);
@@ -307,7 +330,7 @@ Playlist* SearchWidget::findOrAddPlaylist(const TrackList& tracks)
 PlaylistTrackList SearchWidget::getTracksToSearch(SearchMode mode) const
 {
     switch(mode) {
-        case(SearchMode::AllPlaylists): {
+        case SearchMode::AllPlaylists: {
             const QString searchResultsName = m_settings->value<Settings::Gui::SearchPlaylistName>();
             const auto playlists            = m_playlistHandler->playlists();
             PlaylistTrackList allTracks;
@@ -319,11 +342,11 @@ PlaylistTrackList SearchWidget::getTracksToSearch(SearchMode mode) const
             }
             return allTracks;
         }
-        case(SearchMode::Library):
+        case SearchMode::Library:
             return PlaylistTrack::fromTracks(m_library->tracks(), {});
-        case(SearchMode::PlaylistFilter):
+        case SearchMode::PlaylistFilter:
             return {};
-        case(SearchMode::Playlist):
+        case SearchMode::Playlist:
             if(m_playlistController->currentPlaylist()) {
                 return m_playlistController->currentPlaylist()->playlistTracks();
             }
@@ -361,7 +384,7 @@ bool SearchWidget::handleFilteredTracks(SearchMode mode, const PlaylistTrackList
     resetColours();
 
     if(m_exclusivePlaylist || mode == SearchMode::PlaylistFilter) {
-        m_searchController->changeSearch(id(), m_searchBox->text());
+        m_searchController->changeSearch(id(), currentSearchRequest());
     }
     else {
         if(auto* playlist = findOrAddPlaylist(PlaylistTrack::toTracks(tracks))) {
@@ -373,7 +396,7 @@ bool SearchWidget::handleFilteredTracks(SearchMode mode, const PlaylistTrackList
         m_searchBox->clear();
     }
     if(!m_autoSearch && m_settings->value<Settings::Gui::SearchSuccessFocus>()) {
-        m_playlistController->focusPlaylist();
+        m_playlistController->uiController()->focusPlaylist();
     }
 
     return true;
@@ -444,19 +467,35 @@ void SearchWidget::updateConnectedState()
     }
 }
 
+SearchRequest SearchWidget::currentSearchRequest() const
+{
+    return {.text = m_searchBox->text(), .emptyMode = m_showAll ? EmptySearchMode::ShowAll : EmptySearchMode::Clear};
+}
+
 void SearchWidget::searchChanged(bool enterKey)
 {
     if(!m_unconnected) {
-        m_searchController->changeSearch(id(), m_searchBox->text());
+        m_searchController->changeSearch(id(), currentSearchRequest());
         return;
     }
 
-    const auto mode = m_forceMode ? std::exchange(m_forceMode, {}).value() : m_mode; // NOLINT
+    const auto mode             = m_forceMode ? std::exchange(m_forceMode, {}).value() : m_mode; // NOLINT
+    const auto request          = currentSearchRequest();
+    const uint64_t requestToken = ++m_searchRequestToken;
 
-    Utils::asyncExec([search = m_searchBox->text(), tracks = getTracksToSearch(mode)]() {
-        ScriptParser parser;
-        return parser.filter(search, tracks);
-    }).then(this, [this, mode, enterKey](const PlaylistTrackList& filteredTracks) {
+    Utils::asyncExec([search = request.text, emptyMode = request.emptyMode, tracks = getTracksToSearch(mode)]() {
+        if(search.isEmpty()) {
+            return emptyMode == EmptySearchMode::ShowAll ? tracks : PlaylistTrackList{};
+        }
+        TrackQueryFilter filter;
+        return filter.filter(search, tracks);
+    }).then(this, [this, mode, request, requestToken, enterKey](const PlaylistTrackList& filteredTracks) {
+        const SearchRequest currentRequest = currentSearchRequest();
+        if(requestToken != m_searchRequestToken || currentRequest.text != request.text
+           || currentRequest.emptyMode != request.emptyMode) {
+            return;
+        }
+
         if(handleFilteredTracks(mode, filteredTracks) && enterKey) {
             if(isQuickSearch() && m_settings->value<Settings::Gui::SearchSuccessClose>()) {
                 close();
@@ -499,6 +538,15 @@ void SearchWidget::showOptionsMenu()
     QObject::connect(autoSearch, &QAction::triggered, this, [this](const bool checked) { m_autoSearch = checked; });
     menu->addAction(autoSearch);
 
+    auto* showAll = new QAction(tr("Show all when search is empty"), this);
+    showAll->setCheckable(true);
+    showAll->setChecked(m_showAll);
+    QObject::connect(showAll, &QAction::triggered, this, [this](const bool checked) {
+        m_showAll = checked;
+        searchChanged();
+    });
+    menu->addAction(showAll);
+
     if(m_unconnected) {
         auto* searchInMenu = menu->addMenu(tr("Search in"));
 
@@ -529,7 +577,7 @@ void SearchWidget::showOptionsMenu()
         QObject::connect(changePlaceholder, &QAction::triggered, this, &SearchWidget::changePlaceholderText);
         menu->addAction(changePlaceholder);
 
-        auto* manageConnections = new QAction(tr("Manage connections"), menu);
+        auto* manageConnections = new QAction(tr("Manage connected widgets"), menu);
         QObject::connect(manageConnections, &QAction::triggered, this,
                          [this]() { m_searchController->setupWidgetConnections(id()); });
         menu->addAction(manageConnections);

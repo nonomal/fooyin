@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@ class FYGUI_EXPORT ClickableLabel : public QLabel
 public:
     using QLabel::QLabel;
 
-signals:
+Q_SIGNALS:
     void clicked();
     void mouseEntered();
     void mouseLeft();

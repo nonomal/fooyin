@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,6 +31,9 @@ struct PlaylistInfo
     int index{-1};
     bool isAutoPlaylist{false};
     QString query;
+    QString sortQuery;
+    bool forceSorted{true};
+    QByteArray extraProperties;
 };
 
 class PlaylistDatabase : public DbModule
@@ -39,15 +42,18 @@ public:
     std::vector<PlaylistInfo> getAllPlaylists();
     TrackList getPlaylistTracks(const Playlist& playlist, const std::unordered_map<int, Track>& tracks);
 
-    int insertPlaylist(const QString& name, int index, bool isAutoPlaylist, const QString& autoQuery);
+    int insertPlaylist(const QString& name, int index, bool isAutoPlaylist, const QString& autoQuery,
+                       const QString& autoSortQuery = {}, bool forceSorted = true,
+                       const QByteArray& extraProperties = {});
 
+    Track ensureTrack(Track track) const;
     bool savePlaylist(Playlist& playlist);
     bool saveModifiedPlaylists(const PlaylistList& playlists);
     bool removePlaylist(int id);
     bool renamePlaylist(int id, const QString& name);
 
 private:
-    bool insertPlaylistTrack(int playlistId, const Fooyin::Track& track, int index);
+    bool insertPlaylistTrack(int playlistId, int trackId, int index);
     bool insertPlaylistTracks(int playlistId, const TrackList& tracks);
     TrackList populatePlaylistTracks(const Playlist& playlist, const std::unordered_map<int, Track>& tracks);
 };

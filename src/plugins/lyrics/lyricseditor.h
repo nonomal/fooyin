@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,38 +30,36 @@ class QTextEdit;
 
 namespace Fooyin {
 class PlayerController;
-class SettingsManager;
 
 namespace Lyrics {
-class LyricsFinder;
-class LyricsSaver;
-
-class LyricsEditor : public PropertiesTabWidget
+class LyricsEditor : public QWidget
 {
     Q_OBJECT
 
 public:
-    LyricsEditor(const Track& track, std::shared_ptr<NetworkAccessManager> networkAccess, LyricsSaver* lyricsSaver,
-                 PlayerController* playerController, SettingsManager* settings, QWidget* parent = nullptr);
-    LyricsEditor(Lyrics lyrics, PlayerController* playerController, SettingsManager* settings,
-                 QWidget* parent = nullptr);
+    explicit LyricsEditor(PlayerController* playerController, QWidget* parent = nullptr);
 
-    void updateTrack(const Track& track);
+    void setTrack(const Track& track);
+    void setLyrics(const Lyrics& lyrics);
+    void setControlsEnabled(bool enabled);
 
-    [[nodiscard]] QString name() const override;
-    [[nodiscard]] QString layoutName() const override;
+    [[nodiscard]] QString text() const;
+    [[nodiscard]] const Lyrics& currentLyrics() const;
+    [[nodiscard]] Lyrics editedLyrics() const;
 
-    void apply() override;
+    void reset();
 
     [[nodiscard]] QSize sizeHint() const override;
 
-signals:
-    void lyricsEdited(const Fooyin::Lyrics::Lyrics& lyrics);
+Q_SIGNALS:
+    void textEdited();
+    void lyricsChanged();
+    void resetClicked();
 
 private:
+    [[nodiscard]] Lyrics lyricsFromText(const QString& text) const;
     void setupUi();
     void setupConnections();
-    void reset();
     void seek();
     void updateButtons();
     void highlightCurrentLine();
@@ -72,47 +70,20 @@ private:
     void removeAllTimestamps();
 
     Track m_track;
-    LyricsSaver* m_lyricsSaver;
-    PlayerController* m_playerController;
-    SettingsManager* m_settings;
-    std::shared_ptr<NetworkAccessManager> m_networkAccess;
-    LyricsFinder* m_lyricsFinder;
     Lyrics m_lyrics;
+    PlayerController* m_playerController;
 
     QPushButton* m_playPause;
     QPushButton* m_seek;
     QPushButton* m_reset;
-
     QPushButton* m_insert;
     QPushButton* m_insertNext;
     QPushButton* m_rewind;
     QPushButton* m_forward;
     QPushButton* m_remove;
     QPushButton* m_removeAll;
-
     QTextEdit* m_lyricsText;
     QColor m_currentLineColour;
-};
-
-class LyricsEditorDialog : public QDialog
-{
-    Q_OBJECT
-
-public:
-    LyricsEditorDialog(Lyrics lyrics, PlayerController* playerController, SettingsManager* settings,
-                       QWidget* parent = nullptr);
-
-    [[nodiscard]] LyricsEditor* editor() const;
-
-    void saveState();
-    void restoreState();
-
-    void accept() override;
-
-    [[nodiscard]] QSize sizeHint() const override;
-
-private:
-    LyricsEditor* m_editor;
 };
 } // namespace Lyrics
 } // namespace Fooyin

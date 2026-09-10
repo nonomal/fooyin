@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,13 +28,13 @@
 #include <core/internalcoresettings.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <utils/fileutils.h>
 #include <utils/fypaths.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDesktopServices>
 #include <QDir>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -84,8 +84,6 @@ private:
 
     QComboBox* m_language;
     std::map<QString, QString, SortLanguages> m_languageMap;
-
-    QCheckBox* m_preserveTimestamps;
 };
 
 GeneralPageWidget::GeneralPageWidget(SettingsManager* settings)
@@ -95,7 +93,6 @@ GeneralPageWidget::GeneralPageWidget(SettingsManager* settings)
     , m_showTray{new QCheckBox(tr("Show system tray icon"), this)}
     , m_minimiseToTray{new QCheckBox(tr("Minimise to tray on close"), this)}
     , m_language{new QComboBox(this)}
-    , m_preserveTimestamps{new QCheckBox(tr("Preserve timestamps"), this)}
 {
     m_waitForTracks->setToolTip(tr("Delay opening fooyin until all tracks have been loaded"));
 
@@ -108,23 +105,15 @@ GeneralPageWidget::GeneralPageWidget(SettingsManager* settings)
     startupGroupLayout->addWidget(m_waitForTracks, row++, 0, 1, 2);
     startupGroupLayout->setColumnStretch(1, 1);
 
-    auto* dirGroup       = new QGroupBox(tr("User Directories"), this);
+    auto* dirGroup       = new QGroupBox(tr("User Folders"), this);
     auto* dirGroupLayout = new QGridLayout(dirGroup);
 
-    auto* openConfig = new QPushButton(tr("Open Config Directory"), this);
-    auto* openShare  = new QPushButton(tr("Open Share Directory"), this);
+    auto* openConfig = new QPushButton(tr("Open Configuration Folder"), this);
+    auto* openShare  = new QPushButton(tr("Open Data Folder"), this);
 
     row = 0;
     dirGroupLayout->addWidget(openConfig, row, 0);
     dirGroupLayout->addWidget(openShare, row++, 1);
-
-    auto* taggingGroup       = new QGroupBox(tr("Tagging"), this);
-    auto* taggingGroupLayout = new QGridLayout(taggingGroup);
-
-    m_preserveTimestamps->setToolTip(tr("Preserve file timestamps when updating tags"));
-
-    row = 0;
-    taggingGroupLayout->addWidget(m_preserveTimestamps, row++, 0);
 
     auto* mainLayout = new QGridLayout(this);
 
@@ -135,7 +124,6 @@ GeneralPageWidget::GeneralPageWidget(SettingsManager* settings)
     mainLayout->addWidget(m_minimiseToTray, row++, 0, 1, 2);
     mainLayout->addWidget(startupGroup, row++, 0, 1, 2);
     mainLayout->addWidget(dirGroup, row++, 0, 1, 2);
-    mainLayout->addWidget(taggingGroup, row++, 0, 1, 2);
 
     mainLayout->setColumnStretch(1, 1);
     mainLayout->setRowStretch(mainLayout->rowCount(), 1);
@@ -150,8 +138,9 @@ GeneralPageWidget::GeneralPageWidget(SettingsManager* settings)
     addStartupBehaviour(tr("Remember from last run"), MainWindow::StartPrev);
 
     QObject::connect(m_showTray, &QCheckBox::toggled, m_minimiseToTray, &QWidget::setEnabled);
-    QObject::connect(openConfig, &QPushButton::clicked, this, []() { QDesktopServices::openUrl(Utils::configPath()); });
-    QObject::connect(openShare, &QPushButton::clicked, this, []() { QDesktopServices::openUrl(Utils::sharePath()); });
+    QObject::connect(openConfig, &QPushButton::clicked, this,
+                     []() { Utils::File::openDirectory(Utils::configPath()); });
+    QObject::connect(openShare, &QPushButton::clicked, this, []() { Utils::File::openDirectory(Utils::sharePath()); });
 }
 
 void GeneralPageWidget::load()
@@ -165,8 +154,6 @@ void GeneralPageWidget::load()
 
     m_showTray->setEnabled(QSystemTrayIcon::isSystemTrayAvailable());
     m_minimiseToTray->setEnabled(QSystemTrayIcon::isSystemTrayAvailable() && m_showTray->isChecked());
-
-    m_preserveTimestamps->setChecked(m_settings->value<Settings::Core::PreserveTimestamps>());
 }
 
 void GeneralPageWidget::apply()
@@ -188,7 +175,6 @@ void GeneralPageWidget::apply()
     m_settings->set<Settings::Gui::WaitForTracks>(m_waitForTracks->isChecked());
     m_settings->set<Settings::Gui::Internal::ShowTrayIcon>(m_showTray->isChecked());
     m_settings->set<Settings::Gui::Internal::TrayOnClose>(m_minimiseToTray->isChecked());
-    m_settings->set<Settings::Core::PreserveTimestamps>(m_preserveTimestamps->isChecked());
 }
 
 void GeneralPageWidget::reset()
@@ -198,7 +184,6 @@ void GeneralPageWidget::reset()
     m_settings->reset<Settings::Gui::WaitForTracks>();
     m_settings->reset<Settings::Gui::Internal::ShowTrayIcon>();
     m_settings->reset<Settings::Gui::Internal::TrayOnClose>();
-    m_settings->reset<Settings::Core::PreserveTimestamps>();
 }
 
 void GeneralPageWidget::loadLanguage()

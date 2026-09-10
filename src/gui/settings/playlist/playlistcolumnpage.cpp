@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 
 #include <gui/guiconstants.h>
 #include <gui/scripting/scripteditor.h>
+#include <gui/widgets/checkboxdelegate.h>
 #include <gui/widgets/extendabletableview.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -38,7 +39,7 @@ class PlaylistColumnPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit PlaylistColumnPageWidget(ActionManager* actionManager, PlaylistColumnRegistry* columnRegistry);
+    explicit PlaylistColumnPageWidget(PlaylistColumnRegistry* columnRegistry);
 
     void load() override;
     void apply() override;
@@ -47,7 +48,6 @@ public:
 private:
     void updateButtonState();
 
-    ActionManager* m_actionManager;
     PlaylistColumnRegistry* m_columnsRegistry;
 
     ExtendableTableView* m_columnList;
@@ -55,22 +55,24 @@ private:
     QToolButton* m_openEditor;
 };
 
-PlaylistColumnPageWidget::PlaylistColumnPageWidget(ActionManager* actionManager, PlaylistColumnRegistry* columnRegistry)
-    : m_actionManager{actionManager}
-    , m_columnsRegistry{columnRegistry}
-    , m_columnList{new ExtendableTableView(m_actionManager, this)}
+PlaylistColumnPageWidget::PlaylistColumnPageWidget(PlaylistColumnRegistry* columnRegistry)
+    : m_columnsRegistry{columnRegistry}
+    , m_columnList{new ExtendableTableView(this)}
     , m_model{new PlaylistColumnModel(m_columnsRegistry, this)}
     , m_openEditor{new QToolButton(this)}
 {
     m_columnList->setExtendableModel(m_model);
+    m_columnList->setItemDelegateForColumn(0, new CheckBoxDelegate(this));
 
     // Hide index column
-    m_columnList->hideColumn(0);
+    m_columnList->hideColumn(1);
 
-    m_columnList->setExtendableColumn(1);
+    m_columnList->setExtendableColumn(2);
     m_columnList->verticalHeader()->hide();
-    m_columnList->horizontalHeader()->setStretchLastSection(true);
+    m_columnList->horizontalHeader()->setStretchLastSection(false);
     m_columnList->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    m_columnList->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_columnList->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
 
     m_openEditor->setText(tr("Script Editor"));
     m_columnList->addCustomTool(m_openEditor);
@@ -84,9 +86,9 @@ PlaylistColumnPageWidget::PlaylistColumnPageWidget(ActionManager* actionManager,
     QObject::connect(m_openEditor, &QToolButton::clicked, this, [this]() {
         const auto selection    = m_columnList->selectionModel()->selectedIndexes();
         const QModelIndex index = selection.front();
-        ScriptEditor::openEditor(index.data().toString(), [this, index](const QString& script) {
-            m_model->setData(index, script, Qt::EditRole);
-        });
+        ScriptEditor::openEditor(
+            index.data(Qt::EditRole).toString(),
+            [this, index](const QString& script) { m_model->setData(index, script, Qt::EditRole); }, {}, this);
     });
 }
 
@@ -108,29 +110,30 @@ void PlaylistColumnPageWidget::reset()
 
 void PlaylistColumnPageWidget::updateButtonState()
 {
-    const auto selection  = m_columnList->selectionModel()->selectedIndexes();
-    const bool allDefault = std::ranges::all_of(
-        selection, [](const QModelIndex& index) { return index.data(Qt::UserRole).value<PlaylistColumn>().isDefault; });
-
-    if(selection.empty() || allDefault) {
+    const auto selection = m_columnList->selectionModel()->selectedIndexes();
+    if(selection.empty()) {
         m_openEditor->setDisabled(true);
         m_columnList->removeRowAction()->setDisabled(true);
         return;
     }
 
-    m_columnList->removeRowAction()->setEnabled(true);
-    m_openEditor->setEnabled(selection.size() == 1 && selection.front().column() == 2);
+    const bool hasCustom = std::ranges::any_of(selection, [](const QModelIndex& index) {
+        return !index.data(Qt::UserRole).value<PlaylistColumn>().isDefault;
+    });
+
+    m_columnList->removeRowAction()->setEnabled(hasCustom);
+    m_openEditor->setEnabled(selection.size() == 1
+                             && (selection.front().column() == 3 || selection.front().column() == 4));
 }
 
-PlaylistColumnPage::PlaylistColumnPage(ActionManager* actionManager, PlaylistColumnRegistry* columnRegistry,
-                                       SettingsManager* settings, QObject* parent)
+PlaylistColumnPage::PlaylistColumnPage(PlaylistColumnRegistry* columnRegistry, SettingsManager* settings,
+                                       QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::PlaylistColumns);
     setName(tr("Columns"));
     setCategory({tr("Playlist"), tr("Columns")});
-    setWidgetCreator(
-        [actionManager, columnRegistry] { return new PlaylistColumnPageWidget(actionManager, columnRegistry); });
+    setWidgetCreator([columnRegistry] { return new PlaylistColumnPageWidget(columnRegistry); });
 }
 } // namespace Fooyin
 

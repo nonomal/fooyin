@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,11 +21,9 @@
 
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/plugin.h>
-#include <core/track.h>
 #include <gui/plugins/guiplugin.h>
 
 namespace Fooyin::VuMeter {
-class VuMeterSettings;
 class VuMeterWidget;
 
 class VuMeterPlugin : public QObject,
@@ -46,7 +44,5 @@ private:
     EngineController* m_engine;
     SettingsManager* m_settings;
     WidgetProvider* m_widgetProvider;
-
-    std::unique_ptr<VuMeterSettings> m_vuMeterSettings;
 };
 } // namespace Fooyin::VuMeter

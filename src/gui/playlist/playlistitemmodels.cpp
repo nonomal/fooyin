@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,44 +19,86 @@
 
 #include "playlistitemmodels.h"
 
-#include <core/scripting/scriptparser.h>
+#include <gui/scripting/richtextutils.h>
 
 #include <QFontMetrics>
 
+constexpr auto ContainerVerticalPadding = 8;
+
 namespace Fooyin {
-PlaylistContainerItem::PlaylistContainerItem(bool isSimple)
-    : m_simple{isSimple}
+namespace {
+QSize singleLineTrackSize(const RichText& richText)
+{
+    QSize blockSize;
+
+    for(const auto& [blockText, format] : richText.blocks) {
+        const QFontMetrics fm{format.font};
+        blockSize.rwidth() += fm.horizontalAdvance(blockText);
+    }
+
+    return blockSize;
+}
+
+int singleLineTrackHeight(const RichText& richText)
+{
+    TextBaselineMetrics baseline = textBaselineMetrics({});
+
+    for(const auto& block : richText.blocks) {
+        const QFont font = resolvedRichTextFont(block.format, {});
+        const QFontMetrics fm{font};
+        baseline.expand(fm);
+    }
+
+    return baseline.height();
+}
+
+int trackExtraLineHeight(const RichText& richText)
+{
+    if(richText.empty()) {
+        return 0;
+    }
+
+    if(!richTextHasLineBreaks(richText)) {
+        return 0;
+    }
+
+    const auto lines = splitRichTextLines(richText);
+    int height{0};
+    for(size_t i{1}; i < lines.size(); ++i) {
+        height += singleLineTrackHeight(lines.at(i));
+    }
+    return height;
+}
+} // namespace
+
+PlaylistContainerItem::PlaylistContainerItem(LayoutKind layoutKind)
+    : m_layoutKind{layoutKind}
     , m_rowHeight{0}
 { }
 
-TrackList PlaylistContainerItem::tracks() const
-{
-    return m_tracks;
-}
-
-int PlaylistContainerItem::trackCount() const
-{
-    return static_cast<int>(m_tracks.size());
-}
-
-RichScript PlaylistContainerItem::title() const
+const RichText& PlaylistContainerItem::title() const
 {
     return m_title;
 }
 
-RichScript PlaylistContainerItem::subtitle() const
+const RichText& PlaylistContainerItem::subtitle() const
 {
     return m_subtitle;
 }
 
-RichScript PlaylistContainerItem::sideText() const
+const RichText& PlaylistContainerItem::sideText() const
 {
     return m_sideText;
 }
 
-RichScript PlaylistContainerItem::info() const
+const RichText& PlaylistContainerItem::info() const
 {
     return m_info;
+}
+
+PlaylistContainerItem::LayoutKind PlaylistContainerItem::layoutKind() const
+{
+    return m_layoutKind;
 }
 
 int PlaylistContainerItem::rowHeight() const
@@ -66,47 +108,44 @@ int PlaylistContainerItem::rowHeight() const
 
 QSize PlaylistContainerItem::size() const
 {
+    if(!m_widthCalculated) {
+        m_size            = calculateSize(true);
+        m_widthCalculated = true;
+    }
     return m_size;
 }
 
-void PlaylistContainerItem::updateGroupText(ScriptParser* parser, ScriptFormatter* formatter)
+int PlaylistContainerItem::height() const
 {
-    if(m_tracks.empty()) {
-        return;
-    }
-
-    if(!parser || !formatter) {
-        return;
-    }
-
-    auto evaluateBlocks = [this, parser, formatter](RichScript& script) {
-        script.text.clear();
-        const auto evalScript = parser->evaluate(script.script, m_tracks);
-        script.text           = formatter->evaluate(evalScript);
-    };
-
-    evaluateBlocks(m_title);
-    evaluateBlocks(m_subtitle);
-    evaluateBlocks(m_info);
-    evaluateBlocks(m_sideText);
+    return m_size.height();
 }
 
-void PlaylistContainerItem::setTitle(const RichScript& title)
+int PlaylistContainerItem::scriptIndex() const
+{
+    return m_scriptIndex;
+}
+
+const std::optional<Track>& PlaylistContainerItem::coverTrack() const
+{
+    return m_coverTrack;
+}
+
+void PlaylistContainerItem::setTitle(const RichText& title)
 {
     m_title = title;
 }
 
-void PlaylistContainerItem::setSubtitle(const RichScript& subtitle)
+void PlaylistContainerItem::setSubtitle(const RichText& subtitle)
 {
     m_subtitle = subtitle;
 }
 
-void PlaylistContainerItem::setSideText(const RichScript& text)
+void PlaylistContainerItem::setSideText(const RichText& text)
 {
     m_sideText = text;
 }
 
-void PlaylistContainerItem::setInfo(const RichScript& info)
+void PlaylistContainerItem::setInfo(const RichText& info)
 {
     m_info = info;
 }
@@ -116,38 +155,39 @@ void PlaylistContainerItem::setRowHeight(int height)
     m_rowHeight = height;
 }
 
-void PlaylistContainerItem::addTrack(const Track& track)
+void PlaylistContainerItem::setScriptIndex(int index)
 {
-    m_tracks.emplace_back(track);
+    m_scriptIndex = index;
 }
 
-void PlaylistContainerItem::addTracks(const TrackList& tracks)
+void PlaylistContainerItem::setCoverTrack(const Track& track)
 {
-    std::ranges::copy(tracks, std::back_inserter(m_tracks));
+    m_coverTrack = track;
 }
 
-void PlaylistContainerItem::clearTracks()
+void PlaylistContainerItem::clearCoverTrack()
 {
-    m_tracks.clear();
+    m_coverTrack.reset();
 }
 
 void PlaylistContainerItem::calculateSize()
 {
+    m_size            = calculateSize(false);
+    m_widthCalculated = m_rowHeight > 0;
+}
+
+QSize PlaylistContainerItem::calculateSize(bool measureWidth) const
+{
     if(m_rowHeight > 0) {
-        m_size.setHeight(m_rowHeight);
-        return;
+        return {m_size.width(), m_rowHeight};
     }
 
     QSize totalSize;
 
-    auto addSize = [&totalSize](const RichScript& script, bool addToTotal = true) {
-        QSize blockSize;
-        for(const auto& title : script.text.blocks) {
-            const QFontMetrics fm{title.format.font};
-            const QRect br = fm.boundingRect(title.text);
-            blockSize.setWidth(blockSize.width() + br.width());
-            blockSize.setHeight(std::max(blockSize.height(), br.height()));
-        }
+    auto addSize = [&totalSize, measureWidth](const RichText& text, bool addToTotal = true) {
+        const auto metrics = measureWidth ? measureRichText(text) : RichTextMetrics{.height = richTextHeight(text)};
+        const QSize blockSize{metrics.width, metrics.height};
+
         if(addToTotal) {
             totalSize.setWidth(totalSize.width() + blockSize.width());
             totalSize.setHeight(totalSize.height() + blockSize.height() + 4);
@@ -155,77 +195,93 @@ void PlaylistContainerItem::calculateSize()
         return blockSize;
     };
 
-    if(!m_title.text.empty()) {
+    if(!m_title.empty()) {
         addSize(m_title);
     }
 
     QSize subtitleSize;
 
-    if(!m_subtitle.text.empty()) {
+    if(!m_subtitle.empty()) {
         subtitleSize = addSize(m_subtitle, false);
     }
 
-    if(!m_sideText.text.empty()) {
+    if(!m_sideText.empty()) {
         const QSize sideSize = addSize(m_sideText, false);
         subtitleSize.setWidth(subtitleSize.width() + sideSize.width());
         subtitleSize.setHeight(std::max(subtitleSize.height(), sideSize.height()));
     }
 
-    if(m_simple) {
-        totalSize.setWidth(totalSize.width() + subtitleSize.width());
-        totalSize.setHeight(std::max(totalSize.height(), subtitleSize.height()));
-    }
-    else {
-        totalSize.setWidth(totalSize.width() + subtitleSize.width());
-        totalSize.setHeight(totalSize.height() + subtitleSize.height() + 4);
+    switch(m_layoutKind) {
+        case LayoutKind::SimpleHeader: {
+            totalSize.setWidth(totalSize.width() + subtitleSize.width());
+            totalSize.setHeight(std::max(totalSize.height(), subtitleSize.height()));
+            const bool hasMultiline = richTextHasLineBreaks(m_title) || richTextHasLineBreaks(m_subtitle)
+                                   || richTextHasLineBreaks(m_sideText) || richTextHasLineBreaks(m_info);
+            if(hasMultiline) {
+                totalSize.rheight() += ContainerVerticalPadding;
+            }
+            break;
+        }
+        case LayoutKind::Subheader: {
+            totalSize.setWidth(totalSize.width() + subtitleSize.width());
+            totalSize.setHeight(std::max(totalSize.height(), subtitleSize.height()) + ContainerVerticalPadding);
+            break;
+        }
+        case LayoutKind::Header: {
+            totalSize.setWidth(totalSize.width() + subtitleSize.width());
+            totalSize.setHeight(totalSize.height() + subtitleSize.height() + 4);
 
-        if(!m_info.text.empty()) {
-            addSize(m_info);
+            if(!m_info.empty()) {
+                addSize(m_info);
+            }
+            break;
         }
     }
 
-    m_size = totalSize;
+    return totalSize;
 }
 
-PlaylistTrackItem::PlaylistTrackItem(std::vector<RichScript> columns, const PlaylistTrack& track)
+PlaylistTrackItem::PlaylistTrackItem(std::vector<RichText> columns, PlaylistTrack track)
     : m_columns{std::move(columns)}
-    , m_track{track}
+    , m_track{std::move(track)}
     , m_rowHeight{0}
 { }
 
-PlaylistTrackItem::PlaylistTrackItem(RichScript left, RichScript right, const PlaylistTrack& track)
+PlaylistTrackItem::PlaylistTrackItem(RichText left, RichText right, PlaylistTrack track)
     : m_left{std::move(left)}
     , m_right{std::move(right)}
-    , m_track{track}
+    , m_track{std::move(track)}
     , m_rowHeight{0}
     , m_depth{0}
 { }
 
-std::vector<RichScript> PlaylistTrackItem::columns() const
+const std::vector<RichText>& PlaylistTrackItem::columns() const
 {
     return m_columns;
 }
 
-RichScript PlaylistTrackItem::column(int column) const
+const RichText& PlaylistTrackItem::column(int column) const
 {
+    static const RichText EmptyText;
+
     if(column < 0 || std::cmp_greater_equal(column, m_columns.size())) {
-        return {};
+        return EmptyText;
     }
 
     return m_columns.at(column);
 }
 
-RichScript PlaylistTrackItem::left() const
+const RichText& PlaylistTrackItem::left() const
 {
     return m_left;
 }
 
-RichScript PlaylistTrackItem::right() const
+const RichText& PlaylistTrackItem::right() const
 {
     return m_right;
 }
 
-PlaylistTrack PlaylistTrackItem::track() const
+const PlaylistTrack& PlaylistTrackItem::track() const
 {
     return m_track;
 }
@@ -247,22 +303,39 @@ int PlaylistTrackItem::depth() const
 
 QSize PlaylistTrackItem::size(int column) const
 {
-    if(column < 0 || std::cmp_greater_equal(column, m_sizes.size())) {
+    if(column < 0) {
         return {};
     }
 
-    return m_sizes.at(column);
+    if(m_sizes.empty()) {
+        calculateSize();
+    }
+
+    if(!m_columns.empty()) {
+        if(std::cmp_greater_equal(column, m_columns.size())) {
+            return {};
+        }
+        return m_sizes.at(column);
+    }
+
+    if(column > 0) {
+        return {};
+    }
+
+    return m_sizes.front();
 }
 
-void PlaylistTrackItem::setColumns(const std::vector<RichScript>& columns)
+void PlaylistTrackItem::setColumns(const std::vector<RichText>& columns)
 {
     m_columns = columns;
+    m_sizes.clear();
 }
 
-void PlaylistTrackItem::setLeftRight(const RichScript& left, const RichScript& right)
+void PlaylistTrackItem::setLeftRight(const RichText& left, const RichText& right)
 {
     m_left  = left;
     m_right = right;
+    m_sizes.clear();
 }
 
 void PlaylistTrackItem::setTrack(const PlaylistTrack& track)
@@ -278,6 +351,7 @@ void PlaylistTrackItem::setIndex(int index)
 void PlaylistTrackItem::setRowHeight(int height)
 {
     m_rowHeight = height;
+    m_sizes.clear();
 }
 
 void PlaylistTrackItem::setDepth(int depth)
@@ -292,47 +366,94 @@ void PlaylistTrackItem::removeColumn(int column)
     }
 
     m_columns.erase(m_columns.cbegin() + column);
+    m_sizes.clear();
 }
 
-void PlaylistTrackItem::calculateSize()
+void PlaylistTrackItem::calculateHeight() const
 {
-    auto addSize = [](const RichScript& script) {
-        QSize blockSize;
-        for(const auto& title : script.text.blocks) {
-            const QFontMetrics fm{title.format.font};
-            const QRect br = fm.boundingRect(title.text);
-            blockSize.setWidth(blockSize.width() + br.width());
-        }
-
-        return blockSize;
-    };
+    m_sizes.clear();
 
     if(!m_columns.empty()) {
-        for(const auto& col : m_columns) {
-            QSize colSize = addSize(col);
-            if(m_rowHeight > 0) {
-                colSize.setHeight(m_rowHeight);
+        int calculatedHeight{m_rowHeight};
+        if(calculatedHeight <= 0) {
+            for(const auto& column : m_columns) {
+                calculatedHeight = std::max(calculatedHeight, trackExtraLineHeight(column));
             }
-            m_sizes.emplace_back(colSize);
         }
+
+        m_sizes.reserve(m_columns.size());
+        for(size_t i{0}; i < m_columns.size(); ++i) {
+            m_sizes.emplace_back(0, calculatedHeight);
+        }
+
+        return;
     }
-    else {
-        QSize totalSize;
 
-        if(!m_left.text.empty()) {
-            totalSize = addSize(m_left);
-        }
+    const int calculatedHeight
+        = m_rowHeight > 0 ? m_rowHeight : std::max(trackExtraLineHeight(m_left), trackExtraLineHeight(m_right));
+    m_sizes.emplace_back(0, calculatedHeight);
+}
 
-        if(!m_right.text.empty()) {
-            const QSize rightSize = addSize(m_right);
-            totalSize.setWidth(totalSize.width() + rightSize.width());
+void PlaylistTrackItem::calculateSize() const
+{
+    m_sizes.clear();
+
+    if(!m_columns.empty()) {
+        int calculatedHeight{0};
+        std::vector<QSize> metrics;
+        metrics.reserve(m_columns.size());
+
+        for(const auto& column : m_columns) {
+            if(richTextHasLineBreaks(column)) {
+                const auto columnMetrics = measureRichText(column);
+                metrics.emplace_back(columnMetrics.width, columnMetrics.height);
+            }
+            else {
+                metrics.emplace_back(singleLineTrackSize(column));
+            }
+
+            calculatedHeight = std::max(calculatedHeight, richTextExtraLineHeight(column));
         }
 
         if(m_rowHeight > 0) {
-            totalSize.setHeight(m_rowHeight);
+            calculatedHeight = m_rowHeight;
         }
 
-        m_sizes.emplace_back(totalSize);
+        m_sizes.reserve(metrics.size());
+
+        for(const auto& columnSize : metrics) {
+            m_sizes.emplace_back(columnSize.width(), calculatedHeight);
+        }
+
+        return;
     }
+
+    QSize leftMetrics;
+    if(richTextHasLineBreaks(m_left)) {
+        const auto metrics = measureRichText(m_left);
+        leftMetrics        = {metrics.width, metrics.height};
+    }
+    else {
+        leftMetrics = singleLineTrackSize(m_left);
+    }
+
+    QSize rightMetrics;
+    if(richTextHasLineBreaks(m_right)) {
+        const auto metrics = measureRichText(m_right);
+        rightMetrics       = {metrics.width, metrics.height};
+    }
+    else {
+        rightMetrics = singleLineTrackSize(m_right);
+    }
+
+    int calculatedHeight{0};
+    if(m_rowHeight > 0) {
+        calculatedHeight = m_rowHeight;
+    }
+    else {
+        calculatedHeight = std::max(richTextExtraLineHeight(m_left), richTextExtraLineHeight(m_right));
+    }
+
+    m_sizes.emplace_back(leftMetrics.width() + rightMetrics.width(), calculatedHeight);
 }
 } // namespace Fooyin

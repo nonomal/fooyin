@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,6 +37,8 @@ struct SettingsCategory
     QTabWidget* tabWidget{nullptr};
     PageList pages{};
     int index{-1};
+    int order{-1};
+    SettingsPagePosition position{SettingsPagePosition::Default};
 
     bool operator==(const SettingsCategory& other) const
     {

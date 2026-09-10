@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,8 @@
 #include "lyricsconstants.h"
 #include "lyricssettings.h"
 
+#include <gui/guiconstants.h>
+#include <gui/widgets/scriptlineedit.h>
 #include <gui/widgets/slidereditor.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -29,8 +31,6 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
-#include <QPlainTextEdit>
 
 using namespace Qt::StringLiterals;
 
@@ -53,9 +53,9 @@ private:
     QCheckBox* m_skipRemaining;
     QCheckBox* m_skipExternal;
 
-    QLineEdit* m_titleParam;
-    QLineEdit* m_artistParam;
-    QLineEdit* m_albumParam;
+    ScriptLineEdit* m_titleParam;
+    ScriptLineEdit* m_artistParam;
+    ScriptLineEdit* m_albumParam;
     SliderEditor* m_matchThreshold;
 };
 
@@ -64,17 +64,26 @@ LyricsSearchingPageWidget::LyricsSearchingPageWidget(SettingsManager* settings)
     , m_autoSearch{new QCheckBox(tr("Automatically search for lyrics on starting playback"), this)}
     , m_skipRemaining{new QCheckBox(tr("Skip remaining sources when lyrics are found"), this)}
     , m_skipExternal{new QCheckBox(tr("Skip external sources if local lyrics are found"), this)}
-    , m_titleParam{new QLineEdit(this)}
-    , m_artistParam{new QLineEdit(this)}
-    , m_albumParam{new QLineEdit(this)}
+    , m_titleParam{new ScriptLineEdit(this)}
+    , m_artistParam{new ScriptLineEdit(this)}
+    , m_albumParam{new ScriptLineEdit(this)}
     , m_matchThreshold{new SliderEditor(tr("Minimum match threshold"), this)}
 {
+    auto* behaviourGroup  = new QGroupBox(tr("Behaviour"), this);
+    auto* behaviourLayout = new QGridLayout(behaviourGroup);
+
+    int row{0};
+    behaviourLayout->addWidget(m_autoSearch, row++, 0);
+    behaviourLayout->addWidget(m_skipRemaining, row++, 0);
+    behaviourLayout->addWidget(m_skipExternal, row++, 0);
+
     auto* paramsGroup  = new QGroupBox(tr("Search parameters"), this);
     auto* paramsLayout = new QGridLayout(paramsGroup);
 
     m_matchThreshold->setRange(0, 100);
+    m_autoSearch->setToolTip(tr("Only local lyrics will be used if unchecked"));
 
-    int row{0};
+    row = 0;
     paramsLayout->addWidget(new QLabel(tr("Title") + ":"_L1, this), row, 0);
     paramsLayout->addWidget(m_titleParam, row++, 1);
     paramsLayout->addWidget(new QLabel(tr("Artist") + ":"_L1, this), row, 0);
@@ -83,49 +92,46 @@ LyricsSearchingPageWidget::LyricsSearchingPageWidget(SettingsManager* settings)
     paramsLayout->addWidget(m_albumParam, row++, 1);
     paramsLayout->addWidget(m_matchThreshold, row++, 0, 1, 2);
 
-    m_autoSearch->setToolTip(tr("Only local lyrics will be used if unchecked"));
-
     auto* layout = new QGridLayout(this);
 
     row = 0;
-    layout->addWidget(m_autoSearch, row++, 0);
-    layout->addWidget(m_skipRemaining, row++, 0);
-    layout->addWidget(m_skipExternal, row++, 0);
+    layout->addWidget(behaviourGroup, row++, 0);
     layout->addWidget(paramsGroup, row++, 0);
     layout->setRowStretch(layout->rowCount(), 1);
 }
 
 void LyricsSearchingPageWidget::load()
 {
-    m_autoSearch->setChecked(m_settings->value<Settings::Lyrics::AutoSearch>());
-    m_skipRemaining->setChecked(m_settings->value<Settings::Lyrics::SkipRemaining>());
-    m_skipExternal->setChecked(m_settings->value<Settings::Lyrics::SkipExternal>());
-    m_titleParam->setText(m_settings->value<Settings::Lyrics::TitleField>());
-    m_artistParam->setText(m_settings->value<Settings::Lyrics::ArtistField>());
-    m_albumParam->setText(m_settings->value<Settings::Lyrics::AlbumField>());
-    m_matchThreshold->setValue(m_settings->value<Settings::Lyrics::MatchThreshold>());
+    m_autoSearch->setChecked(m_settings->fileValue(Settings::AutoSearch, false).toBool());
+    m_skipRemaining->setChecked(m_settings->fileValue(Settings::SkipRemaining, true).toBool());
+    m_skipExternal->setChecked(m_settings->fileValue(Settings::SkipExternal, true).toBool());
+    m_titleParam->setText(m_settings->fileValue(Settings::TitleField, u"%title%"_s).toString());
+    m_artistParam->setText(m_settings->fileValue(Settings::ArtistField, u"%artist%"_s).toString());
+    m_albumParam->setText(m_settings->fileValue(Settings::AlbumField, u"%album%"_s).toString());
+    m_matchThreshold->setValue(m_settings->fileValue(Settings::MatchThreshold, 75).toInt());
 }
 
 void LyricsSearchingPageWidget::apply()
 {
-    m_settings->set<Settings::Lyrics::AutoSearch>(m_autoSearch->isChecked());
-    m_settings->set<Settings::Lyrics::SkipRemaining>(m_skipRemaining->isChecked());
-    m_settings->set<Settings::Lyrics::SkipExternal>(m_skipExternal->isChecked());
-    m_settings->set<Settings::Lyrics::TitleField>(m_titleParam->text());
-    m_settings->set<Settings::Lyrics::ArtistField>(m_artistParam->text());
-    m_settings->set<Settings::Lyrics::AlbumField>(m_albumParam->text());
-    m_settings->set<Settings::Lyrics::MatchThreshold>(m_matchThreshold->value());
+    m_settings->fileSet(Settings::AutoSearch, m_autoSearch->isChecked());
+    m_settings->fileSet(Settings::SkipRemaining, m_skipRemaining->isChecked());
+    m_settings->fileSet(Settings::SkipExternal, m_skipExternal->isChecked());
+    m_settings->fileSet(Settings::TitleField, m_titleParam->text());
+    m_settings->fileSet(Settings::ArtistField, m_artistParam->text());
+    m_settings->fileSet(Settings::AlbumField, m_albumParam->text());
+    m_settings->fileSet(Settings::MatchThreshold, m_matchThreshold->value());
 }
 
 void LyricsSearchingPageWidget::reset()
 {
-    m_settings->reset<Settings::Lyrics::AutoSearch>();
-    m_settings->reset<Settings::Lyrics::SkipRemaining>();
-    m_settings->reset<Settings::Lyrics::SkipExternal>();
-    m_settings->reset<Settings::Lyrics::TitleField>();
-    m_settings->reset<Settings::Lyrics::ArtistField>();
-    m_settings->reset<Settings::Lyrics::AlbumField>();
-    m_settings->reset<Settings::Lyrics::MatchThreshold>();
+    m_settings->fileRemove(Settings::AutoSearch);
+    m_settings->fileRemove(Settings::SkipRemaining);
+    m_settings->fileRemove(Settings::SkipExternal);
+    m_settings->fileRemove(Settings::TitleField);
+    m_settings->fileRemove(Settings::ArtistField);
+    m_settings->fileRemove(Settings::AlbumField);
+    m_settings->fileRemove(Settings::MatchThreshold);
+    load();
 }
 
 LyricsSearchingPage::LyricsSearchingPage(SettingsManager* settings, QObject* parent)
@@ -134,6 +140,7 @@ LyricsSearchingPage::LyricsSearchingPage(SettingsManager* settings, QObject* par
     setId(Constants::Page::LyricsSearching);
     setName(tr("Searching"));
     setCategory({tr("Lyrics")});
+    setRelativePosition(SettingsPageRelativePosition::After, ::Fooyin::Constants::Page::PlaylistGeneral);
     setWidgetCreator([settings] { return new LyricsSearchingPageWidget(settings); });
 }
 } // namespace Fooyin::Lyrics

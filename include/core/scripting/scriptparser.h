@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,15 +22,21 @@
 #include "fycore_export.h"
 
 #include "expression.h"
-#include "scriptregistry.h"
+#include "scripttypes.h"
 
 #include <core/playlist/playlist.h>
 
-#include <QObject>
+#include <cstdint>
+#include <functional>
 
 namespace Fooyin {
-class ScriptParserPrivate;
+class ScriptRuntime;
+class ScriptVariableProvider;
+class ScriptFunctionProvider;
 
+/*!
+ * Parse error emitted by the script parser.
+ */
 struct ScriptError
 {
     int position;
@@ -39,8 +45,23 @@ struct ScriptError
 };
 using ErrorList = std::vector<ScriptError>;
 
+enum class ScriptWhitespaceMode : uint8_t
+{
+    IgnoreLayout = 0,
+    Preserve,
+};
+
+struct ScriptEvaluationOptions
+{
+    ScriptWhitespaceMode whitespaceMode{ScriptWhitespaceMode::IgnoreLayout};
+};
+
+/*!
+ * Parsed script plus cache identity and parse errors.
+ */
 struct ParsedScript
 {
+    uint64_t cacheId{0};
     QString input;
     ExpressionList expressions;
     ErrorList errors;
@@ -53,43 +74,71 @@ struct ParsedScript
 
 /*!
  * Parses and evaluates scripts for a given Track, TrackList or Playlist.
- * @note this class will take ownership of ScriptRegistry if passed in the constructor.
  */
 class FYCORE_EXPORT ScriptParser
 {
 public:
     ScriptParser();
-    explicit ScriptParser(ScriptRegistry* registry);
-    virtual ~ScriptParser();
+    ~ScriptParser();
 
-    [[nodiscard]] ScriptRegistry* registry() const;
+    /*!
+     * Installs all variables exported by `provider`.
+     */
+    void addProvider(const ScriptVariableProvider& provider);
+    /*!
+     * Installs all functions exported by `provider`.
+     */
+    void addProvider(const ScriptFunctionProvider& provider);
 
     ParsedScript parse(const QString& input);
     ParsedScript parseQuery(const QString& input);
 
+    [[nodiscard]] static bool canEvaluateAsQuery(const ParsedScript& input);
+    [[nodiscard]] static bool containsQueryExpression(const ParsedScript& input);
+
     QString evaluate(const QString& input);
     QString evaluate(const ParsedScript& input);
+    QString evaluate(const QString& input, const ScriptContext& context);
+    QString evaluate(const QString& input, const ScriptContext& context, const ScriptEvaluationOptions& options);
+    QString evaluate(const ParsedScript& input, const ScriptContext& context);
 
     QString evaluate(const QString& input, const Track& track);
     QString evaluate(const ParsedScript& input, const Track& track);
+    QString evaluate(const QString& input, const Track& track, const ScriptContext& context);
+    QString evaluate(const QString& input, const Track& track, const ScriptContext& context,
+                     const ScriptEvaluationOptions& options);
+    QString evaluate(const ParsedScript& input, const Track& track, const ScriptContext& context);
 
     QString evaluate(const QString& input, const TrackList& tracks);
     QString evaluate(const ParsedScript& input, const TrackList& tracks);
+    QString evaluate(const QString& input, const TrackList& tracks, const ScriptContext& context);
+    QString evaluate(const QString& input, const TrackList& tracks, const ScriptContext& context,
+                     const ScriptEvaluationOptions& options);
+    QString evaluate(const ParsedScript& input, const TrackList& tracks, const ScriptContext& context);
 
     QString evaluate(const QString& input, const Playlist& playlist);
     QString evaluate(const ParsedScript& input, const Playlist& playlist);
+    QString evaluate(const QString& input, const Playlist& playlist, const ScriptContext& context);
+    QString evaluate(const QString& input, const Playlist& playlist, const ScriptContext& context,
+                     const ScriptEvaluationOptions& options);
+    QString evaluate(const ParsedScript& input, const Playlist& playlist, const ScriptContext& context);
 
-    TrackList filter(const QString& input, const TrackList& tracks);
-    TrackList filter(const ParsedScript& input, const TrackList& tracks);
+    void withContext(const ScriptContext& context, const std::function<void()>& operation);
 
-    PlaylistTrackList filter(const QString& input, const PlaylistTrackList& tracks);
-    PlaylistTrackList filter(const ParsedScript& input, const PlaylistTrackList& tracks);
-
+    /*!
+     * Returns the maximum number of cached parsed and bound scripts.
+     */
     [[nodiscard]] int cacheLimit() const;
+    /*!
+     * Sets the maximum number of cached parsed and bound scripts.
+     */
     void setCacheLimit(int limit);
+    /*!
+     * Clears the parse and bind caches.
+     */
     void clearCache();
 
 private:
-    std::unique_ptr<ScriptParserPrivate> p;
+    std::unique_ptr<ScriptRuntime> p;
 };
 } // namespace Fooyin

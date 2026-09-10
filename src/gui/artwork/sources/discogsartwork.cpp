@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -306,7 +306,7 @@ void DiscogsArtwork::handleArtistReply(const QStringList& artists, QNetworkReply
 void DiscogsArtwork::endSearchIfFinished()
 {
     if(m_requests.empty()) {
-        emit searchResult(m_results);
+        Q_EMIT searchResult(m_results);
     }
 }
 } // namespace Fooyin

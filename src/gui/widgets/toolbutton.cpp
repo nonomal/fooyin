@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,23 +19,49 @@
 
 #include <gui/widgets/toolbutton.h>
 
+#include <gui/guisettings.h>
+#include <utils/settings/settingsmanager.h>
+
 #include <QStyleOptionToolButton>
 #include <QStylePainter>
 
 namespace Fooyin {
+namespace {
+void applyToolButtonStyle(ToolButton* button, int value)
+{
+    const auto options = static_cast<Settings::Gui::ToolButtonOptions>(value);
+    button->setStretchEnabled(options & Settings::Gui::Stretch);
+    button->setAutoRaise(!(options & Settings::Gui::Raise));
+}
+} // namespace
+
 ToolButton::ToolButton(QWidget* parent)
     : QToolButton{parent}
     , m_padding{20}
     , m_minimumSize{10}
     , m_maximumSize{100}
     , m_stretchEnabled{false}
+    , m_menuIndicatorHidden{true}
 { }
+
+ToolButton::ToolButton(SettingsManager* settings, QWidget* parent)
+    : ToolButton{parent}
+{
+    applyToolButtonStyle(this, settings->value<Settings::Gui::ToolButtonStyle>());
+    settings->subscribe<Settings::Gui::ToolButtonStyle>(this, [this](int value) { applyToolButtonStyle(this, value); });
+}
 
 void ToolButton::setStretchEnabled(bool enabled)
 {
     m_stretchEnabled = enabled;
     setSizePolicy(enabled ? QSizePolicy::Preferred : QSizePolicy::Fixed,
                   enabled ? QSizePolicy::Preferred : QSizePolicy::Fixed);
+    update();
+}
+
+void ToolButton::setMenuIndicatorHidden(bool hidden)
+{
+    m_menuIndicatorHidden = hidden;
     update();
 }
 
@@ -57,7 +83,7 @@ void ToolButton::setMaximumIconSize(int size)
 void ToolButton::enterEvent(QEnterEvent* event)
 {
     QToolButton::enterEvent(event);
-    emit entered();
+    Q_EMIT entered();
 }
 
 void ToolButton::paintEvent(QPaintEvent* /*event*/)
@@ -66,8 +92,18 @@ void ToolButton::paintEvent(QPaintEvent* /*event*/)
     QStyleOptionToolButton opt;
     initStyleOption(&opt);
 
-    // Remove menu indicator
-    opt.features &= ~QStyleOptionToolButton::HasMenu;
+    const bool checked = opt.state & QStyle::State_On;
+    if(autoRaise() && checked) {
+        opt.state &= ~QStyle::State_On;
+
+        const QColor activeColour = opt.palette.color(QPalette::Active, QPalette::Highlight);
+        opt.palette.setColor(QPalette::ButtonText, activeColour);
+        opt.palette.setColor(QPalette::WindowText, activeColour);
+    }
+
+    if(m_menuIndicatorHidden) {
+        opt.features &= ~QStyleOptionToolButton::HasMenu;
+    }
 
     if(m_stretchEnabled) {
         const auto rect    = style()->subControlRect(QStyle::CC_ToolButton, &opt, QStyle::SC_ToolButton, this);

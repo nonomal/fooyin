@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,8 @@
 #include "searchdialog.h"
 
 #include "playlist/playlistcontroller.h"
-#include "playlist/playlistinteractor.h"
+#include "playlist/playlistitem.h"
+#include "playlist/playlistuicontroller.h"
 #include "playlist/playlistview.h"
 #include "playlist/playlistwidget.h"
 
@@ -28,12 +29,15 @@
 #include <core/coresettings.h>
 #include <gui/coverprovider.h>
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
+#include <gui/playlist/playlistinteractor.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/signalthrottler.h>
 #include <utils/utils.h>
 
 #include <QAction>
 #include <QDesktopServices>
+#include <QItemSelectionModel>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
@@ -46,19 +50,26 @@ using namespace std::chrono_literals;
 using namespace Qt::StringLiterals;
 
 constexpr auto AutoSelect    = "Searching/AutoSelect";
+constexpr auto ShowAll       = "Searching/ShowAll";
 constexpr auto PlaylistState = "Searching/PlaylistState";
 constexpr auto LibraryState  = "Searching/LibraryState";
 
 namespace Fooyin {
 SearchDialog::SearchDialog(ActionManager* actionManager, PlaylistInteractor* playlistInteractor,
-                           CoverProvider* coverProvider, Application* core, PlaylistWidget::Mode mode, QWidget* parent)
+                           CoverProvider* coverProvider, Application* core, GuiStyleProvider* styleProvider,
+                           TrackSelectionController* selectionController, Target target, QWidget* parent)
     : QDialog{parent}
-    , m_mode{mode}
+    , m_target{target}
     , m_playlistInteractor{playlistInteractor}
     , m_settings{core->settingsManager()}
     , m_searchBar{new QLineEdit(this)}
-    , m_view{new PlaylistWidget(actionManager, playlistInteractor, coverProvider, core, m_mode, this)}
+    , m_view{m_target == Target::Library
+                 ? PlaylistWidget::createDetachedLibrarySearch(actionManager, playlistInteractor, selectionController,
+                                                               coverProvider, core, styleProvider, this)
+                 : PlaylistWidget::createDetachedPlaylistSearch(actionManager, playlistInteractor, selectionController,
+                                                                coverProvider, core, styleProvider, this)}
     , m_autoSelect{m_settings->fileValue(AutoSelect, false).toBool()}
+    , m_showAll{m_settings->fileValue(ShowAll, false).toBool()}
 {
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins({});
@@ -66,15 +77,17 @@ SearchDialog::SearchDialog(ActionManager* actionManager, PlaylistInteractor* pla
     layout->addWidget(m_searchBar);
     layout->addWidget(m_view);
 
-    auto* searchMenu = new QAction(Utils::iconFromTheme(Constants::Icons::Options), tr("Options"), this);
+    auto* searchMenu = new QAction(tr("Options"), this);
+    Gui::setThemeIcon(searchMenu, Constants::Icons::Options);
     QObject::connect(searchMenu, &QAction::triggered, this, &SearchDialog::showOptionsMenu);
     m_searchBar->addAction(searchMenu, QLineEdit::TrailingPosition);
+    m_searchBar->installEventFilter(this);
 
     QObject::connect(m_view->view()->selectionModel(), &QItemSelectionModel::selectionChanged, this,
                      &SearchDialog::selectInPlaylist);
     QObject::connect(m_view->model(), &PlaylistModel::modelReset, this, [this]() {
         updateTitle();
-        if(m_autoSelect && m_mode == PlaylistWidget::Mode::DetachedPlaylist) {
+        if(m_autoSelect && m_target == Target::Playlist) {
             m_view->view()->selectAll();
         }
     });
@@ -90,6 +103,9 @@ SearchDialog::SearchDialog(ActionManager* actionManager, PlaylistInteractor* pla
 
     updateTitle();
     loadState();
+    if(m_showAll) {
+        search();
+    }
 }
 
 void SearchDialog::done(int value)
@@ -103,25 +119,96 @@ QSize SearchDialog::sizeHint() const
     return {800, 480};
 }
 
-void SearchDialog::keyPressEvent(QKeyEvent* event)
+void SearchDialog::setSearch(const QString& search)
 {
-    if(event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
-        m_view->startPlayback();
+    m_searchBar->setText(search);
+    this->search();
+}
+
+bool SearchDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if(watched == m_searchBar && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+
+        if(keyEvent->key() == Qt::Key_Down) {
+            navigateResults(1);
+            return true;
+        }
+        if(keyEvent->key() == Qt::Key_Up) {
+            navigateResults(-1);
+            return true;
+        }
+        if(keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            playCurrentResult();
+            return true;
+        }
     }
 
-    QDialog::keyPressEvent(event);
+    return QDialog::eventFilter(watched, event);
+}
+
+void SearchDialog::navigateResults(int delta)
+{
+    auto* view           = m_view->view();
+    auto* selectionModel = view->selectionModel();
+    if(!selectionModel) {
+        return;
+    }
+
+    const QModelIndex current = selectionModel->currentIndex();
+    const bool hasCurrentTrack
+        = current.data(PlaylistItem::Role::Type).toInt() == PlaylistItem::Track && selectionModel->isSelected(current);
+
+    QModelIndex index;
+    int direction{1};
+    if(hasCurrentTrack) {
+        index = current;
+        if(delta < 0) {
+            index     = view->indexAbove(index);
+            direction = -1;
+        }
+        else if(delta > 0) {
+            index = view->indexBelow(index);
+        }
+    }
+    else {
+        index = m_view->model()->index(0, 0, {});
+    }
+
+    while(index.isValid() && index.data(PlaylistItem::Role::Type).toInt() != PlaylistItem::Track) {
+        index = direction < 0 ? view->indexAbove(index) : view->indexBelow(index);
+    }
+
+    if(!index.isValid()) {
+        return;
+    }
+
+    selectionModel->setCurrentIndex(index, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    view->scrollTo(index, QAbstractItemView::EnsureVisible);
+}
+
+void SearchDialog::playCurrentResult()
+{
+    if(m_view->view()->selectionModel()->selectedRows().empty()) {
+        navigateResults(0);
+    }
+
+    m_view->view()->setFocus(Qt::OtherFocusReason);
+    m_view->startPlayback();
+    m_searchBar->setFocus(Qt::OtherFocusReason);
 }
 
 void SearchDialog::search()
 {
-    m_view->searchEvent(m_searchBar->text());
+    m_view->searchEvent(
+        {.text = m_searchBar->text(), .emptyMode = m_showAll ? EmptySearchMode::ShowAll : EmptySearchMode::Clear});
 }
 
 void SearchDialog::updateTitle()
 {
-    QString title = (m_mode == PlaylistWidget::Mode::DetachedLibrary) ? tr("Search Library") : tr("Search Playlist");
+    QString title = (m_target == Target::Library) ? tr("Search Library") : tr("Search Playlist");
 
-    if(m_searchBar->text().isEmpty()) {
+    if(!m_showAll && m_searchBar->text().isEmpty()) {
         m_view->view()->setEmptyText(tr("Start typing to search"));
     }
     else {
@@ -137,7 +224,7 @@ void SearchDialog::showOptionsMenu()
     auto* menu = new QMenu(tr("Options"), this);
     menu->setAttribute(Qt::WA_DeleteOnClose);
 
-    if(m_mode == PlaylistWidget::Mode::DetachedPlaylist) {
+    if(m_target == Target::Playlist) {
         auto* autoSelect = new QAction(tr("Auto-select on search"), menu);
         QObject::connect(autoSelect, &QAction::triggered, this, [this](const bool checked) {
             m_autoSelect = checked;
@@ -147,6 +234,16 @@ void SearchDialog::showOptionsMenu()
         autoSelect->setChecked(m_autoSelect);
         menu->addAction(autoSelect);
     }
+
+    auto* showAll = new QAction(tr("Show all when search is empty"), menu);
+    QObject::connect(showAll, &QAction::triggered, this, [this](const bool checked) {
+        m_showAll = checked;
+        m_settings->fileSet(ShowAll, checked);
+        search();
+    });
+    showAll->setCheckable(true);
+    showAll->setChecked(m_showAll);
+    menu->addAction(showAll);
 
     auto* searching = new QAction(tr("Help"), menu);
     QObject::connect(searching, &QAction::triggered, this,
@@ -164,7 +261,7 @@ void SearchDialog::showOptionsMenu()
 
 void SearchDialog::selectInPlaylist()
 {
-    if(m_mode != PlaylistWidget::Mode::DetachedPlaylist) {
+    if(m_target != Target::Playlist) {
         return;
     }
 
@@ -175,7 +272,7 @@ void SearchDialog::selectInPlaylist()
         trackIds.emplace_back(index.data(PlaylistItem::Role::TrackId).toInt());
     }
 
-    m_playlistInteractor->playlistController()->selectTrackIds(trackIds);
+    m_playlistInteractor->playlistController()->uiController()->selectTrackIds(trackIds);
 }
 
 void SearchDialog::saveState()
@@ -186,10 +283,10 @@ void SearchDialog::saveState()
 
     const QByteArray state = QJsonDocument{layout}.toJson(QJsonDocument::Compact).toBase64();
 
-    if(m_mode == PlaylistWidget::Mode::DetachedPlaylist) {
+    if(m_target == Target::Playlist) {
         m_settings->fileSet(PlaylistState, state);
     }
-    else if(m_mode == PlaylistWidget::Mode::DetachedLibrary) {
+    else if(m_target == Target::Library) {
         m_settings->fileSet(LibraryState, state);
     }
 }
@@ -198,10 +295,10 @@ void SearchDialog::loadState()
 {
     QByteArray state;
 
-    if(m_mode == PlaylistWidget::Mode::DetachedPlaylist) {
+    if(m_target == Target::Playlist) {
         state = m_settings->fileValue(PlaylistState).toByteArray();
     }
-    else if(m_mode == PlaylistWidget::Mode::DetachedLibrary) {
+    else if(m_target == Target::Library) {
         state = m_settings->fileValue(LibraryState).toByteArray();
     }
 

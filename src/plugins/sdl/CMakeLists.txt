@@ -9,8 +9,10 @@ create_fooyin_plugin_internal(
     sdl
     DEPENDS Fooyin::Core
             ${SDL2_LIBRARIES}
-    SOURCES sdlplugin.cpp
-            sdlplugin.h
-            sdloutput.cpp
+    SOURCES sdloutput.cpp
             sdloutput.h
+            sdlaudiosubsystem.cpp
+            sdlaudiosubsystem.h
+            sdlplugin.cpp
+            sdlplugin.h
 )

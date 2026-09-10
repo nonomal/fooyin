@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,10 +19,13 @@
 
 #include "librarywatcher.h"
 
+#include <QFileInfo>
 #include <QTimer>
 #include <QTimerEvent>
 
 using namespace std::chrono_literals;
+
+Q_LOGGING_CATEGORY(LIB_WATCHER, "fy.librarywatcher")
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
 constexpr auto Interval = 1000ms;
@@ -38,6 +41,14 @@ LibraryWatcher::LibraryWatcher(QObject* parent)
         m_dirs.emplace(path);
         m_timer.start(Interval, this);
     });
+    QObject::connect(this, &QFileSystemWatcher::fileChanged, this, [this](const QString& path) {
+        m_files.emplace(path);
+        m_timer.start(Interval, this);
+
+        if(!files().contains(path) && QFileInfo::exists(path) && !addPath(path)) {
+            qCWarning(LIB_WATCHER) << "Failed to resume monitoring track file" << path;
+        }
+    });
 }
 
 void LibraryWatcher::timerEvent(QTimerEvent* event)
@@ -45,9 +56,17 @@ void LibraryWatcher::timerEvent(QTimerEvent* event)
     if(event->timerId() == m_timer.timerId()) {
         m_timer.stop();
 
-        const QStringList paths{m_dirs.cbegin(), m_dirs.cend()};
+        const QStringList dirs{m_dirs.cbegin(), m_dirs.cend()};
+        const QStringList files{m_files.cbegin(), m_files.cend()};
         m_dirs.clear();
-        emit libraryDirsChanged(paths);
+        m_files.clear();
+
+        if(!dirs.empty()) {
+            Q_EMIT libraryDirsChanged(dirs);
+        }
+        if(!files.empty()) {
+            Q_EMIT libraryTrackFilesChanged(files);
+        }
     }
     QFileSystemWatcher::timerEvent(event);
 }

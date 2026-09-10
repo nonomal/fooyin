@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 
 #include "pluginspage.h"
 
+#include "pluginsettingsregistry.h"
 #include "pluginsmodel.h"
 #include "settings/plugins/pluginaboutdialog.h"
 
@@ -68,7 +69,8 @@ class PluginPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit PluginPageWidget(PluginManager* pluginManager, SettingsManager* settings);
+    explicit PluginPageWidget(PluginManager* pluginManager, PluginSettingsRegistry* pluginSettingsRegistry,
+                              SettingsManager* settings);
 
     void load() override;
     void apply() override;
@@ -82,8 +84,10 @@ private:
     void aboutPlugin();
     void configurePlugin();
     void installPlugin();
+    [[nodiscard]] bool hasConfigProvider(const PluginInfo* pluginInfo) const;
 
     PluginManager* m_pluginManager;
+    PluginSettingsRegistry* m_pluginSettingsRegistry;
     SettingsManager* m_settings;
 
     QTreeView* m_pluginList;
@@ -94,8 +98,10 @@ private:
     QPushButton* m_installPlugin;
 };
 
-PluginPageWidget::PluginPageWidget(PluginManager* pluginManager, SettingsManager* settings)
+PluginPageWidget::PluginPageWidget(PluginManager* pluginManager, PluginSettingsRegistry* pluginSettingsRegistry,
+                                   SettingsManager* settings)
     : m_pluginManager{pluginManager}
+    , m_pluginSettingsRegistry{pluginSettingsRegistry}
     , m_settings{settings}
     , m_pluginList{new QTreeView(this)}
     , m_model{new PluginsModel(m_pluginManager)}
@@ -191,7 +197,7 @@ void PluginPageWidget::selectionChanged()
 {
     if(const auto* plugin = currentPlugin()) {
         if(plugin->plugin()) {
-            m_configurePlugin->setEnabled(plugin->plugin()->hasSettings());
+            m_configurePlugin->setEnabled(hasConfigProvider(plugin));
             m_aboutPlugin->setEnabled(true);
             return;
         }
@@ -214,36 +220,69 @@ void PluginPageWidget::aboutPlugin()
 void PluginPageWidget::configurePlugin()
 {
     if(auto* plugin = currentPlugin()) {
-        plugin->plugin()->showSettings(this);
+        if(m_pluginSettingsRegistry) {
+            if(auto* provider = m_pluginSettingsRegistry->providerFor(plugin->identifier())) {
+                provider->showSettings(this);
+                return;
+            }
+        }
     }
+}
+
+bool PluginPageWidget::hasConfigProvider(const PluginInfo* pluginInfo) const
+{
+    return pluginInfo && m_pluginSettingsRegistry && m_pluginSettingsRegistry->hasProvider(pluginInfo->identifier());
 }
 
 void PluginPageWidget::installPlugin()
 {
-    const QString filepath
-        = QFileDialog::getOpenFileName(this, tr("Install Plugin"), {}, tr("%1 Plugin").arg("fooyin"_L1) + " (*.fyl)"_L1,
-                                       nullptr, QFileDialog::DontResolveSymlinks);
+#ifdef Q_OS_WIN
+    const QString pluginFilter = tr("fooyin Plugin (*.dll)");
+#else
+    const QString pluginFilter = tr("fooyin Plugin (*.so)");
+#endif
+    const QString filepath = QFileDialog::getOpenFileName(this, tr("Install Plugin"), {}, pluginFilter, nullptr,
+                                                          QFileDialog::DontResolveSymlinks);
 
     if(filepath.isEmpty()) {
         return;
     }
 
-    if(PluginManager::installPlugin(filepath)) {
-        QMessageBox msg{QMessageBox::Question, tr("Plugin Installed"),
+    bool updating{false};
+    auto installResult = PluginManager::installPlugin(filepath);
+    if(installResult == PluginManager::InstallResult::AlreadyInstalled) {
+        QMessageBox msg{QMessageBox::Question, tr("Plugin Already Installed"),
+                        tr("This plugin is already installed. Update it?"), QMessageBox::Yes | QMessageBox::No};
+        msg.button(QMessageBox::Yes)->setText(tr("Update"));
+        if(msg.exec() != QMessageBox::Yes) {
+            return;
+        }
+        updating      = true;
+        installResult = PluginManager::installPlugin(filepath, true);
+    }
+
+    if(installResult == PluginManager::InstallResult::Installed) {
+        QMessageBox msg{QMessageBox::Question, updating ? tr("Plugin Updated") : tr("Plugin Installed"),
                         tr("Restart for changes to take effect. Restart now?"), QMessageBox::Yes | QMessageBox::No};
         if(msg.exec() == QMessageBox::Yes) {
             Application::restart();
         }
     }
+    else {
+        QMessageBox::critical(this, tr("Plugin Installation Failed"), tr("The plugin could not be installed."));
+    }
 }
 
-PluginPage::PluginPage(PluginManager* pluginManager, SettingsManager* settings, QObject* parent)
+PluginPage::PluginPage(PluginManager* pluginManager, PluginSettingsRegistry* pluginSettingsRegistry,
+                       SettingsManager* settings, QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::Plugins);
     setName(tr("General"));
     setCategory({tr("Plugins")});
-    setWidgetCreator([pluginManager, settings] { return new PluginPageWidget(pluginManager, settings); });
+    setWidgetCreator([pluginManager, pluginSettingsRegistry, settings] {
+        return new PluginPageWidget(pluginManager, pluginSettingsRegistry, settings);
+    });
 }
 } // namespace Fooyin
 

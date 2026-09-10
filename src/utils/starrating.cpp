@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,33 @@
 using namespace Qt::StringLiterals;
 
 namespace {
+struct StarBrushes
+{
+    QBrush filled;
+    QBrush faded;
+};
+
+[[nodiscard]] StarBrushes getStarBrushes(const QPalette& palette, Fooyin::StarRating::EditMode mode, bool selected,
+                                         const QColor& customColour, const QColor& unratedColour)
+{
+    const QBrush filled = customColour.isValid() ? QBrush{customColour}
+                        : mode == Fooyin::StarRating::EditMode::Editable
+                            ? palette.highlight()
+                            : (selected ? palette.highlightedText() : palette.text());
+
+    QBrush faded;
+    if(unratedColour.isValid()) {
+        faded = unratedColour;
+    }
+    else {
+        QColor fadedColour{filled.color()};
+        fadedColour.setAlphaF(fadedColour.alphaF() * 0.2);
+        faded = fadedColour;
+    }
+
+    return {.filled = filled, .faded = faded};
+}
+
 void drawHalfPolygon(QPainter* painter, const QPolygonF& polygon, bool drawLeftHalf)
 {
     QRectF clipRect;
@@ -55,9 +82,20 @@ StarRating::StarRating(float rating, int maxStarCount)
 { }
 
 StarRating::StarRating(float rating, int maxStarCount, int scale)
+    : StarRating{rating, maxStarCount, scale, {}}
+{ }
+
+StarRating::StarRating(float rating, int maxStarCount, int scale, const RatingStarColours& colours)
+    : StarRating{rating, maxStarCount, scale, colours, {}}
+{ }
+
+StarRating::StarRating(float rating, int maxStarCount, int scale, const RatingStarColours& colours,
+                       const QColor& unratedColour)
     : m_rating{rating}
     , m_maxCount{maxStarCount}
     , m_scale{scale}
+    , m_colours{colours}
+    , m_unratedColour{unratedColour}
 {
     double angle{-0.314};
     for(int i{0}; i < 5; ++i) {
@@ -97,29 +135,32 @@ void StarRating::setStarScale(int scale)
 }
 
 void StarRating::paint(QPainter* painter, const QRect& rect, const QPalette& palette, EditMode mode,
-                       Qt::Alignment alignment) const
+                       Qt::Alignment alignment, bool selected) const
 {
-    const QString cacheKey = u"StarRating:%1|%2|%3|%4|%5|%6"_s.arg(m_rating)
-                                 .arg(m_scale)
-                                 .arg(m_maxCount)
-                                 .arg(mode == EditMode::Editable ? 1 : 0)
-                                 .arg(rect.width())
-                                 .arg(alignment.toInt());
+    const int colourIndex = std::clamp(static_cast<int>(std::ceil(m_rating * static_cast<float>(m_maxCount))) - 1, 0,
+                                       static_cast<int>(m_colours.size()) - 1);
+    const QColor customColour = m_rating > 0 ? m_colours.at(colourIndex) : QColor{};
+    const auto brushes        = getStarBrushes(palette, mode, selected, customColour, m_unratedColour);
+    const qreal dpr           = painter->device()->devicePixelRatioF();
+    const QString cacheKey    = u"StarRating:%1|%2|%3|%4|%5|%6"_s.arg(m_rating)
+                                    .arg(m_scale)
+                                    .arg(m_maxCount)
+                                    .arg(mode == EditMode::Editable ? 1 : 0)
+                                    .arg(rect.width())
+                                    .arg(rect.height())
+                              + u"|%1|%2|%3|%4"_s.arg(alignment.toInt())
+                                    .arg(brushes.filled.color().name(QColor::HexArgb))
+                                    .arg(brushes.faded.color().name(QColor::HexArgb))
+                                    .arg(dpr);
 
     QPixmap pixmap;
     if(!QPixmapCache::find(cacheKey, &pixmap)) {
-        pixmap = QPixmap{rect.size()};
+        pixmap = QPixmap{rect.size() * dpr};
+        pixmap.setDevicePixelRatio(dpr);
         pixmap.fill(Qt::transparent);
 
         QPainter pixmapPainter(&pixmap);
         pixmapPainter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QBrush brush{mode == EditMode::Editable ? palette.highlight() : palette.windowText()};
-
-        QBrush fadedBrush{brush};
-        QColor fadedColour{brush.color()};
-        fadedColour.setAlphaF(0.2F);
-        fadedBrush.setColor(fadedColour);
 
         const int yOffset = (rect.height() - m_scale) / 2;
 
@@ -142,18 +183,18 @@ void StarRating::paint(QPainter* painter, const QRect& rect, const QPalette& pal
             if(i < fullStars) {
                 // Draw full star
                 pixmapPainter.setPen(Qt::NoPen);
-                pixmapPainter.setBrush(brush);
+                pixmapPainter.setBrush(brushes.filled);
                 pixmapPainter.drawPolygon(m_starPolygon, Qt::WindingFill);
             }
             else {
                 pixmapPainter.setPen(Qt::NoPen);
-                pixmapPainter.setBrush(fadedBrush);
+                pixmapPainter.setBrush(brushes.faded);
                 pixmapPainter.drawPolygon(m_starPolygon, Qt::WindingFill);
             }
 
             if(i == fullStars && partialStar >= 0.5) {
                 // Draw half star
-                pixmapPainter.setBrush(brush);
+                pixmapPainter.setBrush(brushes.filled);
                 drawHalfPolygon(&pixmapPainter, m_starPolygon, true);
             }
 
@@ -165,7 +206,7 @@ void StarRating::paint(QPainter* painter, const QRect& rect, const QPalette& pal
         QPixmapCache::insert(cacheKey, pixmap);
     }
 
-    painter->drawPixmap(rect, pixmap);
+    painter->drawPixmap(rect.topLeft(), pixmap);
 }
 
 QSize StarRating::sizeHint() const

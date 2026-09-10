@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,5 +26,6 @@
 namespace Fooyin::Scripting {
 int trackCount(const TrackList& tracks);
 QString playtime(const TrackList& tracks);
+QString playlistSize(const TrackList& tracks);
 QString genres(const TrackList& tracks);
 } // namespace Fooyin::Scripting

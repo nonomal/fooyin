@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,14 +61,23 @@ public:
 
     void setModel(QAbstractItemModel* model) override;
 
+    [[nodiscard]] bool isSortingEnabled() const;
+    void setSortingEnabled(bool enabled);
+    void sortByColumn(int column, Qt::SortOrder order);
+
     [[nodiscard]] bool isSpanning(int column) const;
     void setSpan(int column, bool span);
+    [[nodiscard]] bool extendSpansIntoParents() const;
+    void setExtendSpansIntoParents(bool enabled);
 
     [[nodiscard]] ViewMode viewMode() const;
     void setViewMode(ViewMode mode);
 
     [[nodiscard]] CaptionDisplay captionDisplay() const;
     void setCaptionDisplay(CaptionDisplay display);
+
+    [[nodiscard]] int iconItemColumn() const;
+    void setIconItemColumn(int column);
 
     [[nodiscard]] bool uniformRowHeights() const;
     void setUniformRowHeights(bool enabled);
@@ -86,6 +95,14 @@ public:
     [[nodiscard]] bool selectBeforeDrag() const;
     void setSelectBeforeDrag(bool enabled);
 
+    [[nodiscard]] int iconHorizontalGap() const;
+    void setIconHorizontalGap(int gap);
+    [[nodiscard]] int iconVerticalGap() const;
+    void setIconVerticalGap(int gap);
+
+    [[nodiscard]] bool useIconGapsForSideCaptions() const;
+    void setUseIconGapsForSideCaptions(bool enabled);
+
     void changeIconSize(const QSize& size);
 
     [[nodiscard]] QRect visualRect(const QModelIndex& index) const override;
@@ -93,19 +110,18 @@ public:
     void scrollTo(const QModelIndex& index, ScrollHint hint) override;
     [[nodiscard]] QModelIndex indexAt(const QPoint& point) const override;
 
+    [[nodiscard]] QModelIndexList visibleIndexes(int margin = 0) const;
     [[nodiscard]] QModelIndex findIndexAt(const QPoint& point, bool includeSpans, bool includePadding = false) const;
     [[nodiscard]] QModelIndex indexAbove(const QModelIndex& index) const;
     [[nodiscard]] QModelIndex indexBelow(const QModelIndex& index) const;
 
     void doItemsLayout() override;
     void reset() override;
-    void updateGeometries() override;
 
-    void dataChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight, const QList<int>& roles) override;
     void selectAll() override;
 
-signals:
-    void viewModeChanged(ExpandedTreeView::ViewMode mode);
+Q_SIGNALS:
+    void viewModeChanged(Fooyin::ExpandedTreeView::ViewMode mode);
     void middleClicked(const QModelIndex& index);
 
 protected:
@@ -113,6 +129,9 @@ protected:
     friend class BaseView;
     friend class TreeView;
     friend class IconView;
+
+    void updateGeometries() override;
+    void dataChanged(const QModelIndex& topLeft, const QModelIndex& bottomRight, const QList<int>& roles) override;
 
     bool viewportEvent(QEvent* event) override;
     void dragMoveEvent(QDragMoveEvent* event) override;

@@ -1,0 +1,418 @@
+/*
+ * Fooyin
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#include "lyricsconfigwidget.h"
+
+#include "lyricscolours.h"
+
+#include <gui/guiutils.h>
+#include <gui/widgets/colourbutton.h>
+#include <gui/widgets/fontbutton.h>
+#include <gui/widgets/scriptlineedit.h>
+#include <gui/widgets/slidereditor.h>
+
+#include <QCheckBox>
+#include <QComboBox>
+#include <QGridLayout>
+#include <QGroupBox>
+#include <QLabel>
+#include <QRadioButton>
+#include <QSpinBox>
+#include <QTabWidget>
+#include <QVBoxLayout>
+
+using namespace Qt::StringLiterals;
+
+namespace Fooyin::Lyrics {
+LyricsConfigDialog::LyricsConfigDialog(LyricsWidget* lyricsWidget, GuiStyleProvider* styleProvider, QWidget* parent)
+    : WidgetConfigDialog{lyricsWidget, LyricsWidget::tr("Lyrics Settings"), parent}
+    , m_styleProvider{styleProvider}
+    , m_tabs{new QTabWidget(this)}
+    , m_seekOnClick{new QCheckBox(tr("Seek on click"), this)}
+    , m_noLyricsScript{new ScriptLineEdit(this)}
+    , m_scrollDuration{new SliderEditor(tr("Synced scroll duration"), this)}
+    , m_edgeFadeMode{new QComboBox(this)}
+    , m_edgeFadeSize{new SliderEditor(tr("Edge fade size"), this)}
+    , m_scrollManual{new QRadioButton(tr("Manual"), this)}
+    , m_scrollSynced{new QRadioButton(tr("Synced"), this)}
+    , m_scrollAutomatic{new QRadioButton(tr("Automatic"), this)}
+    , m_showScrollbar{new QCheckBox(tr("Show scrollbar"), this)}
+    , m_centreFirstLine{new QCheckBox(tr("Centre first line"), this)}
+    , m_centreLastLine{new QCheckBox(tr("Centre last line"), this)}
+    , m_progressMode{new QComboBox(this)}
+    , m_alignment{new QComboBox(this)}
+    , m_lineSpacing{new QSpinBox(this)}
+    , m_leftMargin{new QSpinBox(this)}
+    , m_topMargin{new QSpinBox(this)}
+    , m_rightMargin{new QSpinBox(this)}
+    , m_bottomMargin{new QSpinBox(this)}
+    , m_coloursGroup{new QGroupBox(tr("Colours"), this)}
+    , m_bgColourBtn{new ColourButton(tr("Background colour") + ":"_L1, true, this)}
+    , m_lineColourBtn{new ColourButton(tr("Line colour") + ":"_L1, true, this)}
+    , m_unplayedColourBtn{new ColourButton(tr("Unplayed line colour") + ":"_L1, true, this)}
+    , m_playedColourBtn{new ColourButton(tr("Played line colour") + ":"_L1, true, this)}
+    , m_syncedLineColourBtn{new ColourButton(tr("Current line colour") + ":"_L1, true, this)}
+    , m_wordLineColourBtn{new ColourButton(tr("Current line colour") + ":"_L1, true, this)}
+    , m_wordColourBtn{new ColourButton(tr("Current word colour") + ":"_L1, true, this)}
+    , m_baseFontBtn{new FontButton(tr("Line font") + u":"_s, true, this)}
+    , m_lineFontBtn{new FontButton(tr("Current line font") + u":"_s, true, this)}
+    , m_wordLineFontBtn{new FontButton(tr("Current line font") + u":"_s, true, this)}
+    , m_wordFontBtn{new FontButton(tr("Current word font") + u":"_s, true, this)}
+{
+    auto* generalPage   = new QWidget(this);
+    auto* generalGroup  = new QGroupBox(tr("General"), generalPage);
+    auto* generalLayout = new QGridLayout(generalGroup);
+
+    auto* seekHint     = new QLabel(u"🛈 "_s + tr("This will only function with synced lyrics."), generalPage);
+    auto* noLyricsHint = new QLabel(
+        u"🛈 "_s + tr("This will be displayed if lyrics for the current track can't be found."), generalPage);
+
+    int row = 0;
+    generalLayout->addWidget(m_seekOnClick, row++, 0, 1, 2);
+    generalLayout->addWidget(seekHint, row++, 0, 1, 2);
+    generalLayout->addWidget(new QLabel(tr("No lyrics script") + u":"_s, generalPage), row, 0);
+    generalLayout->addWidget(m_noLyricsScript, row++, 1);
+    generalLayout->addWidget(noLyricsHint, row++, 0, 1, 2);
+    generalLayout->setColumnStretch(1, 1);
+
+    auto* scrollingGroup  = new QGroupBox(tr("Scrolling"), generalPage);
+    auto* scrollingLayout = new QGridLayout(scrollingGroup);
+
+    m_scrollDuration->setRange(0, 2000);
+    m_scrollDuration->setSuffix(u" ms"_s);
+
+    auto* scrollModeGroup  = new QGroupBox(tr("Scroll Mode"), generalPage);
+    auto* scrollModeLayout = new QGridLayout(scrollModeGroup);
+    m_scrollManual->setToolTip(tr("No automatic scrolling will take place"));
+    m_scrollSynced->setToolTip(tr("Synced lyrics will be scrolled"));
+    m_scrollAutomatic->setToolTip(tr("All lyrics will be scrolled"));
+    scrollModeLayout->addWidget(m_scrollManual, 0, 0);
+    scrollModeLayout->addWidget(m_scrollSynced, 1, 0);
+    scrollModeLayout->addWidget(m_scrollAutomatic, 2, 0);
+
+    row = 0;
+    scrollingLayout->addWidget(m_scrollDuration, row++, 0);
+    scrollingLayout->addWidget(scrollModeGroup, row++, 0, 1, 2);
+    scrollingLayout->setColumnStretch(1, 1);
+
+    auto* generalPageLayout = new QVBoxLayout(generalPage);
+    generalPageLayout->addWidget(generalGroup);
+    generalPageLayout->addWidget(scrollingGroup);
+    generalPageLayout->addStretch();
+
+    auto* layoutPage          = new QWidget(this);
+    auto* layoutGeneralGroup  = new QGroupBox(tr("General"), layoutPage);
+    auto* layoutGeneralLayout = new QGridLayout(layoutGeneralGroup);
+
+    m_alignment->addItem(tr("Align to centre"), Qt::AlignCenter);
+    m_alignment->addItem(tr("Align to left"), Qt::AlignLeft);
+    m_alignment->addItem(tr("Align to right"), Qt::AlignRight);
+
+    m_lineSpacing->setRange(0, 100);
+    m_lineSpacing->setSuffix(u" px"_s);
+
+    row = 0;
+    layoutGeneralLayout->addWidget(m_showScrollbar, row++, 0, 1, 2);
+    layoutGeneralLayout->addWidget(new QLabel(tr("Line spacing") + u":"_s, layoutPage), row, 0);
+    layoutGeneralLayout->addWidget(m_lineSpacing, row++, 1);
+    layoutGeneralLayout->addWidget(new QLabel(tr("Alignment") + u":"_s, layoutPage), row, 0);
+    layoutGeneralLayout->addWidget(m_alignment, row++, 1);
+    layoutGeneralLayout->setColumnStretch(2, 1);
+
+    auto* marginsGroup   = new QGroupBox(tr("Margins"), layoutPage);
+    auto* marginsLayout  = new QGridLayout(marginsGroup);
+    auto* centringGroup  = new QGroupBox(tr("Centring"), layoutPage);
+    auto* centringLayout = new QGridLayout(centringGroup);
+
+    for(auto* spin : {m_leftMargin, m_topMargin, m_rightMargin, m_bottomMargin}) {
+        spin->setRange(0, 100);
+        spin->setSuffix(u" px"_s);
+    }
+
+    row = 0;
+    marginsLayout->addWidget(new QLabel(tr("Left") + u":"_s, layoutPage), row, 0);
+    marginsLayout->addWidget(m_leftMargin, row, 1);
+    marginsLayout->addWidget(new QLabel(tr("Right") + u":"_s, layoutPage), row, 2);
+    marginsLayout->addWidget(m_rightMargin, row++, 3);
+    marginsLayout->addWidget(new QLabel(tr("Top") + u":"_s, layoutPage), row, 0);
+    marginsLayout->addWidget(m_topMargin, row, 1);
+    marginsLayout->addWidget(new QLabel(tr("Bottom") + u":"_s, layoutPage), row, 2);
+    marginsLayout->addWidget(m_bottomMargin, row++, 3);
+    marginsLayout->addWidget(new QLabel(u"🛈 "_s
+                                            + tr("Top and bottom margins apply to lyrics that are not centred at "
+                                                 "that edge."),
+                                        layoutPage),
+                             row++, 0, 1, 5);
+    marginsLayout->setColumnStretch(4, 1);
+
+    row = 0;
+    centringLayout->addWidget(m_centreFirstLine, row++, 0, 1, 2);
+    centringLayout->addWidget(m_centreLastLine, row++, 0, 1, 2);
+    centringLayout->addWidget(
+        new QLabel(u"🛈 "_s + tr("These options apply to synced lyrics and automatically scrolling unsynced lyrics."),
+                   layoutPage),
+        row++, 0, 1, 2);
+    centringLayout->setColumnStretch(1, 1);
+
+    auto* layoutPageLayout = new QVBoxLayout(layoutPage);
+    layoutPageLayout->addWidget(layoutGeneralGroup);
+    layoutPageLayout->addWidget(centringGroup);
+    layoutPageLayout->addWidget(marginsGroup);
+    layoutPageLayout->addStretch();
+
+    auto* stylePage        = new QWidget(this);
+    auto* fontsGroup       = new QGroupBox(tr("Fonts"), stylePage);
+    auto* fontsGroupLayout = new QGridLayout(fontsGroup);
+    auto* fadeGroup        = new QGroupBox(tr("Fade"), layoutPage);
+    auto* fadeLayout       = new QGridLayout(fadeGroup);
+    auto* progressGroup    = new QGroupBox(tr("Progress highlighting"), stylePage);
+    auto* progressLayout   = new QGridLayout(progressGroup);
+
+    FontButton::alignLabels({m_baseFontBtn, m_lineFontBtn, m_wordLineFontBtn, m_wordFontBtn});
+
+    row = 0;
+    fontsGroupLayout->addWidget(Gui::createSectionHeader(tr("General"), stylePage), row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(m_baseFontBtn, row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(Gui::createSectionHeader(tr("Synced"), stylePage), row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(m_lineFontBtn, row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(Gui::createSectionHeader(tr("Synced Words"), stylePage), row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(m_wordLineFontBtn, row++, 0, 1, 2);
+    fontsGroupLayout->addWidget(m_wordFontBtn, row++, 0, 1, 2);
+    fontsGroupLayout->setColumnStretch(1, 1);
+
+    m_edgeFadeMode->addItem(tr("Off"), static_cast<int>(EdgeFadeMode::Off));
+    m_edgeFadeMode->addItem(tr("Synced only"), static_cast<int>(EdgeFadeMode::SyncedOnly));
+    m_edgeFadeMode->addItem(tr("Scrolling lyrics"), static_cast<int>(EdgeFadeMode::ScrollingLyrics));
+    m_edgeFadeMode->addItem(tr("All lyrics"), static_cast<int>(EdgeFadeMode::AllLyrics));
+
+    m_edgeFadeSize->setRange(1, 50);
+    m_edgeFadeSize->setSuffix(u" %"_s);
+
+    row = 0;
+    fadeLayout->addWidget(new QLabel(tr("Apply to") + u":"_s, layoutPage), row, 0);
+    fadeLayout->addWidget(m_edgeFadeMode, row++, 1);
+    fadeLayout->addWidget(m_edgeFadeSize, row++, 0, 1, 4);
+    fadeLayout->setColumnStretch(4, 1);
+
+    m_progressMode->addItem(tr("Off"), static_cast<int>(ProgressMode::Off));
+    m_progressMode->addItem(tr("Synced lines"), static_cast<int>(ProgressMode::SyncedLines));
+    m_progressMode->addItem(tr("Synced words"), static_cast<int>(ProgressMode::SyncedWords));
+    m_progressMode->addItem(tr("Synced lines and words"), static_cast<int>(ProgressMode::AllSynced));
+    m_progressMode->setToolTip(
+        tr("Controls whether playback progress is shown for line-synced lyrics, word-synced lyrics, or both."));
+
+    row = 0;
+    progressLayout->addWidget(new QLabel(tr("Apply to") + u":"_s, stylePage), row, 0);
+    progressLayout->addWidget(m_progressMode, row++, 1);
+    progressLayout->setColumnStretch(1, 1);
+
+    auto* coloursLayout = new QGridLayout(m_coloursGroup);
+
+    ColourButton::alignLabels({m_bgColourBtn, m_lineColourBtn, m_unplayedColourBtn, m_playedColourBtn,
+                               m_syncedLineColourBtn, m_wordLineColourBtn, m_wordColourBtn});
+
+    row = 0;
+    coloursLayout->addWidget(Gui::createSectionHeader(tr("General"), stylePage), row++, 0, 1, 2);
+    coloursLayout->addWidget(m_bgColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(m_lineColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(Gui::createSectionHeader(tr("Synced"), stylePage), row++, 0, 1, 2);
+    coloursLayout->addWidget(m_unplayedColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(m_playedColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(m_syncedLineColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(Gui::createSectionHeader(tr("Synced Words"), stylePage), row++, 0, 1, 2);
+    coloursLayout->addWidget(m_wordLineColourBtn, row++, 0, 1, 2);
+    coloursLayout->addWidget(m_wordColourBtn, row++, 0, 1, 2);
+    coloursLayout->setColumnStretch(1, 1);
+
+    auto* stylePageLayout = new QGridLayout(stylePage);
+
+    row = 0;
+    stylePageLayout->addWidget(fontsGroup, row, 0);
+    stylePageLayout->addWidget(m_coloursGroup, row++, 1);
+    stylePageLayout->addWidget(fadeGroup, row, 0);
+    stylePageLayout->addWidget(progressGroup, row++, 1);
+    stylePageLayout->setRowStretch(row, 1);
+
+    m_tabs->addTab(layoutPage, tr("Layout"));
+    m_tabs->addTab(stylePage, tr("Style"));
+    m_tabs->addTab(generalPage, tr("General"));
+
+    auto* layout = contentLayout();
+    layout->addWidget(m_tabs);
+
+    QObject::connect(m_edgeFadeMode, &QComboBox::currentIndexChanged, this, [this]() {
+        const bool enabled = m_edgeFadeMode->currentData().toInt() != static_cast<int>(EdgeFadeMode::Off);
+        m_edgeFadeSize->setEnabled(enabled);
+    });
+
+    QObject::connect(lyricsWidget, &LyricsWidget::configChanged, this, &LyricsConfigDialog::syncCurrentConfig);
+
+    loadCurrentConfig();
+}
+
+LyricsWidget::ConfigData LyricsConfigDialog::config() const
+{
+    LyricsWidget::ConfigData config{
+        .seekOnClick     = m_seekOnClick->isChecked(),
+        .noLyricsScript  = m_noLyricsScript->text(),
+        .scrollDuration  = m_scrollDuration->value(),
+        .scrollMode      = static_cast<int>(scrollMode()),
+        .edgeFadeMode    = m_edgeFadeMode->currentData().toInt(),
+        .edgeFadeSize    = m_edgeFadeSize->value(),
+        .showScrollbar   = m_showScrollbar->isChecked(),
+        .alignment       = m_alignment->currentData().toInt(),
+        .lineSpacing     = m_lineSpacing->value(),
+        .centreFirstLine = m_centreFirstLine->isChecked(),
+        .centreLastLine  = m_centreLastLine->isChecked(),
+        .progressMode    = m_progressMode->currentData().toInt(),
+        .margins      = {m_leftMargin->value(), m_topMargin->value(), m_rightMargin->value(), m_bottomMargin->value()},
+        .colours      = QVariant{},
+        .baseFont     = m_baseFontBtn->isChecked() ? m_baseFontBtn->buttonFont().toString() : QString{},
+        .lineFont     = m_lineFontBtn->isChecked() ? m_lineFontBtn->buttonFont().toString() : QString{},
+        .wordLineFont = m_wordLineFontBtn->isChecked() ? m_wordLineFontBtn->buttonFont().toString() : QString{},
+        .wordFont     = m_wordFontBtn->isChecked() ? m_wordFontBtn->buttonFont().toString() : QString{},
+    };
+
+    Colours colours;
+
+    const auto applyColour = [&colours](ColourButton* button, Colours::Type type) {
+        if(button->isChecked()) {
+            colours.setColour(type, button->colour());
+        }
+    };
+
+    applyColour(m_bgColourBtn, Colours::Type::Background);
+    applyColour(m_lineColourBtn, Colours::Type::LineUnsynced);
+    applyColour(m_unplayedColourBtn, Colours::Type::LineUnplayed);
+    applyColour(m_playedColourBtn, Colours::Type::LinePlayed);
+    applyColour(m_syncedLineColourBtn, Colours::Type::LineSynced);
+    applyColour(m_wordLineColourBtn, Colours::Type::WordLineSynced);
+    applyColour(m_wordColourBtn, Colours::Type::WordSynced);
+
+    if(!colours.isEmpty()) {
+        config.colours = QVariant::fromValue(colours);
+    }
+
+    return config;
+}
+
+void LyricsConfigDialog::setConfig(const LyricsWidget::ConfigData& config)
+{
+    m_seekOnClick->setChecked(config.seekOnClick);
+    m_noLyricsScript->setText(config.noLyricsScript);
+    m_scrollDuration->setValue(config.scrollDuration);
+
+    int fadeModeIdx = m_edgeFadeMode->findData(config.edgeFadeMode);
+    if(fadeModeIdx < 0) {
+        fadeModeIdx = m_edgeFadeMode->findData(static_cast<int>(EdgeFadeMode::SyncedOnly));
+    }
+    m_edgeFadeMode->setCurrentIndex(fadeModeIdx);
+    m_edgeFadeSize->setValue(config.edgeFadeSize);
+    m_edgeFadeSize->setEnabled(m_edgeFadeMode->currentData().toInt() != static_cast<int>(EdgeFadeMode::Off));
+
+    setScrollMode(static_cast<ScrollMode>(config.scrollMode));
+
+    m_showScrollbar->setChecked(config.showScrollbar);
+    m_lineSpacing->setValue(config.lineSpacing);
+    m_centreFirstLine->setChecked(config.centreFirstLine);
+    m_centreLastLine->setChecked(config.centreLastLine);
+
+    int progressModeIdx = m_progressMode->findData(config.progressMode);
+    if(progressModeIdx < 0) {
+        progressModeIdx = m_progressMode->findData(static_cast<int>(ProgressMode::Off));
+    }
+    m_progressMode->setCurrentIndex(progressModeIdx);
+
+    int alignIdx = m_alignment->findData(config.alignment);
+    if(alignIdx < 0) {
+        alignIdx = m_alignment->findData(Qt::AlignCenter);
+    }
+    m_alignment->setCurrentIndex(alignIdx);
+
+    m_leftMargin->setValue(config.margins.left());
+    m_topMargin->setValue(config.margins.top());
+    m_rightMargin->setValue(config.margins.right());
+    m_bottomMargin->setValue(config.margins.bottom());
+
+    const Colours currentColours = config.colours.isValid() && config.colours.canConvert<Colours>()
+                                     ? config.colours.value<Colours>()
+                                     : Colours{};
+
+    const auto loadColour = [this, &currentColours](ColourButton* button, Colours::Type type) {
+        button->setChecked(currentColours.hasOverride(type));
+        button->setColour(currentColours.colour(type, palette()));
+    };
+
+    loadColour(m_bgColourBtn, Colours::Type::Background);
+    loadColour(m_lineColourBtn, Colours::Type::LineUnsynced);
+    loadColour(m_unplayedColourBtn, Colours::Type::LineUnplayed);
+    loadColour(m_playedColourBtn, Colours::Type::LinePlayed);
+    loadColour(m_syncedLineColourBtn, Colours::Type::LineSynced);
+    loadColour(m_wordLineColourBtn, Colours::Type::WordLineSynced);
+    loadColour(m_wordColourBtn, Colours::Type::WordSynced);
+
+    const auto loadFont = [](FontButton* button, const QString& fontStr, const QFont& fallback) {
+        QFont font{fallback};
+        bool custom = false;
+        if(!fontStr.isEmpty() && font.fromString(fontStr)) {
+            custom = true;
+        }
+        button->setChecked(custom);
+        button->setButtonFont(font);
+    };
+
+    loadFont(m_baseFontBtn, config.baseFont, Lyrics::defaultFont(*m_styleProvider));
+    loadFont(m_lineFontBtn, config.lineFont, Lyrics::defaultLineFont(*m_styleProvider));
+    loadFont(m_wordLineFontBtn, config.wordLineFont, Lyrics::defaultWordLineFont(*m_styleProvider));
+    loadFont(m_wordFontBtn, config.wordFont, Lyrics::defaultWordFont(*m_styleProvider));
+}
+
+void LyricsConfigDialog::mergeExternalConfig(const LyricsWidget::ConfigData& previous,
+                                             const LyricsWidget::ConfigData& current)
+{
+    mergeExternalFields(previous, current, &LyricsWidget::ConfigData::seekOnClick,
+                        &LyricsWidget::ConfigData::noLyricsScript, &LyricsWidget::ConfigData::scrollDuration,
+                        &LyricsWidget::ConfigData::scrollMode, &LyricsWidget::ConfigData::edgeFadeMode,
+                        &LyricsWidget::ConfigData::edgeFadeSize, &LyricsWidget::ConfigData::showScrollbar,
+                        &LyricsWidget::ConfigData::alignment, &LyricsWidget::ConfigData::lineSpacing,
+                        &LyricsWidget::ConfigData::centreFirstLine, &LyricsWidget::ConfigData::centreLastLine,
+                        &LyricsWidget::ConfigData::progressMode, &LyricsWidget::ConfigData::margins,
+                        &LyricsWidget::ConfigData::colours, &LyricsWidget::ConfigData::baseFont,
+                        &LyricsWidget::ConfigData::lineFont, &LyricsWidget::ConfigData::wordLineFont,
+                        &LyricsWidget::ConfigData::wordFont);
+}
+
+ScrollMode LyricsConfigDialog::scrollMode() const
+{
+    if(m_scrollManual->isChecked()) {
+        return ScrollMode::Manual;
+    }
+    if(m_scrollSynced->isChecked()) {
+        return ScrollMode::Synced;
+    }
+    return ScrollMode::Automatic;
+}
+
+void LyricsConfigDialog::setScrollMode(ScrollMode mode)
+{
+    m_scrollManual->setChecked(mode == ScrollMode::Manual);
+    m_scrollSynced->setChecked(mode == ScrollMode::Synced);
+    m_scrollAutomatic->setChecked(mode == ScrollMode::Automatic);
+}
+} // namespace Fooyin::Lyrics

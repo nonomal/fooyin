@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,21 +32,33 @@ class WaveformRescaler : public Worker
 public:
     explicit WaveformRescaler(QObject* parent = nullptr);
 
-signals:
+Q_SIGNALS:
     void waveformRescaled(const Fooyin::WaveBar::WaveformData<float>& data);
 
-public slots:
+public Q_SLOTS:
     void rescale();
     void rescale(int width);
     void rescale(const Fooyin::WaveBar::WaveformData<float>& data, int width);
 
     void changeSampleWidth(int width);
     void changeDownmix(DownmixOption option);
+    void changeSupersampleFactor(int factor);
+    void changePeakDisplayMode(PeakDisplayMode mode);
+    void changeNormaliseToPeak(bool normalise);
+    void changeDecibelScale(bool decibelScale);
 
 private:
+    void normaliseToPeak(WaveformData<float>& data) const;
+    void applyDecibelScale(WaveformData<float>& data) const;
+    void smoothAverage(WaveformData<float>& data) const;
+
     WaveformData<float> m_data;
     int m_width;
     int m_sampleWidth;
+    int m_supersampleFactor;
     DownmixOption m_downMix;
+    PeakDisplayMode m_peakDisplayMode;
+    bool m_normaliseToPeak;
+    bool m_decibelScale;
 };
 } // namespace Fooyin::WaveBar

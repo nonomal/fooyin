@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,6 @@
 
 #include <core/player/playercontroller.h>
 
-#include <QIcon>
 #include <QObject>
 
 class QAction;
@@ -48,13 +47,14 @@ private:
     PlayerController* m_playerController;
     SettingsManager* m_settings;
 
-    QIcon m_playIcon;
-    QIcon m_pauseIcon;
-
     QAction* m_stop;
     QAction* m_playPause;
     QAction* m_previous;
     QAction* m_next;
+    QAction* m_previousAlbum;
+    QAction* m_nextAlbum;
+    QAction* m_randomTrack;
+    QAction* m_randomAlbum;
 
     QAction* m_defaultPlayback;
     QAction* m_repeatTrack;

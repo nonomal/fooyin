@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,11 +19,16 @@
 
 #include "librarymodel.h"
 
+#include "scanprogresstext.h"
+
 #include <core/library/librarymanager.h>
+#include <core/library/musiclibrary.h>
 #include <utils/enum.h>
 
 #include <QFont>
 #include <QLoggingCategory>
+
+using namespace Qt::StringLiterals;
 
 Q_LOGGING_CATEGORY(LIB_MODEL, "fy.librarymodel")
 
@@ -54,7 +59,13 @@ LibraryModel::LibraryModel(LibraryManager* libraryManager, QObject* parent)
     QObject::connect(m_libraryManager, &LibraryManager::libraryStatusChanged, this, [this](const LibraryInfo& info) {
         if(m_nodes.contains(info.path)) {
             m_nodes.at(info.path).changeInfo(info);
-            invalidateData();
+
+            if(info.status != LibraryInfo::Status::Scanning) {
+                m_scanStatusText.erase(info.id);
+                m_scanRequestIds.erase(info.id);
+            }
+
+            updateLibraryRow(info.path, {Qt::DisplayRole, Qt::FontRole, Info, ScanRequestId});
         }
     });
 }
@@ -87,7 +98,7 @@ void LibraryModel::populate()
 void LibraryModel::markForAddition(const LibraryInfo& info)
 {
     if(info.name.isEmpty() || info.path.isEmpty()) {
-        emit pendingRowCancelled();
+        Q_EMIT pendingRowCancelled();
         return;
     }
 
@@ -136,7 +147,7 @@ void LibraryModel::processQueue()
         const LibraryInfo info               = library.info();
 
         switch(status) {
-            case(LibraryItem::Added): {
+            case LibraryItem::Added: {
                 if(info.id >= 0) {
                     // Library already added
                     break;
@@ -157,7 +168,7 @@ void LibraryModel::processQueue()
                 }
                 break;
             }
-            case(LibraryItem::Removed): {
+            case LibraryItem::Removed: {
                 const QString key = info.path;
                 if(m_libraryManager->removeLibrary(info.id)) {
                     beginRemoveRows({}, library.row(), library.row());
@@ -170,7 +181,7 @@ void LibraryModel::processQueue()
                 }
                 break;
             }
-            case(LibraryItem::Changed): {
+            case LibraryItem::Changed: {
                 if(m_libraryManager->renameLibrary(info.id, info.name)) {
                     library.setStatus(LibraryItem::None);
                 }
@@ -179,7 +190,7 @@ void LibraryModel::processQueue()
                 }
                 break;
             }
-            case(LibraryItem::None):
+            case LibraryItem::None:
                 break;
         }
     }
@@ -190,6 +201,42 @@ void LibraryModel::processQueue()
     }
 
     invalidateData();
+}
+
+void LibraryModel::setScanProgress(const ScanProgress& progress)
+{
+    if(progress.type != ScanRequest::Library || progress.info.id < 0) {
+        return;
+    }
+
+    if(progress.phase == ScanProgress::Phase::Finished) {
+        m_scanStatusText.erase(progress.info.id);
+        m_scanRequestIds.erase(progress.info.id);
+        updateLibraryRow(progress.info.path, {Qt::DisplayRole, ScanRequestId});
+        return;
+    }
+
+    QString statusText = ScanProgressText::libraryStatusPrefix(progress, "LibraryModel");
+
+    if(const QString phaseText = ScanProgressText::phaseText(progress, "LibraryModel"); !phaseText.isEmpty()) {
+        statusText += u" - "_s + phaseText;
+    }
+
+    if(progress.discovered > 0) {
+        statusText += u" - "_s + ScanProgressText::discoveredText(progress.discovered, "LibraryModel");
+    }
+
+    m_scanStatusText[progress.info.id] = statusText;
+    m_scanRequestIds[progress.info.id] = progress.id;
+    updateLibraryRow(progress.info.path, {Qt::DisplayRole, ScanRequestId});
+}
+
+int LibraryModel::scanRequestId(const LibraryInfo& library) const
+{
+    if(const auto it = m_scanRequestIds.find(library.id); it != m_scanRequestIds.cend()) {
+        return it->second;
+    }
+    return -1;
 }
 
 Qt::ItemFlags LibraryModel::flags(const QModelIndex& index) const
@@ -209,7 +256,7 @@ Qt::ItemFlags LibraryModel::flags(const QModelIndex& index) const
 QVariant LibraryModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole || orientation == Qt::Orientation::Vertical) {
@@ -217,13 +264,13 @@ QVariant LibraryModel::headerData(int section, Qt::Orientation orientation, int 
     }
 
     switch(section) {
-        case(0):
+        case 0:
             return tr("ID");
-        case(1):
+        case 1:
             return tr("Name");
-        case(2):
+        case 2:
             return tr("Path");
-        case(3):
+        case 3:
             return tr("Status");
         default:
             break;
@@ -244,19 +291,25 @@ QVariant LibraryModel::data(const QModelIndex& index, int role) const
         return item->font();
     }
 
-    if(role == Qt::UserRole) {
+    if(role == Info) {
         return QVariant::fromValue(item->info());
+    }
+    if(role == ScanRequestId) {
+        return scanRequestId(item->info());
     }
 
     if(role == Qt::DisplayRole || role == Qt::EditRole) {
         switch(index.column()) {
-            case(0):
+            case 0:
                 return item->info().id;
-            case(1):
+            case 1:
                 return item->info().name;
-            case(2):
+            case 2:
                 return item->info().path;
-            case(3):
+            case 3:
+                if(const auto it = m_scanStatusText.find(item->info().id); it != m_scanStatusText.cend()) {
+                    return it->second;
+                }
                 return Utils::Enum::toString(item->info().status);
             default:
                 break;
@@ -286,7 +339,7 @@ bool LibraryModel::setData(const QModelIndex& index, const QVariant& value, int 
         item->setStatus(LibraryItem::Changed);
     }
 
-    emit dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::DisplayRole, Qt::FontRole});
+    Q_EMIT dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::DisplayRole, Qt::FontRole});
 
     return true;
 }
@@ -331,16 +384,30 @@ bool LibraryModel::removeRows(int row, int count, const QModelIndex& /*parent*/)
             }
             else {
                 item->setStatus(LibraryItem::Removed);
-                emit dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::FontRole});
+                Q_EMIT dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::FontRole});
             }
         }
     }
     return true;
 }
 
+void LibraryModel::updateLibraryRow(const QString& path, const QList<int>& roles)
+{
+    if(const auto it = m_nodes.find(path); it != m_nodes.cend()) {
+        const int row = it->second.row();
+
+        const QModelIndex lhs = index(row, 0, {});
+        const QModelIndex rhs = index(row, columnCount({}) - 1, {});
+
+        if(lhs.isValid() && rhs.isValid()) {
+            Q_EMIT dataChanged(lhs, rhs, roles);
+        }
+    }
+}
+
 void LibraryModel::addPendingRow()
 {
-    emit requestAddLibrary();
+    Q_EMIT requestAddLibrary();
 }
 
 void LibraryModel::removePendingRow() { }

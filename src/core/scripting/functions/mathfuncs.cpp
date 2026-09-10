@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -98,6 +98,17 @@ QString max(const QStringList& vec)
     return *result;
 }
 
+QString select(const QStringList& vec)
+{
+    if(vec.size() < 2) {
+        return {};
+    }
+
+    bool ok{false};
+    const int index = vec.front().toInt(&ok) - 1;
+    return ok && index >= 0 && index + 1 < vec.size() ? vec.at(index + 1) : QString{};
+}
+
 QString mod(const QStringList& vec)
 {
     if(vec.size() < 2) {
@@ -113,16 +124,16 @@ QString mod(const QStringList& vec)
 QString rand(const QStringList& vec)
 {
     if(vec.size() < 2) {
-        return QString::number(getRandomU32(0, std::numeric_limits<uint32_t>::max() - 1));
+        return QString::number(getRandomU32(0, std::numeric_limits<uint32_t>::max()));
     }
 
     bool ok{false};
-    const int min = vec.at(0).toUInt(&ok);
+    const auto min = vec.at(0).toUInt(&ok);
     if(!ok) {
         return {};
     }
 
-    const int max = vec.at(1).toUInt(&ok);
+    const auto max = vec.at(1).toUInt(&ok);
     if(!ok) {
         return {};
     }

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@
 
 #include <core/constants.h>
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QApplication>
@@ -49,7 +50,7 @@ QString compilerVersion()
 
 QString copyright()
 {
-    return u"Copyright © 2022-2025, Luke Taylor. All rights reserved.<br/>"
+    return u"Copyright © 2022–2026, Luke Taylor. All rights reserved.<br/>"
            "<br/>"
            "%1 is free software released under GPL. The source code is available on %2<br/>"
            "<br/>"
@@ -78,7 +79,7 @@ namespace Fooyin {
 AboutDialog::AboutDialog(QWidget* parent)
     : QDialog{parent}
 {
-    setWindowTitle(tr("About %1").arg("fooyin"_L1));
+    setWindowTitle(tr("About fooyin"));
     auto* layout = new QGridLayout(this);
     layout->setSizeConstraint(QLayout::SetFixedSize);
 
@@ -93,7 +94,7 @@ AboutDialog::AboutDialog(QWidget* parent)
     QObject::connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
 
     auto* logo = new QLabel(this);
-    logo->setPixmap(Utils::iconFromTheme(Constants::Icons::Fooyin).pixmap(IconSize));
+    logo->setPixmap(Gui::iconFromTheme(Constants::Icons::Fooyin).pixmap(IconSize));
 
     layout->addWidget(logo, 0, 0);
     layout->addWidget(aboutLabel, 0, 1);

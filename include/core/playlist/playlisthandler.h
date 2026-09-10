@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,6 +23,7 @@
 
 #include <core/engine/audioloader.h>
 #include <core/playlist/playlist.h>
+#include <core/playlist/playlistchangeset.h>
 #include <core/track.h>
 #include <utils/database/dbconnectionpool.h>
 
@@ -30,9 +31,14 @@
 
 namespace Fooyin {
 class MusicLibrary;
-class PlayerController;
 class PlaylistHandlerPrivate;
 class SettingsManager;
+
+enum class PlaylistTrackChangeSource
+{
+    External = 0,
+    History,
+};
 
 class FYCORE_EXPORT PlaylistHandler : public QObject
 {
@@ -40,8 +46,7 @@ class FYCORE_EXPORT PlaylistHandler : public QObject
 
 public:
     explicit PlaylistHandler(DbConnectionPoolPtr dbPool, std::shared_ptr<AudioLoader> audioLoader,
-                             PlayerController* playerController, MusicLibrary* library, SettingsManager* settings,
-                             QObject* parent = nullptr);
+                             MusicLibrary* library, SettingsManager* settings, QObject* parent = nullptr);
     ~PlaylistHandler() override;
 
     /** Returns the playlist with the @p id if it exists, otherwise nullptr. */
@@ -54,7 +59,10 @@ public:
     [[nodiscard]] Playlist* playlistByName(const QString& name) const;
 
     [[nodiscard]] PlaylistList playlists() const;
+    /** Returns removed playlists retained for restoration until purged. */
     [[nodiscard]] PlaylistList removedPlaylists() const;
+    /** Returns removed playlists still pending export or deletion at shutdown. */
+    [[nodiscard]] PlaylistList pendingRemovedPlaylists() const;
 
     /** Creates and returns an empty playlist with a default name. */
     Playlist* createEmptyPlaylist();
@@ -79,14 +87,20 @@ public:
      * will be changed. */
     Playlist* createNewTempPlaylist(const QString& name, const TrackList& tracks);
     /** Returns the autoplaylist called @p name if it exists, otherwise creates it. */
-    Playlist* createAutoPlaylist(const QString& name, const QString& query);
+    Playlist* createAutoPlaylist(const QString& name, const QString& query, const QString& sortQuery = {},
+                                 bool forceSorted = true);
     /** Creates and returns the autoplaylist called @p name. If it already exists, the name will be changed. */
-    Playlist* createNewAutoPlaylist(const QString& name, const QString& query);
+    Playlist* createNewAutoPlaylist(const QString& name, const QString& query, const QString& sortQuery = {},
+                                    bool forceSorted = true);
 
-    /** Adds @p tracks to the end of the playlist with @p id if found. */
+    /** Adds @p tracks to the end of the writable playlist with @p id if found. */
     void appendToPlaylist(const UId& id, const TrackList& tracks);
     /** Replaces the @p tracks of the playlist with @p id if found. */
-    void replacePlaylistTracks(const UId& id, const TrackList& tracks);
+    void replacePlaylistTracks(const UId& id, const TrackList& tracks,
+                               PlaylistTrackChangeSource source = PlaylistTrackChangeSource::External);
+    /** Replaces the @p tracks of the playlist with @p id if found, preserving playlist entry identity. */
+    void replacePlaylistTracks(const UId& id, const PlaylistTrackList& tracks,
+                               PlaylistTrackChangeSource source = PlaylistTrackChangeSource::External);
     /** Moves the tracks of the playlist with @p id to the playlist with @p replaceId. */
     void movePlaylistTracks(const UId& id, const UId& replaceId);
     /** Removes the tracks at @p indexes of the playlist with @p id if found. */
@@ -97,52 +111,65 @@ public:
     [[nodiscard]] std::vector<int> duplicateTrackIndexes(const UId& id) const;
     /** Returns the indexes of all dead tracks in the playlist with @p id. */
     [[nodiscard]] std::vector<int> deadTrackIndexes(const UId& id) const;
+    /** Removes any playlist entries that match the deleted @p tracks. */
+    void handleTracksDeleted(const TrackList& tracks);
 
     void changePlaylistIndex(const UId& id, int index);
     void changeActivePlaylist(const UId& id);
     void changeActivePlaylist(Playlist* playlist);
 
-    /** Returns the next track to be played, or an invalid track if the playlist will end. */
-    PlaylistTrack nextTrack();
-    /** Returns the next track to be played, or an invalid track if the playlist will end. */
-    PlaylistTrack changeNextTrack();
-    /** Returns the previous track to be played, or an invalid track if the playlist will end. */
-    PlaylistTrack previousTrack();
-    /** Returns the previous track to be played, or an invalid track if the playlist will end. */
-    PlaylistTrack changePreviousTrack();
+    bool sortPlaylistsByName(Qt::SortOrder order = Qt::AscendingOrder);
+
+    /** Returns the current track in the active playlist with metadata populated if needed. */
+    [[nodiscard]] PlaylistTrack currentTrack() const;
+    /** Returns a preview track relative to the current index in the active playlist. */
+    [[nodiscard]] PlaylistTrack peekRelativeTrack(Playlist::PlayModes mode, int delta = 1) const;
+    /** Advances and returns a track relative to the current index in the active playlist. */
+    [[nodiscard]] PlaylistTrack advanceRelativeTrack(Playlist::PlayModes mode, int delta = 1);
 
     void renamePlaylist(const UId& id, const QString& name);
+    /** Enables or disables changes to the contents of the playlist with @p id. */
+    void setPlaylistLocked(const UId& id, bool locked);
     void removePlaylist(const UId& id);
+    Playlist* restorePlaylist(const UId& id);
+    /** Discards restoration history while preserving pending export or deletion at shutdown. */
+    void purgeRemovedPlaylists(const std::vector<UId>& ids);
+
+    void ensurePlaylistItemVisible(const UId& id, int index);
 
     /** Returns the playlist currently being played (nullptr if not playing) */
     [[nodiscard]] Playlist* activePlaylist() const;
 
     [[nodiscard]] int playlistCount() const;
-
-    /** Changes the active playlist to the playlist with @p playlistId and starts playback. */
-    void startPlayback(const UId& id);
-    /** Changes the active playlist to @p playlist and starts playback. */
-    void startPlayback(Playlist* playlist);
+    /** Prime upcoming track state/metadata for seamless transition preparation. */
+    void prepareUpcomingTrack();
 
     void savePlaylists();
     void savePlaylist(const UId& id);
 
-signals:
+Q_SIGNALS:
+    void playlistItemEnsureVisible(Fooyin::Playlist* playlist, int index);
     void playlistsPopulated();
     void playlistAdded(Fooyin::Playlist* playlist);
     void playlistRemoved(Fooyin::Playlist* playlist);
     void playlistRenamed(Fooyin::Playlist* playlist);
+    void playlistUpdated(Fooyin::Playlist* playlist);
+    void playlistIndexChanged(Fooyin::Playlist* playlist);
     void activePlaylistChanged(Fooyin::Playlist* playlist);
+    void activePlaylistDeleted();
+    void playlistReferencesRemapRequested(const Fooyin::UId& fromPlaylistId, const Fooyin::UId& toPlaylistId);
 
     void tracksAdded(Fooyin::Playlist* playlist, const Fooyin::TrackList& tracks, int index);
-    void tracksChanged(Fooyin::Playlist* playlist, const std::vector<int>& indexes);
+    void tracksPatched(Fooyin::Playlist* playlist, const Fooyin::PlaylistChangeset& changeSet,
+                       Fooyin::PlaylistTrackChangeSource source);
+    void tracksChanged(Fooyin::Playlist* playlist, const std::vector<int>& indexes,
+                       Fooyin::PlaylistTrackChangeSource source);
     void tracksUpdated(Fooyin::Playlist* playlist, const std::vector<int>& indexes);
     void tracksRemoved(Fooyin::Playlist* playlist, const std::vector<int>& indexes);
-
-public slots:
-    void trackAboutToFinish();
 
 private:
     std::unique_ptr<PlaylistHandlerPrivate> p;
 };
 } // namespace Fooyin
+
+Q_DECLARE_METATYPE(Fooyin::PlaylistTrackChangeSource)

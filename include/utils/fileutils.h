@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,11 +21,12 @@
 
 #include "fyutils_export.h"
 
+#include <QDir>
 #include <QFile>
 #include <QStringList>
 #include <QUrl>
 
-class QDir;
+#include <stop_token>
 
 namespace Fooyin::Utils::File {
 FYUTILS_EXPORT QString cleanPath(const QString& path);
@@ -44,4 +45,10 @@ FYUTILS_EXPORT QList<QUrl> getUrlsInDirRecursive(const QDir& baseDirectory, cons
 FYUTILS_EXPORT QStringList getFiles(const QStringList& paths, const QStringList& fileExtensions = {});
 FYUTILS_EXPORT QStringList getFiles(const QList<QUrl>& urls, const QStringList& fileExtensions = {});
 FYUTILS_EXPORT QStringList getAllSubdirectories(const QDir& dir);
+FYUTILS_EXPORT QStringList getAllSubdirectories(const QDir& dir, std::stop_token stopToken);
+
+FYUTILS_EXPORT bool pathContainsWildcard(const QString& path);
+FYUTILS_EXPORT QStringList directoriesFromWildcardPath(const QString& pathPattern);
+FYUTILS_EXPORT QStringList filesFromWildcardPath(const QString& pathPattern, QDir::Filters filters = QDir::Files,
+                                                 QDir::SortFlags sort = QDir::Name);
 } // namespace Fooyin::Utils::File

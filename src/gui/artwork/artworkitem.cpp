@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "artworkitem.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QBuffer>
@@ -101,7 +102,7 @@ ArtworkResult ArtworkItem::result() const
 QPixmap ArtworkItem::thumbnail() const
 {
     if(!m_isLoaded) {
-        return Utils::pixmapFromTheme(Constants::Icons::NoCover, {m_maxSize, m_maxSize});
+        return Gui::pixmapFromTheme(Constants::Icons::NoCover, {m_maxSize, m_maxSize});
     }
     return m_image.thumbnail;
 }

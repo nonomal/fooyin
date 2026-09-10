@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,20 +21,20 @@
 
 #include <SDL2/SDL.h>
 
-#include <QDebug>
 #include <QLoggingCategory>
-#include <QTimerEvent>
+#include <QMetaObject>
+
+#include <algorithm>
+#include <bit>
+#include <limits>
 
 Q_LOGGING_CATEGORY(SDL, "fy.sdl")
 
-using namespace std::chrono_literals;
 using namespace Qt::StringLiterals;
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
-constexpr auto EventInterval = 200ms;
-#else
-constexpr auto EventInterval = 200;
-#endif
+constexpr auto SdlPeriodMs       = 40;
+constexpr auto SdlTargetBufferMs = 200;
+constexpr auto SdlAllowedChanges = SDL_AUDIO_ALLOW_FREQUENCY_CHANGE | SDL_AUDIO_ALLOW_FORMAT_CHANGE;
 
 namespace {
 SDL_AudioFormat findFormat(Fooyin::SampleFormat format)
@@ -44,7 +44,7 @@ SDL_AudioFormat findFormat(Fooyin::SampleFormat format)
             return AUDIO_U8;
         case(Fooyin::SampleFormat::S16):
             return AUDIO_S16SYS;
-        case(Fooyin::SampleFormat::S24):
+        case(Fooyin::SampleFormat::S24In32):
         case(Fooyin::SampleFormat::S32):
             return AUDIO_S32SYS;
         case(Fooyin::SampleFormat::F32):
@@ -71,48 +71,86 @@ Fooyin::SampleFormat findSampleFormat(SDL_AudioFormat format)
             return Fooyin::SampleFormat::Unknown;
     }
 }
+
+int requestedDeviceBufferFrames(const Fooyin::AudioFormat& format)
+{
+    const int frames     = std::max(1, format.framesForDuration(SdlPeriodMs));
+    const auto po2Frames = std::bit_ceil(static_cast<uint32_t>(frames));
+    return static_cast<int>(std::min<uint32_t>(po2Frames, std::numeric_limits<Uint16>::max()));
+}
+
+int targetQueueFrames(const Fooyin::AudioFormat& format, const SDL_AudioSpec& obtainedSpec)
+{
+    const int obtainedFrames = std::max(1, static_cast<int>(obtainedSpec.samples));
+    const int durationFrames = std::max(1, format.framesForDuration(SdlTargetBufferMs));
+    return std::max(durationFrames, obtainedFrames * 4);
+}
 } // namespace
 
 namespace Fooyin::Sdl {
-SdlOutput::SdlOutput()
-    : m_bufferSize{8192}
+SdlOutput::SdlOutput(std::shared_ptr<SdlAudioSubsystem> audioSubsystem)
+    : m_audioSubsystem{std::move(audioSubsystem)}
+    , m_deviceBufferFrames{0}
+    , m_targetBufferFrames{0}
     , m_initialised{false}
     , m_device{u"default"_s}
-    , m_volume{1.0}
-{
-#ifdef Q_OS_WIN32
-    SDL_setenv("SDL_AUDIODRIVER", "directsound", true); // WASAPI driver (default) is broken
-#endif
-}
+    , m_desiredSpec{}
+    , m_obtainedSpec{}
+    , m_audioDeviceId{0}
+    , m_event{}
+{ }
 
 bool SdlOutput::init(const AudioFormat& format)
 {
     m_format = format;
 
-    SDL_Init(SDL_INIT_AUDIO);
+    m_audioLease = m_audioSubsystem->acquire();
+    if(!m_audioLease) {
+        qCWarning(SDL) << "Error initialising SDL audio:" << SDL_GetError();
+        return false;
+    }
 
     m_desiredSpec.freq     = format.sampleRate();
     m_desiredSpec.format   = findFormat(format.sampleFormat());
     m_desiredSpec.channels = format.channelCount();
-    m_desiredSpec.samples  = m_bufferSize;
+    m_desiredSpec.samples  = static_cast<Uint16>(requestedDeviceBufferFrames(format));
     m_desiredSpec.callback = nullptr;
 
     if(m_device == u"default"_s) {
-        m_audioDeviceId = SDL_OpenAudioDevice(nullptr, 0, &m_desiredSpec, &m_obtainedSpec, SDL_AUDIO_ALLOW_ANY_CHANGE);
+        m_audioDeviceId = SDL_OpenAudioDevice(nullptr, 0, &m_desiredSpec, &m_obtainedSpec, SdlAllowedChanges);
     }
     else {
+        // SDL2 compatible implementations may map names to backend instance IDs previously cached
+        if(SDL_GetNumAudioDevices(0) < 0) {
+            qCWarning(SDL) << "Error refreshing SDL audio devices:" << SDL_GetError();
+            m_audioLease.reset();
+            return false;
+        }
+
         m_audioDeviceId = SDL_OpenAudioDevice(m_device.toLocal8Bit().constData(), 0, &m_desiredSpec, &m_obtainedSpec,
-                                              SDL_AUDIO_ALLOW_ANY_CHANGE);
+                                              SdlAllowedChanges);
     }
 
     if(m_audioDeviceId == 0) {
         qCWarning(SDL) << "Error opening audio device:" << SDL_GetError();
+        m_audioLease.reset();
         return false;
     }
 
-    if(format.sampleFormat() == SampleFormat::F64 || m_obtainedSpec.format != m_desiredSpec.format) {
+    m_deviceBufferFrames = std::max(1, static_cast<int>(m_obtainedSpec.samples));
+
+    const SampleFormat obtainedSampleFormat = findSampleFormat(m_obtainedSpec.format);
+    if(obtainedSampleFormat == SampleFormat::Unknown) {
+        qCWarning(SDL) << "SDL selected an unsupported sample format:" << m_obtainedSpec.format;
+        SDL_CloseAudioDevice(m_audioDeviceId);
+        m_audioDeviceId = 0;
+        m_audioLease.reset();
+        return false;
+    }
+
+    if(obtainedSampleFormat != format.sampleFormat()) {
         qCDebug(SDL) << "Format not supported:" << m_format.prettyFormat();
-        m_format.setSampleFormat(findSampleFormat(m_obtainedSpec.format));
+        m_format.setSampleFormat(obtainedSampleFormat);
         qCDebug(SDL) << "Using compatible format:" << m_format.prettyFormat();
     }
     if(m_obtainedSpec.freq != m_desiredSpec.freq) {
@@ -125,17 +163,26 @@ bool SdlOutput::init(const AudioFormat& format)
         m_format.setChannelCount(m_obtainedSpec.channels);
     }
 
+    m_targetBufferFrames = targetQueueFrames(m_format, m_obtainedSpec);
+    qCDebug(SDL) << "SDL backend initialised with device period:" << m_deviceBufferFrames
+                 << "frames and queue target:" << m_targetBufferFrames << "frames (" << SdlTargetBufferMs << "ms)";
+
     m_initialised = true;
     return true;
 }
 
 void SdlOutput::uninit()
 {
-    m_eventTimer.stop();
-    SDL_CloseAudioDevice(m_audioDeviceId);
-    SDL_Quit();
+    if(m_audioDeviceId != 0) {
+        SDL_CloseAudioDevice(m_audioDeviceId);
+        m_audioDeviceId = 0;
+    }
 
-    m_initialised = false;
+    m_audioLease.reset();
+
+    m_deviceBufferFrames = 0;
+    m_targetBufferFrames = 0;
+    m_initialised        = false;
 }
 
 void SdlOutput::reset()
@@ -146,17 +193,17 @@ void SdlOutput::reset()
 
 void SdlOutput::start()
 {
-    if(SDL_GetAudioStatus() != SDL_AUDIO_PLAYING) {
+    if(SDL_GetAudioDeviceStatus(m_audioDeviceId) != SDL_AUDIO_PLAYING) {
         SDL_PauseAudioDevice(m_audioDeviceId, 0);
-        m_eventTimer.start(EventInterval, this);
     }
+    checkEvents();
 }
 
 void SdlOutput::drain()
 {
     while(SDL_GetQueuedAudioSize(m_audioDeviceId) > 0) {
         checkEvents();
-        SDL_Delay(1000);
+        SDL_Delay(20);
     }
 }
 
@@ -172,51 +219,71 @@ QString SdlOutput::device() const
 
 int SdlOutput::bufferSize() const
 {
-    return m_bufferSize;
+    return std::max(1, m_targetBufferFrames);
 }
 
 OutputState SdlOutput::currentState()
 {
     OutputState state;
+    checkEvents();
 
-    state.queuedSamples = static_cast<int>(SDL_GetQueuedAudioSize(m_audioDeviceId) / m_format.bytesPerFrame());
-    state.freeSamples   = m_bufferSize - state.queuedSamples;
+    state.queuedFrames = queuedFrames();
+    state.freeFrames   = std::max(0, bufferSize() - state.queuedFrames);
+    if(m_format.sampleRate() > 0) {
+        state.delay = static_cast<double>(state.queuedFrames) / static_cast<double>(m_format.sampleRate());
+    }
 
     return state;
 }
 
-OutputDevices SdlOutput::getAllDevices(bool isCurrentOutput)
+OutputDevices SdlOutput::getAllDevices(bool /*isCurrentOutput*/)
 {
     OutputDevices devices;
-
-    if(!isCurrentOutput) {
-        SDL_Init(SDL_INIT_AUDIO);
+    auto audioLease = m_audioSubsystem->acquire();
+    if(!audioLease) {
+        qCWarning(SDL) << "Error initialising SDL audio for device enumeration:" << SDL_GetError();
+        return devices;
     }
 
     devices.emplace_back(u"default"_s, u"Default"_s);
 
     const int num = SDL_GetNumAudioDevices(0);
-    for(int i = 0; i < num; ++i) {
+    for(int i{0}; i < num; ++i) {
         const QString devName = QString::fromUtf8(SDL_GetAudioDeviceName(i, 0));
         if(!devName.isNull()) {
             devices.emplace_back(devName, devName);
         }
     }
 
-    if(!isCurrentOutput) {
-        SDL_Quit();
-    }
-
     return devices;
 }
 
-int SdlOutput::write(const AudioBuffer& buffer)
+int SdlOutput::write(const std::span<const std::byte> data, const int frameCount)
 {
-    AudioBuffer adjustedBuffer{buffer};
-    adjustedBuffer.scale(m_volume);
+    checkEvents();
+    if(frameCount <= 0 || m_audioDeviceId == 0) {
+        return 0;
+    }
 
-    if(SDL_QueueAudio(m_audioDeviceId, adjustedBuffer.constData().data(), buffer.byteCount()) == 0) {
-        return buffer.sampleCount();
+    const int bytesPerFrame = m_format.bytesPerFrame();
+    if(bytesPerFrame <= 0) {
+        return 0;
+    }
+
+    const size_t availableFrames = data.size() / static_cast<size_t>(bytesPerFrame);
+    const int framesToWrite      = std::min(frameCount, static_cast<int>(availableFrames));
+    if(framesToWrite <= 0) {
+        return 0;
+    }
+
+    const int acceptedFrames = std::min(framesToWrite, std::max(0, bufferSize() - queuedFrames()));
+    if(acceptedFrames <= 0) {
+        return 0;
+    }
+
+    const size_t byteCount = static_cast<size_t>(acceptedFrames) * static_cast<size_t>(bytesPerFrame);
+    if(SDL_QueueAudio(m_audioDeviceId, data.data(), byteCount) == 0) {
+        return acceptedFrames;
     }
 
     return 0;
@@ -227,9 +294,9 @@ void SdlOutput::setPaused(bool pause)
     SDL_PauseAudioDevice(m_audioDeviceId, pause);
 }
 
-void SdlOutput::setVolume(double volume)
+bool SdlOutput::supportsVolumeControl() const
 {
-    m_volume = volume;
+    return false;
 }
 
 void SdlOutput::setDevice(const QString& device)
@@ -250,24 +317,27 @@ AudioFormat SdlOutput::format() const
     return m_format;
 }
 
-void SdlOutput::timerEvent(QTimerEvent* event)
-{
-    if(event->timerId() == m_eventTimer.timerId()) {
-        checkEvents();
-    }
-
-    AudioOutput::timerEvent(event);
-}
-
 void SdlOutput::checkEvents()
 {
     while(SDL_PollEvent(&m_event)) {
         switch(m_event.type) {
             case(SDL_AUDIODEVICEREMOVED):
-                emit stateChanged(AudioOutput::State::Disconnected);
+                QMetaObject::invokeMethod(
+                    this, [this]() { Q_EMIT stateChanged(AudioOutput::State::Disconnected); }, Qt::QueuedConnection);
             default:
                 break;
         }
     }
+}
+
+int SdlOutput::queuedFrames() const
+{
+    const int bytesPerFrame = m_format.bytesPerFrame();
+    if(m_audioDeviceId == 0 || bytesPerFrame <= 0) {
+        return 0;
+    }
+
+    const auto queuedBytes = SDL_GetQueuedAudioSize(m_audioDeviceId);
+    return static_cast<int>(queuedBytes / static_cast<Uint32>(bytesPerFrame));
 }
 } // namespace Fooyin::Sdl

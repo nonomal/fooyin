@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,10 @@
 
 #include "scrobblerservice.h"
 
+#include <QPointer>
+
+#include <unordered_map>
+
 namespace Fooyin::Scrobbler {
 class LastFmService : public ScrobblerService
 {
@@ -33,6 +37,8 @@ public:
     [[nodiscard]] QString username() const override;
     [[nodiscard]] bool requiresAuthentication() const override;
     [[nodiscard]] bool isAuthenticated() const override;
+    [[nodiscard]] bool supportsLoved() const override;
+    [[nodiscard]] bool supportsTrackStatsSync() const override;
 
     void saveSession() override;
     void loadSession() override;
@@ -42,22 +48,37 @@ public:
     void testApi() override;
     void updateNowPlaying() override;
     void submit() override;
+    void fetchTrackStats(const Track& track) override;
 
 protected:
+    [[nodiscard]] virtual QString apiKey() const;
+    [[nodiscard]] virtual QString apiSecret() const;
+
     void setupAuthQuery(ScrobblerAuthSession* session, QUrlQuery& query) override;
     void requestAuth(const QString& token) override;
     void authFinished(QNetworkReply* reply) override;
 
     ReplyResult getJsonFromReply(QNetworkReply* reply, QJsonObject* obj, QString* errorDesc) override;
+    void submitLoved(const LovedItem& item) override;
 
 private:
+    struct ReplyErrorInfo
+    {
+        int httpStatus{0};
+        int apiErrorCode{0};
+        QString message;
+    };
+
     QNetworkReply* createRequest(const std::map<QString, QString>& params);
+    [[nodiscard]] static QByteArray createRequestBody(const std::map<QString, QString>& params);
+    [[nodiscard]] static ReplyErrorInfo getReplyErrorInfo(QNetworkReply* reply, const QJsonObject& obj);
     void updateNowPlayingFinished(QNetworkReply* reply);
     void scrobbleFinished(QNetworkReply* reply, const CacheItemList& items);
+    void lovedFinished(QNetworkReply* reply, const LovedItem& item);
+    void trackStatsFinished(QNetworkReply* reply, const QString& key, const Track& track);
 
-    QString m_apiKey;
-    QString m_secret;
     QString m_username;
     QString m_sessionKey;
+    std::unordered_map<QString, QPointer<QNetworkReply>> m_trackStatsReplies;
 };
 } // namespace Fooyin::Scrobbler

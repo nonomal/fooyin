@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,13 +20,16 @@
 #include <core/engine/audioloader.h>
 
 #include <core/coresettings.h>
+#include <core/internalcoresettings.h>
+#include <core/network/remotesourceprovider.h>
 #include <core/track.h>
 #include <utils/helpers.h>
 
 #include <QFileInfo>
 #include <QLoggingCategory>
-#include <QThreadStorage>
+#include <QUrl>
 
+#include <algorithm>
 #include <mutex>
 #include <shared_mutex>
 
@@ -37,19 +40,254 @@ using namespace Qt::StringLiterals;
 constexpr auto DecoderState = "Engine/DecoderState";
 constexpr auto ReaderState  = "Engine/ReaderState";
 
+namespace Fooyin {
 namespace {
+QStringList normaliseExtensions(QStringList extensions)
+{
+    for(QString& extension : extensions) {
+        extension = extension.trimmed().toLower();
+    }
+
+    extensions.removeAll(QString{});
+    std::ranges::sort(extensions);
+    extensions.removeDuplicates();
+
+    return extensions;
+}
+
+template <typename T>
+void appendLoaderExtensions(QStringList& extensions, const std::vector<T>& loaders)
+{
+    for(const auto& loader : loaders) {
+        extensions.append(loader.extensions);
+    }
+}
+
+template <typename T>
+QStringList archiveExtensionsFromReaders(const std::vector<T>& archiveReaders)
+{
+    QStringList extensions;
+    appendLoaderExtensions(extensions, archiveReaders);
+    return normaliseExtensions(std::move(extensions));
+}
+
+template <typename T>
+void refreshArchiveWrapperExtensions(std::vector<T>& loaders, const QStringList& archiveExtensions)
+{
+    for(auto& loader : loaders) {
+        if(loader.isArchiveWrapper) {
+            loader.extensions = archiveExtensions;
+        }
+    }
+}
+
+template <typename T>
+void renumberLoaderEntries(std::vector<T>& entries)
+{
+    std::ranges::for_each(entries, [i = 0](auto& loader) mutable { loader.index = i++; });
+}
+
 template <typename T>
 void sortLoaderEntries(std::vector<T>& entries)
 {
     std::ranges::sort(entries, {}, &T::index);
-    std::ranges::for_each(entries, [i = 0](auto& loader) mutable { loader.index = i++; });
+    renumberLoaderEntries(entries);
+}
+
+template <typename EntryT, typename CreatorT>
+CreatorT selectTrackIoCreator(const std::vector<EntryT>& loaders, const QString& ext, bool isInArchive,
+                              bool includeDisabled = false)
+{
+    CreatorT ret;
+    for(const auto& loader : loaders) {
+        if(!includeDisabled && !loader.enabled) {
+            continue;
+        }
+        if(isInArchive) {
+            if(loader.isArchiveWrapper) {
+                ret.push_back(loader.creator);
+                break;
+            }
+            continue;
+        }
+        if(!loader.isArchiveWrapper && loader.extensions.contains(ext)) {
+            ret.push_back(loader.creator);
+        }
+    }
+
+    return ret;
+}
+
+template <typename EntryT, typename CreatorT, typename CapabilityFn>
+CreatorT selectRemoteTrackIoCreator(const std::vector<EntryT>& loaders, CapabilityFn&& capabilityFn,
+                                    bool includeDisabled = false)
+{
+    CreatorT ret;
+
+    for(const auto& loader : loaders) {
+        if((!includeDisabled && !loader.enabled) || loader.isArchiveWrapper) {
+            continue;
+        }
+
+        if(const auto io = loader.creator(); io && capabilityFn(*io)) {
+            ret.emplace_back(loader.creator);
+        }
+    }
+
+    return ret;
+}
+
+template <typename EntryT, typename CreatorT>
+CreatorT selectSchemeTrackIoCreator(const std::vector<EntryT>& loaders, const QString& scheme,
+                                    bool includeDisabled = false)
+{
+    CreatorT ret;
+    for(const auto& loader : loaders) {
+        if((!includeDisabled && !loader.enabled) || loader.isArchiveWrapper) {
+            continue;
+        }
+        if(loader.schemes.contains(scheme)) {
+            ret.push_back(loader.creator);
+        }
+    }
+    return ret;
+}
+
+QString sourceScheme(const QString& source)
+{
+    if(!Track::isVirtualPath(source)) {
+        return {};
+    }
+
+    const QUrl url{source, QUrl::StrictMode};
+    return url.scheme().toLower();
+}
+
+void prepareSchemeSource(LoadedSource& input, const QString& filepath)
+{
+    input.device.reset();
+    input.archiveReader.reset();
+    input.source          = {};
+    input.source.filepath = filepath;
+    input.rebind();
+}
+
+template <typename T>
+void prioritisePreferredLoaders(std::vector<std::unique_ptr<T>>& loaders, const QString& ext)
+{
+    std::ranges::stable_partition(loaders, [&ext](const auto& loader) {
+        return loader && normaliseExtensions(loader->preferredExtensions()).contains(ext);
+    });
+}
+
+QStringList readerProbeAllExtensions()
+{
+    const FySettings settings;
+    const QVariant value = settings.contains(Settings::Core::Internal::ReaderProbeAllExtensions)
+                             ? settings.value(Settings::Core::Internal::ReaderProbeAllExtensions)
+                             : settings.value(Settings::Core::Internal::FFmpegPriorityExtensions,
+                                              Settings::Core::Internal::defaultReaderProbeAllExtensions());
+    return normaliseExtensions(value.toStringList());
+}
+
+bool shouldProbeAllReadersForFile(const QString& file)
+{
+    const QString ext = QFileInfo{file}.suffix().toLower();
+    return !ext.isEmpty() && readerProbeAllExtensions().contains(ext);
+}
+
+bool openFileSource(LoadedSource& input, const QString& filepath)
+{
+    if(!input.device) {
+        auto file = std::make_unique<QFile>(filepath);
+        if(!file->open(QIODevice::ReadOnly)) {
+            qCWarning(AUD_LDR) << "Failed to open" << filepath;
+            return false;
+        }
+        input.device = std::move(file);
+    }
+    else if(!input.device->seek(0)) {
+        qCWarning(AUD_LDR) << "Failed to rewind" << filepath;
+        return false;
+    }
+
+    input.source.filepath           = filepath;
+    input.source.remoteStreamDevice = nullptr;
+    input.source.remoteOpenTimeout  = std::chrono::milliseconds{0};
+    input.rebind();
+    return true;
+}
+
+bool openRemoteSource(LoadedSource& input, const QString& filepath,
+                      const std::shared_ptr<RemoteSourceProvider>& provider)
+{
+    if(!provider) {
+        input.device.reset();
+        input.source.filepath           = filepath;
+        input.source.remoteStreamDevice = nullptr;
+        input.source.remoteOpenTimeout  = std::chrono::milliseconds{0};
+        input.source.modifiedTime       = 0;
+        input.source.size               = 0;
+        input.rebind();
+        return true;
+    }
+
+    input.source.remoteStreamDevice = nullptr;
+
+    auto remoteSource = provider->createStreamSource(QUrl{filepath});
+    input.device      = std::move(remoteSource.device);
+    if(!input.device) {
+        qCWarning(AUD_LDR) << "No remote source available for" << filepath;
+        return false;
+    }
+
+    if(!input.device->isOpen() && !input.device->open(QIODevice::ReadOnly)) {
+        qCWarning(AUD_LDR) << "Failed to open remote source" << filepath << input.device->errorString();
+        input.device.reset();
+        return false;
+    }
+
+    input.source.filepath           = filepath;
+    input.source.remoteStreamDevice = remoteSource.remoteDevice;
+    input.source.remoteOpenTimeout  = remoteSource.openTimeout;
+    input.source.modifiedTime       = 0;
+    input.source.size               = 0;
+    input.rebind();
+    return true;
+}
+
+bool openArchiveSource(LoadedSource& input, const AudioLoader& loader, const QString& archivePath,
+                       const QString& entryPath)
+{
+    if(!input.archiveReader) {
+        input.archiveReader = loader.archiveReaderForFile(archivePath);
+        if(!input.archiveReader) {
+            qCWarning(AUD_LDR) << "No archive reader available for" << archivePath;
+            return false;
+        }
+        if(!input.archiveReader->init(archivePath)) {
+            qCWarning(AUD_LDR) << "Failed to initialise archive reader for" << archivePath;
+            input.archiveReader.reset();
+            return false;
+        }
+    }
+
+    ArchiveEntryData entryData = input.archiveReader->entry(entryPath);
+    if(!entryData.device) {
+        qCWarning(AUD_LDR) << "Failed to open archive entry" << entryPath << "from" << archivePath;
+        return false;
+    }
+
+    input.device                    = std::move(entryData.device);
+    input.source.filepath           = entryData.info.path;
+    input.source.remoteStreamDevice = nullptr;
+    input.source.remoteOpenTimeout  = std::chrono::milliseconds{0};
+    input.source.modifiedTime       = entryData.info.modifiedTime;
+    input.source.size               = entryData.info.size;
+    input.rebind();
+    return true;
 }
 } // namespace
-
-namespace Fooyin {
-using DecoderInstances       = std::unordered_map<QString, std::unique_ptr<AudioDecoder>>;
-using ReaderInstances        = std::unordered_map<QString, std::unique_ptr<AudioReader>>;
-using ArchiveReaderInstances = std::unordered_map<QString, std::unique_ptr<ArchiveReader>>;
 
 class AudioLoaderPrivate
 {
@@ -61,6 +299,7 @@ public:
     std::vector<AudioLoader::LoaderEntry<ReaderCreator>> m_readers;
     std::vector<AudioLoader::LoaderEntry<ArchiveReaderCreator>> m_archiveReaders;
 
+    std::shared_ptr<RemoteSourceProvider> m_remoteSourceProvider;
     std::shared_mutex m_mutex;
 };
 
@@ -87,6 +326,7 @@ void AudioLoader::saveState()
     const std::shared_lock lock{p->m_mutex};
     saveLoaders(p->m_decoders, DecoderState);
     saveLoaders(p->m_readers, ReaderState);
+    settings.sync();
 }
 
 void AudioLoader::restoreState()
@@ -98,10 +338,20 @@ void AudioLoader::restoreState()
         sortLoaderEntries(defaultLoaders);
 
         QByteArray data = settings.value(state, {}).toByteArray();
+        if(data.isEmpty()) {
+            return;
+        }
+
         QDataStream stream{&data, QIODevice::ReadOnly};
 
         qsizetype size{0};
         stream >> size;
+        if(stream.status() != QDataStream::Ok || size < 0) {
+            return;
+        }
+
+        const auto maxEntries = static_cast<qsizetype>(loaders.size());
+        size                  = std::min(size, maxEntries);
 
         while(size > 0) {
             --size;
@@ -110,6 +360,9 @@ void AudioLoader::restoreState()
             bool enabled{true};
 
             stream >> name >> index >> enabled;
+            if(stream.status() != QDataStream::Ok) {
+                break;
+            }
 
             auto loaderIt = std::ranges::find_if(loaders, [&name](const auto& loader) { return loader.name == name; });
             if(loaderIt != loaders.end()) {
@@ -121,19 +374,11 @@ void AudioLoader::restoreState()
         sortLoaderEntries(loaders);
     };
 
-    const QStringList archiveExts = supportedArchiveExtensions();
     const std::unique_lock lock{p->m_mutex};
+    const QStringList archiveExts = archiveExtensionsFromReaders(p->m_archiveReaders);
 
-    auto archiveDec
-        = std::ranges::find_if(p->m_decoders, [](const auto& loader) { return loader.name == "Archive"_L1; });
-    if(archiveDec != p->m_decoders.end()) {
-        archiveDec->extensions = archiveExts;
-    }
-    auto archiveRead
-        = std::ranges::find_if(p->m_readers, [](const auto& loader) { return loader.name == "Archive"_L1; });
-    if(archiveRead != p->m_readers.end()) {
-        archiveRead->extensions = archiveExts;
-    }
+    refreshArchiveWrapperExtensions(p->m_decoders, archiveExts);
+    refreshArchiveWrapperExtensions(p->m_readers, archiveExts);
 
     restoreLoaders(p->m_decoders, p->m_defaultDecoders, DecoderState);
     restoreLoaders(p->m_readers, p->m_defaultReaders, ReaderState);
@@ -141,23 +386,21 @@ void AudioLoader::restoreState()
 
 AudioLoader::~AudioLoader() = default;
 
+void AudioLoader::setRemoteSourceProvider(std::shared_ptr<RemoteSourceProvider> provider)
+{
+    const std::unique_lock lock{p->m_mutex};
+    p->m_remoteSourceProvider = std::move(provider);
+}
+
 QStringList AudioLoader::supportedFileExtensions() const
 {
     const std::shared_lock lock{p->m_mutex};
 
     QStringList extensions;
-
-    auto addExtensions = [&extensions](const auto& loaders) {
-        for(const auto& loader : loaders) {
-            extensions.append(loader.extensions);
-        }
-    };
-
-    addExtensions(p->m_decoders);
-    addExtensions(p->m_readers);
-    addExtensions(p->m_archiveReaders);
-
-    return extensions;
+    appendLoaderExtensions(extensions, p->m_decoders);
+    appendLoaderExtensions(extensions, p->m_readers);
+    appendLoaderExtensions(extensions, p->m_archiveReaders);
+    return normaliseExtensions(std::move(extensions));
 }
 
 QStringList AudioLoader::supportedTrackExtensions() const
@@ -165,39 +408,31 @@ QStringList AudioLoader::supportedTrackExtensions() const
     const std::shared_lock lock{p->m_mutex};
 
     QStringList extensions;
-
-    auto addExtensions = [&extensions](const auto& loaders) {
-        for(const auto& loader : loaders) {
-            extensions.append(loader.extensions);
-        }
-    };
-
-    addExtensions(p->m_decoders);
-    addExtensions(p->m_readers);
-
-    return extensions;
+    appendLoaderExtensions(extensions, p->m_decoders);
+    appendLoaderExtensions(extensions, p->m_readers);
+    return normaliseExtensions(std::move(extensions));
 }
 
 QStringList AudioLoader::supportedArchiveExtensions() const
 {
     const std::shared_lock lock{p->m_mutex};
-
-    QStringList extensions;
-
-    for(const auto& loader : p->m_archiveReaders) {
-        extensions.append(loader.extensions);
-    }
-
-    return extensions;
+    return archiveExtensionsFromReaders(p->m_archiveReaders);
 }
 
 bool AudioLoader::canWriteMetadata(const Track& track) const
 {
-    if(auto reader = readerForTrack(track)) {
+    if(track.isRemote() || !sourceScheme(track.filepath()).isEmpty()) {
+        return false;
+    }
+
+    for(auto& reader : readersForFile(track.filepath(), true)) {
+        bool initSuccess{true};
         if(track.isInArchive()) {
-            reader->init({track.filepath(), nullptr, nullptr});
+            initSuccess = reader->init({.filepath = track.filepath(), .device = nullptr, .archiveReader = nullptr});
         }
-        return reader->canWriteMetaData();
+        if(initSuccess && reader->canWriteMetaData()) {
+            return true;
+        }
     }
     return false;
 }
@@ -211,71 +446,284 @@ bool AudioLoader::isArchive(const QString& file) const
                                [&ext](const auto& loader) { return loader.extensions.contains(ext); });
 }
 
-std::unique_ptr<AudioDecoder> AudioLoader::decoderForFile(const QString& file) const
+LoadedDecoder AudioLoader::loadDecoderForTrack(const Track& track, AudioDecoder::DecoderOptions options,
+                                               AudioDecoder::PlaybackHints hints) const
 {
-    const std::shared_lock lock{p->m_mutex};
+    auto decoders = decodersForTrack(track);
+    if(decoders.empty()) {
+        return {};
+    }
 
-    const QString ext      = QFileInfo{file}.suffix().toLower();
-    const bool isInArchive = Track::isArchivePath(file);
+    LoadedDecoder ret;
+    const bool isSchemeSource = !sourceScheme(track.filepath()).isEmpty();
 
-    for(const auto& loader : p->m_decoders) {
-        if(!loader.enabled) {
-            continue;
+    for(auto& decoder : decoders) {
+        if(track.isRemote()) {
+            std::shared_ptr<RemoteSourceProvider> remoteSourceProvider;
+            {
+                const std::shared_lock lock{p->m_mutex};
+                remoteSourceProvider = p->m_remoteSourceProvider;
+            }
+            if(!openRemoteSource(ret.input, track.filepath(), remoteSourceProvider)) {
+                return {};
+            }
         }
-        if((isInArchive && loader.name == "Archive"_L1) || (!isInArchive && loader.extensions.contains(ext))) {
-            return loader.creator();
+        else if(isSchemeSource) {
+            prepareSchemeSource(ret.input, track.filepath());
+        }
+        else if(!track.isInArchive()) {
+            if(!openFileSource(ret.input, track.filepath())) {
+                return {};
+            }
+        }
+        else {
+            ret.input.source.filepath = track.filepath();
+            ret.input.rebind();
+        }
+
+        decoder->setPlaybackHints(hints);
+        ret.format = decoder->init(ret.input.source, track, options);
+        if(ret.format) {
+            ret.decoder = std::move(decoder);
+            return ret;
         }
     }
 
-    return nullptr;
+    return {};
 }
 
-std::unique_ptr<AudioDecoder> AudioLoader::decoderForTrack(const Track& track) const
+LoadedReader AudioLoader::loadReaderForTrack(const Track& track) const
 {
-    return decoderForFile(track.filepath());
-}
+    auto readers = readersForTrack(track);
+    if(readers.empty()) {
+        return {};
+    }
 
-std::unique_ptr<AudioReader> AudioLoader::readerForFile(const QString& file) const
-{
-    const std::shared_lock lock{p->m_mutex};
+    const bool probeAllReaders = shouldProbeAllReadersForFile(track.filepath());
 
-    const QString ext      = QFileInfo{file}.suffix().toLower();
-    const bool isInArchive = Track::isArchivePath(file);
+    LoadedReader best;
+    int bestSubsongCount{0};
+    const bool isSchemeSource = !sourceScheme(track.filepath()).isEmpty();
 
-    for(const auto& loader : p->m_readers) {
-        if(!loader.enabled) {
-            continue;
+    for(auto& reader : readers) {
+        LoadedReader ret;
+        if(track.isRemote()) {
+            std::shared_ptr<RemoteSourceProvider> remoteSourceProvider;
+            {
+                const std::shared_lock lock{p->m_mutex};
+                remoteSourceProvider = p->m_remoteSourceProvider;
+            }
+            if(!openRemoteSource(ret.input, track.filepath(), remoteSourceProvider)) {
+                return {};
+            }
         }
-        if((isInArchive && loader.name == "Archive"_L1) || (!isInArchive && loader.extensions.contains(ext))) {
-            return loader.creator();
+        else if(isSchemeSource) {
+            prepareSchemeSource(ret.input, track.filepath());
+        }
+        else if(!track.isInArchive()) {
+            if(!openFileSource(ret.input, track.filepath())) {
+                return {};
+            }
+        }
+        else {
+            ret.input.source.filepath = track.filepath();
+            ret.input.rebind();
+        }
+
+        if(reader->init(ret.input.source)) {
+            ret.reader = std::move(reader);
+            if(!probeAllReaders) {
+                return ret;
+            }
+
+            const int subsongCount = std::max(ret.reader->subsongCount(), 1);
+            if(!best.reader || subsongCount > bestSubsongCount) {
+                best             = std::move(ret);
+                bestSubsongCount = subsongCount;
+            }
         }
     }
 
-    return nullptr;
+    return best;
 }
 
-std::unique_ptr<AudioReader> AudioLoader::readerForTrack(const Track& track) const
+LoadedDecoder AudioLoader::loadDecoderForArchiveTrack(const Track& track, AudioDecoder::DecoderOptions options,
+                                                      AudioDecoder::PlaybackHints hints) const
 {
-    return readerForFile(track.filepath());
+    auto decoders = decodersForFile(track.pathInArchive());
+    if(decoders.empty()) {
+        return {};
+    }
+
+    LoadedDecoder ret;
+    if(!openArchiveSource(ret.input, *this, track.archivePath(), track.pathInArchive())) {
+        return {};
+    }
+
+    for(auto& decoder : decoders) {
+        if(ret.input.device && !ret.input.device->seek(0)
+           && !openArchiveSource(ret.input, *this, track.archivePath(), track.pathInArchive())) {
+            return {};
+        }
+
+        decoder->setPlaybackHints(hints);
+        ret.format = decoder->init(ret.input.source, track, options);
+        if(ret.format) {
+            ret.decoder = std::move(decoder);
+            return ret;
+        }
+    }
+
+    return {};
+}
+
+LoadedReader AudioLoader::loadReaderForArchiveTrack(const Track& track) const
+{
+    auto readers = readersForFile(track.pathInArchive());
+    if(readers.empty()) {
+        return {};
+    }
+
+    const bool probeAllReaders = shouldProbeAllReadersForFile(track.pathInArchive());
+
+    LoadedReader best;
+    int bestSubsongCount{0};
+
+    for(auto& reader : readers) {
+        LoadedReader ret;
+        if(!openArchiveSource(ret.input, *this, track.archivePath(), track.pathInArchive())) {
+            return {};
+        }
+
+        if(reader->init(ret.input.source)) {
+            ret.reader = std::move(reader);
+            if(!probeAllReaders) {
+                return ret;
+            }
+
+            const int subsongCount = std::max(ret.reader->subsongCount(), 1);
+            if(!best.reader || subsongCount > bestSubsongCount) {
+                best             = std::move(ret);
+                bestSubsongCount = subsongCount;
+            }
+        }
+    }
+
+    return best;
+}
+
+std::vector<std::unique_ptr<AudioDecoder>> AudioLoader::decodersForFile(const QString& file) const
+{
+    const QString ext      = QFileInfo{file}.suffix().toLower();
+    const bool isInArchive = Track::isArchivePath(file);
+    const QString scheme   = sourceScheme(file);
+
+    std::vector<DecoderCreator> creators;
+    {
+        const std::shared_lock lock{p->m_mutex};
+        if(Track::isRemotePath(file)) {
+            creators = selectRemoteTrackIoCreator<LoaderEntry<DecoderCreator>, std::vector<DecoderCreator>>(
+                p->m_decoders, [](const AudioDecoder& decoder) { return decoder.supportsRemoteSources(); });
+        }
+        else if(!scheme.isEmpty()) {
+            creators = selectSchemeTrackIoCreator<LoaderEntry<DecoderCreator>, std::vector<DecoderCreator>>(
+                p->m_decoders, scheme);
+        }
+        else {
+            creators = selectTrackIoCreator<LoaderEntry<DecoderCreator>, std::vector<DecoderCreator>>(p->m_decoders,
+                                                                                                      ext, isInArchive);
+        }
+    }
+
+    std::vector<std::unique_ptr<AudioDecoder>> ret;
+    ret.reserve(creators.size());
+
+    for(const DecoderCreator& creator : creators) {
+        ret.push_back(creator());
+    }
+    if(!isInArchive) {
+        prioritisePreferredLoaders(ret, ext);
+    }
+
+    return ret;
+}
+
+std::vector<std::unique_ptr<AudioDecoder>> AudioLoader::decodersForTrack(const Track& track) const
+{
+    return decodersForFile(track.filepath());
+}
+
+std::vector<std::unique_ptr<AudioReader>> AudioLoader::readersForFile(const QString& file) const
+{
+    return readersForFile(file, false);
+}
+
+std::vector<std::unique_ptr<AudioReader>> AudioLoader::readersForFile(const QString& file, bool includeDisabled) const
+{
+    const QString ext      = QFileInfo{file}.suffix().toLower();
+    const bool isInArchive = Track::isArchivePath(file);
+    const QString scheme   = sourceScheme(file);
+
+    std::vector<ReaderCreator> creators;
+    {
+        const std::shared_lock lock{p->m_mutex};
+        if(Track::isRemotePath(file)) {
+            creators = selectRemoteTrackIoCreator<LoaderEntry<ReaderCreator>, std::vector<ReaderCreator>>(
+                p->m_readers, [](const AudioReader& reader) { return reader.supportsRemoteSources(); },
+                includeDisabled);
+        }
+        else if(!scheme.isEmpty()) {
+            creators = selectSchemeTrackIoCreator<LoaderEntry<ReaderCreator>, std::vector<ReaderCreator>>(
+                p->m_readers, scheme, includeDisabled);
+        }
+        else {
+            creators = selectTrackIoCreator<LoaderEntry<ReaderCreator>, std::vector<ReaderCreator>>(
+                p->m_readers, ext, isInArchive, includeDisabled);
+        }
+    }
+
+    std::vector<std::unique_ptr<AudioReader>> ret;
+    ret.reserve(creators.size());
+
+    for(const ReaderCreator& creator : creators) {
+        ret.push_back(creator());
+    }
+    if(!isInArchive) {
+        prioritisePreferredLoaders(ret, ext);
+    }
+
+    return ret;
+}
+
+std::vector<std::unique_ptr<AudioReader>> AudioLoader::readersForTrack(const Track& track) const
+{
+    return readersForFile(track.filepath());
 }
 
 std::unique_ptr<ArchiveReader> AudioLoader::archiveReaderForFile(const QString& file) const
 {
-    const std::shared_lock lock{p->m_mutex};
-
     if(!isArchive(file)) {
         return nullptr;
     }
 
     const QString ext = QFileInfo{file}.suffix().toLower();
 
-    for(const auto& loader : p->m_archiveReaders) {
-        if(!loader.enabled) {
-            continue;
+    ArchiveReaderCreator creator;
+    {
+        const std::shared_lock lock{p->m_mutex};
+        for(const auto& loader : p->m_archiveReaders) {
+            if(!loader.enabled) {
+                continue;
+            }
+            if(loader.extensions.contains(ext)) {
+                creator = loader.creator;
+                break;
+            }
         }
-        if(loader.extensions.contains(ext)) {
-            return loader.creator();
-        }
+    }
+
+    if(creator) {
+        return creator();
     }
 
     return nullptr;
@@ -283,27 +731,53 @@ std::unique_ptr<ArchiveReader> AudioLoader::archiveReaderForFile(const QString& 
 
 bool AudioLoader::readTrackMetadata(Track& track) const
 {
-    const std::shared_lock lock{p->m_mutex};
+    const Track originalTrack{track};
 
-    auto reader = readerForTrack(track);
-    if(!reader) {
+    const auto readers = readersForTrack(track);
+    std::shared_ptr<RemoteSourceProvider> remoteSourceProvider;
+    if(track.isRemote()) {
+        const std::shared_lock lock{p->m_mutex};
+        remoteSourceProvider = p->m_remoteSourceProvider;
+    }
+
+    for(const auto& reader : readers) {
+        LoadedSource loadedSource;
+        AudioSource source;
+        source.filepath = track.filepath();
+        QFile file{track.filepath()};
+
+        if(track.isRemote()) {
+            if(!openRemoteSource(loadedSource, track.filepath(), remoteSourceProvider)) {
+                return false;
+            }
+            source = loadedSource.source;
+        }
+        else if(!sourceScheme(track.filepath()).isEmpty()) {
+            source.device = nullptr;
+        }
+        else if(!track.isInArchive()) {
+            if(!file.open(QIODevice::ReadOnly)) {
+                qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
+                return false;
+            }
+            source.device = &file;
+        }
+
+        if(!reader->init(source)) {
+            continue;
+        }
+
+        Track readTrack{originalTrack};
+        if(reader->readTrack(source, readTrack)) {
+            readTrack.setMetadataWasRead(true);
+            track = readTrack;
+            return true;
+        }
+    }
+
+    if(readers.empty()) {
         qCInfo(AUD_LDR) << "Tag reader not available for file:" << track.filepath();
         return {};
-    }
-
-    AudioSource source;
-    source.filepath = track.filepath();
-    QFile file{track.filepath()};
-    if(!track.isInArchive()) {
-        if(!file.open(QIODevice::ReadOnly)) {
-            qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
-            return false;
-        }
-        source.device = &file;
-    }
-
-    if(reader->init(source)) {
-        return reader->readTrack(source, track);
     }
 
     return false;
@@ -311,29 +785,34 @@ bool AudioLoader::readTrackMetadata(Track& track) const
 
 QByteArray AudioLoader::readTrackCover(const Track& track, Track::Cover cover) const
 {
-    const std::shared_lock lock{p->m_mutex};
-
-    auto reader = readerForTrack(track);
-    if(!reader) {
+    if(track.isRemote()) {
         return {};
     }
 
-    if(!track.isInArchive() && !reader->canReadCover()) {
-        return {};
-    }
+    const auto readers = readersForTrack(track);
 
-    AudioSource source;
-    source.filepath = track.filepath();
-    QFile file{track.filepath()};
-    if(!track.isInArchive()) {
-        if(!file.open(QIODevice::ReadOnly)) {
-            return {};
+    for(const auto& reader : readers) {
+        const bool isSchemeSource = !sourceScheme(track.filepath()).isEmpty();
+        if(!track.isInArchive() && !isSchemeSource && !reader->canReadCover()) {
+            continue;
         }
-        source.device = &file;
-    }
 
-    if(reader->init(source) && reader->canReadCover()) {
-        return reader->readCover(source, track, cover);
+        AudioSource source;
+        source.filepath = track.filepath();
+        QFile file{track.filepath()};
+
+        if(!track.isInArchive() && !isSchemeSource) {
+            if(!file.open(QIODevice::ReadOnly)) {
+                return {};
+            }
+            source.device = &file;
+        }
+
+        if(reader->init(source) && reader->canReadCover()) {
+            if(const QByteArray coverData = reader->readCover(source, track, cover); !coverData.isEmpty()) {
+                return coverData;
+            }
+        }
     }
 
     return {};
@@ -341,67 +820,85 @@ QByteArray AudioLoader::readTrackCover(const Track& track, Track::Cover cover) c
 
 bool AudioLoader::writeTrackMetadata(const Track& track, AudioReader::WriteOptions options) const
 {
-    if(track.isInArchive()) {
+    if(track.isInArchive() || track.isRemote() || !sourceScheme(track.filepath()).isEmpty()) {
         return false;
     }
 
-    const std::shared_lock lock{p->m_mutex};
+    const auto readers = readersForFile(track.filepath(), true);
+    for(const auto& reader : readers) {
+        if(!reader->canWriteMetaData()) {
+            continue;
+        }
 
-    auto reader = readerForTrack(track);
-    if(!reader || !reader->canWriteMetaData()) {
-        return false;
+        AudioSource source;
+        source.filepath = track.filepath();
+        QFile file{track.filepath()};
+
+        if(!file.exists()) {
+            qCWarning(AUD_LDR) << "File not found:" << source.filepath;
+            return false;
+        }
+
+        if(!file.open(QIODeviceBase::ReadWrite)) {
+            qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
+            return false;
+        }
+        source.device = &file;
+
+        if(reader->writeTrack(source, track, options)) {
+            return true;
+        }
     }
 
-    AudioSource source;
-    source.filepath = track.filepath();
-    QFile file{track.filepath()};
-
-    if(!file.exists()) {
-        qCWarning(AUD_LDR) << "File not found:" << source.filepath;
-        return false;
-    }
-
-    if(!file.open(QIODeviceBase::ReadWrite)) {
-        qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
-        return false;
-    }
-    source.device = &file;
-
-    return reader->writeTrack(source, track, options);
+    return false;
 }
 
 bool AudioLoader::writeTrackCover(const Track& track, const TrackCovers& coverData,
                                   AudioReader::WriteOptions options) const
 {
-    if(track.isInArchive()) {
+    if(track.isInArchive() || track.isRemote() || !sourceScheme(track.filepath()).isEmpty()) {
         return false;
     }
 
-    const std::shared_lock lock{p->m_mutex};
+    const auto readers = readersForFile(track.filepath(), true);
+    for(const auto& reader : readers) {
+        if(!reader->canWriteCover()) {
+            continue;
+        }
 
-    auto reader = readerForTrack(track);
-    if(!reader || !reader->canWriteCover()) {
-        return false;
+        AudioSource source;
+        source.filepath = track.filepath();
+        QFile file{track.filepath()};
+
+        if(!file.open(QIODeviceBase::ReadWrite)) {
+            qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
+            return false;
+        }
+        source.device = &file;
+
+        if(reader->writeCover(source, track, coverData, options)) {
+            return true;
+        }
     }
 
-    AudioSource source;
-    source.filepath = track.filepath();
-    QFile file{track.filepath()};
-    if(!file.open(QIODeviceBase::ReadWrite)) {
-        qCWarning(AUD_LDR) << "Failed to open file:" << source.filepath;
-        return false;
-    }
-    source.device = &file;
-
-    return reader->writeCover(source, track, coverData, options);
+    return false;
 }
 
-void AudioLoader::addDecoder(const QString& name, const DecoderCreator& creator, int priority)
+void AudioLoader::addDecoder(const QString& name, const DecoderCreator& creator, int priority, bool isArchiveWrapper)
 {
     if(!creator) {
         qCWarning(AUD_LDR) << "Decoder" << name << "cannot be created";
         return;
     }
+
+    auto decoder = creator();
+    if(!decoder) {
+        qCWarning(AUD_LDR) << "Decoder" << name << "cannot be instantiated";
+        return;
+    }
+
+    const auto decoderExtensions = normaliseExtensions(decoder->extensions());
+    const auto decoderSchemes    = normaliseExtensions(decoder->supportedSchemes());
 
     const std::unique_lock lock{p->m_mutex};
 
@@ -410,23 +907,36 @@ void AudioLoader::addDecoder(const QString& name, const DecoderCreator& creator,
         return;
     }
 
-    auto decoder = creator();
-
     LoaderEntry<DecoderCreator> loader;
-    loader.name       = name;
-    loader.index      = priority >= 0 ? priority : static_cast<int>(p->m_decoders.size());
-    loader.extensions = decoder->extensions();
-    loader.creator    = creator;
+    loader.name             = name;
+    loader.index            = priority >= 0 ? priority : static_cast<int>(p->m_decoders.size());
+    loader.extensions       = isArchiveWrapper ? archiveExtensionsFromReaders(p->m_archiveReaders) : decoderExtensions;
+    loader.schemes          = isArchiveWrapper ? QStringList{} : decoderSchemes;
+    loader.isArchiveWrapper = isArchiveWrapper;
+    loader.creator          = creator;
 
     p->m_decoders.push_back(loader);
+    sortLoaderEntries(p->m_decoders);
+
+    p->m_defaultDecoders.push_back(loader);
+    sortLoaderEntries(p->m_defaultDecoders);
 }
 
-void AudioLoader::addReader(const QString& name, const ReaderCreator& creator, int priority)
+void AudioLoader::addReader(const QString& name, const ReaderCreator& creator, int priority, bool isArchiveWrapper)
 {
     if(!creator) {
         qCWarning(AUD_LDR) << "Reader" << name << "cannot be created";
         return;
     }
+
+    auto reader = creator();
+    if(!reader) {
+        qCWarning(AUD_LDR) << "Reader" << name << "cannot be instantiated";
+        return;
+    }
+
+    const auto readerExtensions = normaliseExtensions(reader->extensions());
+    const auto readerSchemes    = normaliseExtensions(reader->supportedSchemes());
 
     const std::unique_lock lock{p->m_mutex};
 
@@ -435,15 +945,19 @@ void AudioLoader::addReader(const QString& name, const ReaderCreator& creator, i
         return;
     }
 
-    auto reader = creator();
-
     LoaderEntry<ReaderCreator> loader;
-    loader.name       = name;
-    loader.index      = priority >= 0 ? priority : static_cast<int>(p->m_readers.size());
-    loader.extensions = reader->extensions();
-    loader.creator    = creator;
+    loader.name             = name;
+    loader.index            = priority >= 0 ? priority : static_cast<int>(p->m_readers.size());
+    loader.extensions       = isArchiveWrapper ? archiveExtensionsFromReaders(p->m_archiveReaders) : readerExtensions;
+    loader.schemes          = isArchiveWrapper ? QStringList{} : readerSchemes;
+    loader.isArchiveWrapper = isArchiveWrapper;
+    loader.creator          = creator;
 
     p->m_readers.push_back(loader);
+    sortLoaderEntries(p->m_readers);
+
+    p->m_defaultReaders.push_back(loader);
+    sortLoaderEntries(p->m_defaultReaders);
 }
 
 void AudioLoader::addArchiveReader(const QString& name, const ArchiveReaderCreator& creator, int priority)
@@ -453,6 +967,14 @@ void AudioLoader::addArchiveReader(const QString& name, const ArchiveReaderCreat
         return;
     }
 
+    auto reader = creator();
+    if(!reader) {
+        qCWarning(AUD_LDR) << "Reader" << name << "cannot be instantiated";
+        return;
+    }
+
+    const auto readerExtensions = normaliseExtensions(reader->extensions());
+
     const std::unique_lock lock{p->m_mutex};
 
     if(std::ranges::any_of(p->m_archiveReaders, [&name](const auto& loader) { return loader.name == name; })) {
@@ -460,15 +982,20 @@ void AudioLoader::addArchiveReader(const QString& name, const ArchiveReaderCreat
         return;
     }
 
-    auto reader = creator();
-
     LoaderEntry<ArchiveReaderCreator> loader;
     loader.name       = name;
     loader.index      = priority >= 0 ? priority : static_cast<int>(p->m_archiveReaders.size());
-    loader.extensions = reader->extensions();
+    loader.extensions = readerExtensions;
     loader.creator    = creator;
 
     p->m_archiveReaders.push_back(loader);
+    sortLoaderEntries(p->m_archiveReaders);
+
+    const QStringList archiveExtensions = archiveExtensionsFromReaders(p->m_archiveReaders);
+    refreshArchiveWrapperExtensions(p->m_decoders, archiveExtensions);
+    refreshArchiveWrapperExtensions(p->m_readers, archiveExtensions);
+    refreshArchiveWrapperExtensions(p->m_defaultDecoders, archiveExtensions);
+    refreshArchiveWrapperExtensions(p->m_defaultReaders, archiveExtensions);
 }
 
 std::vector<AudioLoader::LoaderEntry<DecoderCreator>> AudioLoader::decoders() const
@@ -503,9 +1030,10 @@ void AudioLoader::changeDecoderIndex(const QString& name, int index)
     const std::unique_lock lock{p->m_mutex};
     auto decoder = std::ranges::find_if(p->m_decoders, [&name](const auto& entry) { return entry.name == name; });
     if(decoder != p->m_decoders.end()) {
-        Utils::move(p->m_decoders, decoder->index, index);
+        const auto from = static_cast<int>(std::distance(p->m_decoders.begin(), decoder));
+        Utils::move(p->m_decoders, from, index);
+        renumberLoaderEntries(p->m_decoders);
     }
-    std::ranges::for_each(p->m_decoders, [i = 0](auto& loader) mutable { loader.index = i++; });
 }
 
 void AudioLoader::setReaderEnabled(const QString& name, bool enabled)
@@ -522,30 +1050,67 @@ void AudioLoader::changeReaderIndex(const QString& name, int index)
     const std::unique_lock lock{p->m_mutex};
     auto reader = std::ranges::find_if(p->m_readers, [&name](const auto& entry) { return entry.name == name; });
     if(reader != p->m_readers.end()) {
-        Utils::move(p->m_readers, reader->index, index);
+        const auto from = static_cast<int>(std::distance(p->m_readers.begin(), reader));
+        Utils::move(p->m_readers, from, index);
+        renumberLoaderEntries(p->m_readers);
     }
-    std::ranges::for_each(p->m_readers, [i = 0](auto& loader) mutable { loader.index = i++; });
 }
 
 void AudioLoader::reloadDecoderExtensions(const QString& name)
 {
+    DecoderCreator creator;
+    {
+        const std::shared_lock lock{p->m_mutex};
+        auto decoder = std::ranges::find_if(p->m_decoders, [&name](const auto& entry) { return entry.name == name; });
+        if(decoder != p->m_decoders.end()) {
+            creator = decoder->creator;
+        }
+    }
+
+    if(!creator) {
+        return;
+    }
+
+    auto instance = creator();
+    if(!instance) {
+        return;
+    }
+
+    const auto extensions = normaliseExtensions(instance->extensions());
+
     const std::unique_lock lock{p->m_mutex};
     auto decoder = std::ranges::find_if(p->m_decoders, [&name](const auto& entry) { return entry.name == name; });
     if(decoder != p->m_decoders.end()) {
-        if(auto instance = decoder->creator()) {
-            decoder->extensions = instance->extensions();
-        }
+        decoder->extensions = extensions;
     }
 }
 
 void AudioLoader::reloadReaderExtensions(const QString& name)
 {
+    ReaderCreator creator;
+    {
+        const std::shared_lock lock{p->m_mutex};
+        auto reader = std::ranges::find_if(p->m_readers, [&name](const auto& entry) { return entry.name == name; });
+        if(reader != p->m_readers.end()) {
+            creator = reader->creator;
+        }
+    }
+
+    if(!creator) {
+        return;
+    }
+
+    auto instance = creator();
+    if(!instance) {
+        return;
+    }
+
+    const auto extensions = normaliseExtensions(instance->extensions());
+
     const std::unique_lock lock{p->m_mutex};
     auto reader = std::ranges::find_if(p->m_readers, [&name](const auto& entry) { return entry.name == name; });
     if(reader != p->m_readers.end()) {
-        if(auto instance = reader->creator()) {
-            reader->extensions = instance->extensions();
-        }
+        reader->extensions = extensions;
     }
 }
 

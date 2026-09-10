@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,14 +37,16 @@ public:
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
 
+protected:
+    void contextMenuEvent(QContextMenuEvent* event) override;
+
 private:
-    void updateButtonStyle() const;
+    void updateButtonIcon();
     void scrobblingToggled(bool enabled);
 
     ActionManager* m_actionManager;
     SettingsManager* m_settings;
     ToolButton* m_scrobbleButton;
-    QColor m_iconColour;
 };
 } // namespace Scrobbler
 } // namespace Fooyin

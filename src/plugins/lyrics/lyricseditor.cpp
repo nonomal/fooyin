@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,10 +22,8 @@
 #include "lyricsfinder.h"
 #include "lyricsparser.h"
 #include "lyricssaver.h"
-#include "settings/lyricssettings.h"
 
 #include <core/player/playercontroller.h>
-#include <utils/settings/settingsmanager.h>
 #include <utils/utils.h>
 
 #include <QDialogButtonBox>
@@ -33,74 +31,86 @@
 #include <QGroupBox>
 #include <QPushButton>
 #include <QRegularExpression>
-#include <QTextBlock>
+#include <QSignalBlocker>
 #include <QTextEdit>
+#include <QTextFormat>
 
 using namespace Qt::StringLiterals;
 
 constexpr auto TimestampRegex = R"(\[\d{2}:\d{2}\.\d{2,3}\])";
 
 namespace Fooyin::Lyrics {
-LyricsEditor::LyricsEditor(const Track& track, std::shared_ptr<NetworkAccessManager> networkAccess,
-                           LyricsSaver* lyricsSaver, PlayerController* playerController, SettingsManager* settings,
-                           QWidget* parent)
-    : PropertiesTabWidget{parent}
-    , m_track{track}
-    , m_lyricsSaver{lyricsSaver}
+LyricsEditor::LyricsEditor(PlayerController* playerController, QWidget* parent)
+    : QWidget{parent}
     , m_playerController{playerController}
-    , m_settings{settings}
-    , m_networkAccess{std::move(networkAccess)}
-    , m_lyricsFinder{new LyricsFinder(m_networkAccess, m_settings, this)}
 {
     setupUi();
     setupConnections();
-    updateTrack(m_track);
+    setControlsEnabled(m_track.isValid() && m_track == m_playerController->currentTrack());
 }
 
-LyricsEditor::LyricsEditor(Lyrics lyrics, PlayerController* playerController, SettingsManager* settings,
-                           QWidget* parent)
-    : PropertiesTabWidget{parent}
-    , m_lyricsSaver{nullptr}
-    , m_playerController{playerController}
-    , m_settings{settings}
-    , m_lyricsFinder{nullptr}
-    , m_lyrics{std::move(lyrics)}
-{
-    setupUi();
-    setupConnections();
-}
-
-void LyricsEditor::updateTrack(const Track& track)
+void LyricsEditor::setTrack(const Track& track)
 {
     m_track = track;
-    m_lyricsFinder->findLocalLyrics(m_track);
+    setControlsEnabled(m_track.isValid() && m_track == m_playerController->currentTrack());
 }
 
-QString LyricsEditor::name() const
+void LyricsEditor::setLyrics(const Lyrics& lyrics)
 {
-    return tr("Lyrics Editor");
-}
+    const bool textChanged = m_lyricsText->toPlainText() != lyrics.data;
 
-QString LyricsEditor::layoutName() const
-{
-    return u"LyricsEditor"_s;
-}
+    m_lyrics = lyrics;
 
-void LyricsEditor::apply()
-{
-    const QString text = m_lyricsText->toPlainText();
-    m_lyrics           = parse(text);
-    m_lyrics.data      = text;
-    emit lyricsEdited(m_lyrics);
-
-    if(m_lyricsSaver && m_track.isValid()) {
-        m_lyricsSaver->saveLyrics(m_lyrics, m_track);
+    if(textChanged) {
+        const QSignalBlocker blocker{m_lyricsText};
+        m_lyricsText->setPlainText(m_lyrics.data);
     }
+}
+
+void LyricsEditor::setControlsEnabled(bool enabled)
+{
+    m_playPause->setEnabled(enabled);
+    m_seek->setEnabled(enabled);
+    m_insert->setEnabled(enabled);
+    m_insertNext->setEnabled(enabled);
+    m_rewind->setEnabled(enabled);
+    m_forward->setEnabled(enabled);
+}
+
+QString LyricsEditor::text() const
+{
+    return m_lyricsText->toPlainText();
+}
+
+const Lyrics& LyricsEditor::currentLyrics() const
+{
+    return m_lyrics;
+}
+
+Lyrics LyricsEditor::editedLyrics() const
+{
+    Lyrics lyrics = lyricsFromText(m_lyricsText->toPlainText());
+
+    lyrics.source   = m_lyrics.source;
+    lyrics.isLocal  = m_lyrics.isLocal;
+    lyrics.tag      = m_lyrics.tag;
+    lyrics.filepath = m_lyrics.filepath;
+    lyrics.metadata = m_lyrics.metadata;
+    lyrics.offset   = m_lyrics.offset;
+
+    return lyrics;
 }
 
 QSize LyricsEditor::sizeHint() const
 {
     return Utils::proportionateSize(this, 0.25, 0.5);
+}
+
+Lyrics LyricsEditor::lyricsFromText(const QString& text) const
+{
+    Lyrics lyrics = parse(text);
+    lyrics.data   = text;
+    return lyrics;
 }
 
 void LyricsEditor::setupUi()
@@ -112,8 +122,8 @@ void LyricsEditor::setupUi()
     m_reset      = new QPushButton(tr("Reset Changes"), this);
     m_insert     = new QPushButton(tr("Insert/Update"), this);
     m_insertNext = new QPushButton(tr("Update and Next Line"), this);
-    m_rewind     = new QPushButton(tr("Rewind line (-100ms)"), this);
-    m_forward    = new QPushButton(tr("Forward line (+100ms)"), this);
+    m_rewind     = new QPushButton(tr("Rewind line (−100 ms)"), this);
+    m_forward    = new QPushButton(tr("Forward line (+100 ms)"), this);
     m_remove     = new QPushButton(tr("Remove"), this);
     m_removeAll  = new QPushButton(tr("Remove All"), this);
     m_lyricsText = new QTextEdit(this);
@@ -150,19 +160,11 @@ void LyricsEditor::setupUi()
 
     reset();
     updateButtons();
-
-    if(m_lyricsSaver && m_track.isValid() && m_track != m_playerController->currentTrack()) {
-        m_playPause->setDisabled(true);
-        m_seek->setDisabled(true);
-        m_insert->setDisabled(true);
-        m_insertNext->setDisabled(true);
-        m_rewind->setDisabled(true);
-        m_forward->setDisabled(true);
-    }
 }
 
 void LyricsEditor::setupConnections()
 {
+    QObject::connect(m_lyricsText, &QTextEdit::textChanged, this, &LyricsEditor::textEdited);
     QObject::connect(m_lyricsText, &QTextEdit::cursorPositionChanged, this, &LyricsEditor::highlightCurrentLine);
     QObject::connect(m_playPause, &QPushButton::clicked, m_playerController, &PlayerController::playPause);
     QObject::connect(m_seek, &QPushButton::clicked, this, &LyricsEditor::seek);
@@ -176,19 +178,12 @@ void LyricsEditor::setupConnections()
 
     QObject::connect(m_playerController, &PlayerController::positionChanged, this, &LyricsEditor::updateButtons);
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this, &LyricsEditor::updateButtons);
-
-    if(m_lyricsFinder) {
-        QObject::connect(m_playerController, &PlayerController::currentTrackUpdated, this, &LyricsEditor::updateTrack);
-        QObject::connect(m_lyricsFinder, &LyricsFinder::lyricsFound, this, [this](const Lyrics& lyrics) {
-            m_lyrics = lyrics;
-            reset();
-        });
-    }
 }
 
 void LyricsEditor::reset()
 {
     m_lyricsText->setPlainText(m_lyrics.data);
+    Q_EMIT resetClicked();
 }
 
 void LyricsEditor::seek()
@@ -210,11 +205,11 @@ void LyricsEditor::updateButtons()
     const auto time = u" [%1]"_s.arg(formatTimestamp(m_playerController->currentPosition()));
 
     switch(m_playerController->playState()) {
-        case(Player::PlayState::Playing):
+        case Player::PlayState::Playing:
             m_playPause->setText(tr("Pause") + time);
             break;
-        case(Player::PlayState::Paused):
-        case(Player::PlayState::Stopped):
+        case Player::PlayState::Paused:
+        case Player::PlayState::Stopped:
             m_playPause->setText(tr("Play") + time);
             break;
     }
@@ -222,19 +217,13 @@ void LyricsEditor::updateButtons()
 
 void LyricsEditor::highlightCurrentLine()
 {
-    QTextBlock block = m_lyricsText->document()->firstBlock();
-    while(block.isValid()) {
-        QTextCursor tempCursor{block};
-        QTextBlockFormat format;
-        format.setBackground(Qt::NoBrush);
-        tempCursor.setBlockFormat(format);
-        block = block.next();
-    }
+    QTextEdit::ExtraSelection selection;
+    selection.format.setBackground(m_currentLineColour);
+    selection.format.setProperty(QTextFormat::FullWidthSelection, true);
+    selection.cursor = m_lyricsText->textCursor();
+    selection.cursor.clearSelection();
 
-    QTextCursor currentCursor{m_lyricsText->textCursor().block()};
-    QTextBlockFormat currentBlockFormat;
-    currentBlockFormat.setBackground(m_currentLineColour);
-    currentCursor.setBlockFormat(currentBlockFormat);
+    m_lyricsText->setExtraSelections({selection});
 }
 
 void LyricsEditor::insertOrUpdateTimestamp()
@@ -323,54 +312,5 @@ void LyricsEditor::removeAllTimestamps()
     currentText.remove(regex);
 
     m_lyricsText->setPlainText(currentText);
-}
-
-LyricsEditorDialog::LyricsEditorDialog(Lyrics lyrics, PlayerController* playerController, SettingsManager* settings,
-                                       QWidget* parent)
-    : QDialog{parent}
-    , m_editor{new LyricsEditor(std::move(lyrics), playerController, settings, this)}
-{
-    setWindowTitle(tr("Lyrics Editor"));
-
-    auto* layout = new QVBoxLayout(this);
-    layout->addWidget(m_editor);
-
-    auto* buttonBox
-        = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, this);
-
-    QObject::connect(buttonBox->button(QDialogButtonBox::Apply), &QAbstractButton::clicked, m_editor,
-                     &PropertiesTabWidget::apply);
-    QObject::connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
-    QObject::connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
-
-    layout->addWidget(buttonBox);
-}
-
-LyricsEditor* LyricsEditorDialog::editor() const
-{
-    return m_editor;
-}
-
-void LyricsEditorDialog::saveState()
-{
-    FyStateSettings stateSettings;
-    Utils::saveState(this, stateSettings);
-}
-
-void LyricsEditorDialog::restoreState()
-{
-    const FyStateSettings stateSettings;
-    Utils::restoreState(this, stateSettings);
-}
-
-void LyricsEditorDialog::accept()
-{
-    m_editor->apply();
-    QDialog::accept();
-}
-
-QSize LyricsEditorDialog::sizeHint() const
-{
-    return m_editor->sizeHint();
 }
 } // namespace Fooyin::Lyrics

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -47,7 +47,7 @@ struct ExpandedTreeViewItem
 
     constexpr bool operator==(const ExpandedTreeViewItem& other) const
     {
-        return (index != other.index);
+        return (index == other.index);
     }
 
     constexpr bool operator!=(const ExpandedTreeViewItem& other) const
@@ -80,6 +80,8 @@ public:
     QModelIndex modelIndex(int i, int column = 0) const;
     void select(const QModelIndex& topIndex, const QModelIndex& bottomIndex,
                 QItemSelectionModel::SelectionFlags command) const;
+    void selectIncludingChildren(const QModelIndex& firstIndex, const QModelIndex& secondIndex,
+                                 QItemSelectionModel::SelectionFlags command) const;
     void resizeColumnToContents(int column) const;
     void columnCountChanged(int oldCount, int newCount) const;
     void columnResized(int logical, int oldSize, int newSize);
@@ -100,13 +102,17 @@ public:
     int itemForHomeKey() const;
     int itemForEndKey() const;
     void setHoverIndex(const QPersistentModelIndex& index);
+    [[nodiscard]] int firstVisibleColumn(const QModelIndex& parent) const;
+    [[nodiscard]] QModelIndex iconItemIndex(const QModelIndex& index) const;
 
     bool isIndexDropEnabled(const QModelIndex& index) const;
+    bool isRowSelected(const QModelIndex& index) const;
     QModelIndexList selectedDraggableIndexes(bool fullRow = false) const;
     bool shouldAutoScroll() const;
     void startAutoScroll();
     void stopAutoScroll();
     void doAutoScroll();
+    [[nodiscard]] QModelIndex indexAtDropPosition(const QPoint& pos) const;
     bool dropOn(QDropEvent* event, int& dropRow, int& dropCol, QModelIndex& dropIndex);
     std::vector<std::pair<int, int>> columnRanges(const QModelIndex& topIndex, const QModelIndex& bottomIndex) const;
     std::vector<QRect> rectsToPaint(const QModelIndex& index, const QStyleOptionViewItem& option, int y) const;
@@ -125,9 +131,14 @@ public:
 
     ViewMode m_viewMode{ViewMode::Tree};
     CaptionDisplay m_captionDisplay{CaptionDisplay::Bottom};
+    int m_iconItemColumn{-1};
+    int m_iconHorizontalGap{-1};
+    int m_iconVerticalGap{10};
+    bool m_useIconGapsForSideCaptions{false};
     bool m_uniformRowHeights{false};
     bool m_selectBeforeDrag{false};
     bool m_selectIgnoreParents{false};
+    bool m_sortingEnabled{false};
 
     mutable bool m_delayedPendingLayout{false};
     bool m_updatingGeometry{false};
@@ -135,12 +146,15 @@ public:
     bool m_layingOutItems{false};
 
     mutable std::vector<ExpandedTreeViewItem> m_viewItems;
+    mutable std::vector<int> m_itemOffsets;
+    mutable bool m_itemOffsetsDirty{true};
     mutable int m_lastViewedItem{0};
     int m_defaultItemHeight{20};
     int m_indent{0};
     int m_uniformHeightRole{-1};
     std::unordered_map<int, int> m_uniformRoleHeights;
     std::set<int> m_spans;
+    bool m_extendSpansIntoParents{false};
 
     mutable QBasicTimer m_delayedLayout;
     QPoint m_pressedPos;

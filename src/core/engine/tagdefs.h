@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,7 +34,7 @@ constexpr auto Year          = "YEAR";
 constexpr auto Rating        = "RATING";
 constexpr auto RatingAlt     = "FMPS_RATING";
 constexpr auto PlayCount     = "FMPS_PLAYCOUNT";
-constexpr auto Track         = "TRACKNUMBER";
+constexpr auto TrackNumber   = "TRACKNUMBER";
 constexpr auto TrackAlt      = "TRACK";
 constexpr auto TrackTotal    = "TRACKTOTAL";
 constexpr auto TrackTotalAlt = "TOTALTRACKS";
@@ -71,7 +71,7 @@ constexpr auto Rating        = "rate";
 constexpr auto RatingAlt     = "----:com.apple.iTunes:FMPS_Rating";
 constexpr auto RatingAlt2    = "----:com.apple.iTunes:RATING";
 constexpr auto PlayCount     = "----:com.apple.iTunes:FMPS_Playcount";
-constexpr auto Track         = "trkn";
+constexpr auto TrackNumber   = "trkn";
 constexpr auto TrackAlt      = "----:com.apple.iTunes:track";
 constexpr auto TrackTotal    = "----:com.apple.iTunes:TRACKTOTAL";
 constexpr auto TrackTotalAlt = "----:com.apple.iTunes:TOTALTRACKS";
@@ -81,10 +81,14 @@ constexpr auto DiscTotal     = "----:com.apple.iTunes:DISCTOTAL";
 constexpr auto DiscTotalAlt  = "----:com.apple.iTunes:TOTALDISCS";
 constexpr auto Cover         = "covr";
 namespace ReplayGain {
-constexpr auto AlbumPeak = "----:com.apple.iTunes:replaygain_album_peak";
-constexpr auto AlbumGain = "----:com.apple.iTunes:replaygain_album_gain";
-constexpr auto TrackPeak = "----:com.apple.iTunes:replaygain_track_peak";
-constexpr auto TrackGain = "----:com.apple.iTunes:replaygain_track_gain";
+constexpr auto AlbumPeak    = "----:com.apple.iTunes:replaygain_album_peak";
+constexpr auto AlbumPeakAlt = "----:com.apple.iTunes:REPLAYGAIN_ALBUM_PEAK";
+constexpr auto AlbumGain    = "----:com.apple.iTunes:replaygain_album_gain";
+constexpr auto AlbumGainAlt = "----:com.apple.iTunes:REPLAYGAIN_ALBUM_GAIN";
+constexpr auto TrackPeak    = "----:com.apple.iTunes:replaygain_track_peak";
+constexpr auto TrackPeakAlt = "----:com.apple.iTunes:REPLAYGAIN_TRACK_PEAK";
+constexpr auto TrackGain    = "----:com.apple.iTunes:replaygain_track_gain";
+constexpr auto TrackGainAlt = "----:com.apple.iTunes:REPLAYGAIN_TRACK_GAIN";
 } // namespace ReplayGain
 } // namespace Mp4
 } // namespace Fooyin

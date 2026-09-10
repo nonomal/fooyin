@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,19 +21,28 @@
 
 #include <gui/fywidget.h>
 
+#include <QPointer>
+
+class QAction;
 class QComboBox;
+class QPoint;
 
 namespace Fooyin {
+class ActionManager;
+class Command;
 class Playlist;
 class PlaylistController;
 class PlaylistHandler;
+class PopupLineEdit;
+class WidgetContext;
 
 class PlaylistBox : public FyWidget
 {
     Q_OBJECT
 
 public:
-    explicit PlaylistBox(PlaylistController* playlistController, QWidget* parent = nullptr);
+    explicit PlaylistBox(ActionManager* actionManager, PlaylistController* playlistController,
+                         QWidget* parent = nullptr);
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
@@ -43,13 +52,43 @@ public:
     void addPlaylist(const Playlist* playlist);
     void removePlaylist(const Playlist* playlist);
     void playlistRenamed(const Playlist* playlist) const;
+    void playlistUpdated(const Playlist* playlist) const;
     void currentPlaylistChanged(const Playlist* playlist) const;
     void changePlaylist(int index);
 
+    void showContextMenu(const QPoint& pos);
+    void showRenameEditor();
+    void closeRenameEditor();
+    void cancelRenameEditor();
+
+    [[nodiscard]] Playlist* currentPlaylist() const;
+
 private:
+    void refreshPlaylistIcons() const;
+    void setupActions();
+    void updateActionState();
+    void editCurrentAutoPlaylist();
+    void removeCurrentPlaylist();
+
+    ActionManager* m_actionManager;
     PlaylistController* m_playlistController;
     PlaylistHandler* m_playlistHandler;
 
     QComboBox* m_playlistBox;
+
+    WidgetContext* m_context;
+    QAction* m_editAutoPlaylistAction;
+    Command* m_editAutoPlaylistCmd;
+    QAction* m_renameAction;
+    Command* m_renameCmd;
+    QAction* m_removeAction;
+    Command* m_removeCmd;
+    QAction* m_newPlaylistAction;
+    Command* m_newPlaylistCmd;
+    QAction* m_newAutoPlaylistAction;
+    Command* m_newAutoPlaylistCmd;
+
+    QPointer<PopupLineEdit> m_lineEdit;
+    bool m_renameCancelled;
 };
 } // namespace Fooyin

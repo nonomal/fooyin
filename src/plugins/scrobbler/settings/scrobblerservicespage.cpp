@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,21 +21,18 @@
 
 #include "customservicedialog.h"
 #include "scrobbler.h"
+#include "scrobblerconstants.h"
 #include "scrobblersettings.h"
 
-#include <gui/widgets/scriptlineedit.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QCheckBox>
 #include <QGridLayout>
 #include <QGroupBox>
-#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSpinBox>
-#include <QStyle>
 
 using namespace Qt::StringLiterals;
 
@@ -78,6 +75,8 @@ private:
         QString error;
         // Common
         QGroupBox* groupCheck{nullptr};
+        QCheckBox* submitLoved{nullptr};
+        QCheckBox* syncPlaybackStats{nullptr};
         // ListenBrainz
         QLineEdit* tokenInput{nullptr};
         // Custom
@@ -206,6 +205,12 @@ void ScrobblerServicesPageWidget::updateServiceState(ScrobblerService* service)
     if(context->groupCheck) {
         context->groupCheck->setTitle(details.name);
     }
+    if(context->submitLoved) {
+        context->submitLoved->setChecked(details.submitLoved);
+    }
+    if(context->syncPlaybackStats) {
+        context->syncPlaybackStats->setChecked(details.syncPlaybackStats);
+    }
 
     if(context->statusLabel && !context->error.isEmpty()) {
         context->statusLabel->setText(context->error);
@@ -238,6 +243,12 @@ void ScrobblerServicesPageWidget::updateDetails(ScrobblerService* service)
     }
     if(context->tokenInput) {
         details.token = context->tokenInput->text();
+    }
+    if(context->submitLoved) {
+        details.submitLoved = context->submitLoved->isChecked();
+    }
+    if(context->syncPlaybackStats) {
+        details.syncPlaybackStats = context->syncPlaybackStats->isChecked();
     }
 
     service->updateDetails(details);
@@ -309,6 +320,18 @@ void ScrobblerServicesPageWidget::addService(ScrobblerService* service)
         }
     }
 
+    if(service->supportsLoved()) {
+        context.submitLoved = new QCheckBox(tr("Submit loved changes"), this);
+        context.submitLoved->setToolTip(tr("Submit Love and Unlove changes to this service"));
+        layout->addWidget(context.submitLoved, 3, 0, 1, 2);
+    }
+    if(service->supportsTrackStatsSync()) {
+        context.syncPlaybackStats = new QCheckBox(tr("Synchronise playback statistics"), this);
+        context.syncPlaybackStats->setToolTip(
+            tr("Import play counts and Loved status from this service when a track starts playing"));
+        layout->addWidget(context.syncPlaybackStats, 4, 0, 1, 2);
+    }
+
     m_serviceLayout->addWidget(context.groupCheck, m_serviceLayout->rowCount(), 0);
 
     m_serviceContext.emplace_back(context);
@@ -365,9 +388,9 @@ ScrobblerServicesPageWidget::findContext(ScrobblerService* service)
 ScrobblerServicesPage::ScrobblerServicesPage(Scrobbler* scrobbler, SettingsManager* settings, QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
-    setId({"Fooyin.Page.Network.Scrobbling.Services"});
+    setId(Constants::Page::Services);
     setName(tr("Services"));
-    setCategory({tr("Networking"), tr("Scrobbling")});
+    setCategory({tr("Integrations"), tr("Scrobbling"), tr("Services")});
     setWidgetCreator([scrobbler, settings] { return new ScrobblerServicesPageWidget(scrobbler, settings); });
 }
 } // namespace Fooyin::Scrobbler

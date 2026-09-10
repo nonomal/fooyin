@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,15 +23,52 @@
 #include <QFont>
 #include <QVariant>
 
+#include <cstdint>
+
 namespace Fooyin {
+enum class RichAlignment : uint8_t
+{
+    Left = 0,
+    Right,
+};
+
+struct RichColour
+{
+    enum class Type : uint8_t
+    {
+        Default = 0,
+        Explicit,
+    };
+
+    Type type{Type::Default};
+    QColor colour;
+    int alpha{-1};
+
+    [[nodiscard]] bool isExplicit() const
+    {
+        return type == Type::Explicit && colour.isValid();
+    }
+
+    void setColour(const QColor& newColour)
+    {
+        type   = Type::Explicit;
+        colour = newColour;
+    }
+
+    bool operator==(const RichColour& other) const = default;
+};
+
 struct RichFormatting
 {
     QFont font;
-    QColor colour;
+    RichColour colour;
+    QString link;
+    RichAlignment alignment{RichAlignment::Left};
 
     bool operator==(const RichFormatting& other) const
     {
-        return std::tie(font, colour) == std::tie(other.font, other.colour);
+        return std::tie(font, colour, link, alignment)
+            == std::tie(other.font, other.colour, other.link, other.alignment);
     };
 };
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,9 +19,12 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QTreeView>
 
 namespace Fooyin {
+class AutoHeaderView;
+
 class DirTree : public QTreeView
 {
     Q_OBJECT
@@ -29,12 +32,23 @@ class DirTree : public QTreeView
 public:
     explicit DirTree(QWidget* parent = nullptr);
 
-    void resizeView();
-    void setShowHorizontalScrollbar(bool enabled);
+    void setModel(QAbstractItemModel* model) override;
 
-signals:
+    void initialiseHeader();
+    void resizeView();
+
+    [[nodiscard]] bool showHeader() const;
+    void setShowHeader(bool show);
+
+    [[nodiscard]] QByteArray saveHeaderState() const;
+    void restoreHeaderState(const QByteArray& state);
+    void preserveHeaderState();
+    void setRestoreSortEnabled(bool enabled);
+
+Q_SIGNALS:
     void backClicked();
     void forwardClicked();
+    void headerVisibilityChanged(bool visible);
     void middleClicked();
 
 protected:
@@ -43,6 +57,12 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
-    bool m_showHorizontalScrollbar;
+    void restoreHeaderAfterModelReset();
+    void setColumnVisible(int column, bool visible);
+    void showHeaderContextMenu(const QPoint& pos);
+
+    AutoHeaderView* m_header;
+    QByteArray m_pendingHeaderState;
+    bool m_restoreSort;
 };
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ class FYCORE_EXPORT PlayerController : public QObject
     Q_OBJECT
 
 public:
-    explicit PlayerController(SettingsManager* settings, QObject* parent = nullptr);
+    explicit PlayerController(SettingsManager* settings, PlaylistHandler* playlistHandler, QObject* parent = nullptr);
     ~PlayerController() override;
 
     /** Returns the current state (playing, paused or stopped). */
@@ -51,8 +51,14 @@ public:
 
     /** Returns the current playback position in ms. */
     [[nodiscard]] uint64_t currentPosition() const;
+    /** Returns the listened playback time in ms used for playcount thresholding. */
+    [[nodiscard]] uint64_t currentTimeListened() const;
+    /** Returns whether the current track has already crossed the played threshold. */
+    [[nodiscard]] bool playedThresholdReached() const;
     /** Returns the current bitrate. */
     [[nodiscard]] int bitrate() const;
+    /** Returns @c true if the current track can be seeked. */
+    [[nodiscard]] bool currentTrackSeekable() const;
 
     /*!
      * Returns the currently playing track.
@@ -78,8 +84,14 @@ public:
     void pause();
     void previous();
     void next();
-    void nextAuto();
+    void randomTrack();
+    void randomAlbum();
+    void previousAlbum();
+    void nextAlbum();
+    void advance(Player::AdvanceReason reason);
     void stop();
+    /*! Synchronise UI/controller state from engine without issuing transport requests. */
+    void syncPlayStateFromEngine(Player::PlayState state);
 
     /** Stops playback and clears position and current track. */
     void reset();
@@ -88,21 +100,35 @@ public:
     void seek(uint64_t ms);
     void seekForward(uint64_t delta);
     void seekBackward(uint64_t delta);
+    void startPlayback(const UId& playlistId);
+    void startPlayback(Playlist* playlist);
 
+    void restoreCurrentPosition(uint64_t ms);
+    void restorePlaybackProgress(uint64_t positionMs, uint64_t timeListenedMs);
     void setCurrentPosition(uint64_t ms);
     void setBitrate(int bitrate);
+    void setCurrentTrackSeekable(bool seekable);
 
     void changeCurrentTrack(const Track& track);
-    void changeCurrentTrack(const PlaylistTrack& track);
+    void changeCurrentTrack(const PlaylistTrack& track,
+                            const Player::TrackChangeContext& context = Player::TrackChangeContext{});
+    void commitCurrentTrack(const Player::TrackChangeRequest& request);
+    void commitCurrentTrack(const Track& track);
+    void commitCurrentTrack(const PlaylistTrack& track,
+                            const Player::TrackChangeContext& context = Player::TrackChangeContext{});
     void updateCurrentTrack(const Track& track);
-    void updateCurrentTrackPlaylist(const UId& playlistId);
-    void updateCurrentTrackIndex(int index);
 
     void scheduleNextTrack(const PlaylistTrack& track);
 
     [[nodiscard]] Track upcomingTrack() const;
+    [[nodiscard]] PlaylistTrack upcomingPlaylistTrack() const;
+    [[nodiscard]] bool hasNextTrack() const;
+    [[nodiscard]] bool hasPreviousTrack() const;
+    [[nodiscard]] bool trackEndAutoTransitionsEnabled() const;
+    [[nodiscard]] Player::TrackChangeContext lastTrackChangeContext() const;
+    [[nodiscard]] Player::PlaybackSnapshot playbackSnapshot() const;
 
-    [[nodiscard]] PlaybackQueue playbackQueue() const;
+    [[nodiscard]] const PlaybackQueue& playbackQueue() const;
     [[nodiscard]] int queuedTracksCount() const;
 
     /** Queues the @p track to be played at the end of the current track. */
@@ -126,24 +152,43 @@ public:
     void clearPlaylistQueue(const UId& playlistId);
     void clearQueue();
 
-    void setPlaylistHandler(PlaylistHandler* handler);
-
-signals:
-    void playStateChanged(Fooyin::Player::PlayState state);
+Q_SIGNALS:
+    void playStateChanged(Fooyin::Player::PlayState state, Fooyin::Player::PlayState previous);
     void playModeChanged(Fooyin::Playlist::PlayModes mode);
+    void transportPlayRequested();
+    void transportPauseRequested();
+    void transportStopRequested();
 
     void positionChanged(uint64_t ms);
+    void positionChangedSeconds(uint64_t seconds);
+    void bitrateChanged(int bitrate);
     void positionMoved(uint64_t ms);
 
+    /*! Emitted when the actual playback track changes. */
     void currentTrackChanged(const Fooyin::Track& track);
+    /*! Emitted when metadata for the current playback track is refreshed in place. */
     void currentTrackUpdated(const Fooyin::Track& track);
+    /*! Emitted when whether the current track can be seeked changes. */
+    void currentTrackSeekableChanged(bool seekable);
+    /*!
+     * Emitted when the actual playback track changes and the playlist-backed reference for that new track is known.
+     * Unlike playlistTrackUpdated(), this is not emitted for in-place playlist reference remaps of the same
+     * playback item.
+     */
     void playlistTrackChanged(const Fooyin::PlaylistTrack& track);
+    /*! Emitted when the current playback track's playlist reference changes, including structural remaps. */
+    void playlistTrackUpdated(const Fooyin::PlaylistTrack& track);
     void trackPlayed(const Fooyin::Track& track);
+    void trackChangeRequested(const Fooyin::Player::TrackChangeRequest& request);
+    void upcomingTrackChanged(const Fooyin::Player::UpcomingTrack& upcomingTrack);
+    void trackEndAutoTransitionsEnabledChanged(bool enabled);
 
     void tracksQueued(const Fooyin::QueueTracks& tracks, int index);
     void tracksDequeued(const Fooyin::QueueTracks& tracks);
     void trackIndexesDequeued(const Fooyin::PlaylistIndexes& indexes);
     void trackQueueChanged(const Fooyin::QueueTracks& removed, const Fooyin::QueueTracks& added);
+
+    void playbackSnapshotChanged(const Fooyin::Player::PlaybackSnapshot& snapshot);
 
 private:
     std::unique_ptr<PlayerControllerPrivate> p;

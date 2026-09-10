@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,20 +24,24 @@
 #include <QToolButton>
 
 namespace Fooyin {
+class SettingsManager;
+
 class FYGUI_EXPORT ToolButton : public QToolButton
 {
     Q_OBJECT
 
 public:
     explicit ToolButton(QWidget* parent = nullptr);
+    explicit ToolButton(SettingsManager* settings, QWidget* parent = nullptr);
 
     void setStretchEnabled(bool enabled);
+    void setMenuIndicatorHidden(bool hidden);
 
     void setIconPadding(int padding);
     void setMinimumIconSize(int size);
     void setMaximumIconSize(int size);
 
-signals:
+Q_SIGNALS:
     void entered();
 
 protected:
@@ -49,5 +53,6 @@ private:
     int m_minimumSize;
     int m_maximumSize;
     bool m_stretchEnabled;
+    bool m_menuIndicatorHidden;
 };
 } // namespace Fooyin

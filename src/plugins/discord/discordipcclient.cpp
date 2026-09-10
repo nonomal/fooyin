@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +26,7 @@
 #include <QApplication>
 #include <QDataStream>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLoggingCategory>
@@ -39,7 +40,7 @@ Q_LOGGING_CATEGORY(DISCORD, "fy.discord")
 using namespace Qt::StringLiterals;
 
 namespace {
-constexpr auto MaxPipeIndex   = 10;
+constexpr auto MaxPipeCount   = 10;
 constexpr auto ConnectTimeout = 500;
 constexpr auto ReplyTimeout   = 5000;
 
@@ -63,48 +64,108 @@ QString socketErrorToString(QLocalSocket::LocalSocketError error)
     using namespace Qt::Literals::StringLiterals;
 
     switch(error) {
-        case(QLocalSocket::ConnectionRefusedError):
+        case QLocalSocket::ConnectionRefusedError:
             return u"Connection refused"_s;
-        case(QLocalSocket::PeerClosedError):
+        case QLocalSocket::PeerClosedError:
             return u"Peer closed the connection"_s;
-        case(QLocalSocket::ServerNotFoundError):
+        case QLocalSocket::ServerNotFoundError:
             return u"Server not found"_s;
-        case(QLocalSocket::SocketAccessError):
+        case QLocalSocket::SocketAccessError:
             return u"Access error"_s;
-        case(QLocalSocket::SocketResourceError):
+        case QLocalSocket::SocketResourceError:
             return u"Resource error"_s;
-        case(QLocalSocket::SocketTimeoutError):
+        case QLocalSocket::SocketTimeoutError:
             return u"Socket timeout"_s;
-        case(QLocalSocket::DatagramTooLargeError):
+        case QLocalSocket::DatagramTooLargeError:
             return u"Datagram too large"_s;
-        case(QLocalSocket::ConnectionError):
+        case QLocalSocket::ConnectionError:
             return u"Network connection error"_s;
-        case(QLocalSocket::UnsupportedSocketOperationError):
+        case QLocalSocket::UnsupportedSocketOperationError:
             return u"Unsupported operation"_s;
-        case(QLocalSocket::UnknownSocketError):
+        case QLocalSocket::UnknownSocketError:
             return u"Unknown error"_s;
-        case(QLocalSocket::OperationError):
+        case QLocalSocket::OperationError:
             return u"Operation error"_s;
         default:
             return u"Unrecognized error"_s;
     }
 }
 
-QString pipeLocation(int index)
+void addUniquePath(QStringList& paths, const QString& path)
 {
-#if defined(Q_OS_WIN)
-    return uR"(\\.\pipe\discord-ipc-%1)"_s.arg(index);
-
-#elif defined(Q_OS_MAC)
-    return QDir::homePath() + u"/Library/Application Support/discord-ipc-%1"_s.arg(index);
-
-#else
-    QString runDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
-    if(runDir.isEmpty()) {
-        runDir = u"/tmp"_s;
+    if(path.isEmpty()) {
+        return;
     }
-    return u"%1/discord-ipc-%2"_s.arg(runDir).arg(index);
+
+    const QString cleanPath = QDir::cleanPath(path);
+    if(!paths.contains(cleanPath)) {
+        paths.emplace_back(cleanPath);
+    }
+}
+
+void addExistingSubDir(QStringList& paths, const QString& basePath, const QString& subDir)
+{
+    if(basePath.isEmpty()) {
+        return;
+    }
+
+    const QString path = QDir{basePath}.filePath(subDir);
+    if(QFileInfo::exists(path)) {
+        addUniquePath(paths, path);
+    }
+}
+
+QStringList unixPipeDirs()
+{
+    QStringList dirs;
+    const QString runDir = qEnvironmentVariable("XDG_RUNTIME_DIR");
+
+    for(const char* name : {"XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"}) {
+        addUniquePath(dirs, qEnvironmentVariable(name));
+    }
+    addUniquePath(dirs, u"/tmp"_s);
+
+    const QStringList baseDirs{dirs};
+    for(const QString& dir : baseDirs) {
+        addExistingSubDir(dirs, dir, u"app/com.discordapp.Discord"_s);
+        addExistingSubDir(dirs, dir, u"snap.discord"_s);
+    }
+
+    if(!runDir.isEmpty()) {
+        const QDir flatpakDir{QDir{runDir}.filePath(u".flatpak"_s)};
+        const QFileInfoList appDirs
+            = flatpakDir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot | QDir::Readable, QDir::Name);
+
+        for(const QFileInfo& appDir : appDirs) {
+            addExistingSubDir(dirs, appDir.absoluteFilePath(), u"xdg-run"_s);
+        }
+    }
+
+    return dirs;
+}
+
+QStringList pipeLocations()
+{
+    QStringList locations;
+
+#ifdef Q_OS_WIN
+    for(int index{0}; index < MaxPipeCount; ++index) {
+        locations.emplace_back(uR"(\\.\pipe\discord-ipc-%1)"_s.arg(index));
+    }
+#elifdef Q_OS_MAC
+    for(int index{0}; index < MaxPipeCount; ++index) {
+        locations.emplace_back(QDir::homePath() + u"/Library/Application Support/discord-ipc-%1"_s.arg(index));
+    }
+#else
+    const auto pipeDirs = unixPipeDirs();
+    for(const QString& dir : pipeDirs) {
+        for(int index{0}; index < MaxPipeCount; ++index) {
+            locations.emplace_back(QDir{dir}.filePath(u"discord-ipc-%1"_s.arg(index)));
+        }
+    }
 #endif
+
+    return locations;
 }
 
 QJsonObject buildActivityPayload(const Fooyin::Discord::PresenceData& data)
@@ -150,14 +211,16 @@ namespace Fooyin::Discord {
 DiscordIPCClient::DiscordIPCClient(QObject* parent)
     : QObject{parent}
     , m_stream{&m_socket}
+    , m_connectGeneration{0}
+    , m_connectInProgress{false}
     , m_handshakeCompleted{false}
+    , m_loggedServerNotFound{false}
 {
     m_stream.setByteOrder(QDataStream::LittleEndian);
     m_stream.setVersion(QDataStream::Qt_6_0);
 
-    QObject::connect(&m_socket, &QLocalSocket::errorOccurred, this, [](QLocalSocket::LocalSocketError error) {
-        qCWarning(DISCORD) << "Socket:" << socketErrorToString(error);
-    });
+    QObject::connect(&m_socket, &QLocalSocket::errorOccurred, this,
+                     [this](QLocalSocket::LocalSocketError error) { logSocketError(error); });
 
     QObject::connect(&m_socket, &QLocalSocket::disconnected, this, [this] {
         qCDebug(DISCORD) << "Disconnected from Discord IPC";
@@ -181,20 +244,44 @@ QCoro::Task<bool> DiscordIPCClient::connectToDiscord()
         co_return true;
     }
 
+    if(m_connectInProgress) {
+        co_return false;
+    }
+
     if(m_clientId.isEmpty()) {
         setError(u"No Client ID"_s);
         co_return false;
     }
 
-    for(int index{0}; index <= MaxPipeIndex; ++index) {
-        const QString pipeName = pipeLocation(index);
+    m_connectInProgress    = true;
+    m_loggedServerNotFound = false;
+
+    const quint64 connectGeneration{m_connectGeneration};
+    const auto pipeLocs = pipeLocations();
+
+    for(const QString& pipeName : pipeLocs) {
+        if(connectGeneration != m_connectGeneration) {
+            m_connectInProgress = false;
+            co_return false;
+        }
 
         co_await qCoro(m_socket).connectToServer(pipeName, QIODevice::ReadWrite,
                                                  std::chrono::milliseconds{ConnectTimeout});
         if(isConnected()) {
             qCDebug(DISCORD) << "Connected to" << pipeName;
-            co_await startHandshake();
-            co_return true;
+
+            if(connectGeneration != m_connectGeneration) {
+                co_await disconnectFromDiscord();
+                m_connectInProgress = false;
+                co_return false;
+            }
+
+            if(co_await startHandshake()) {
+                m_connectInProgress = false;
+                co_return true;
+            }
+
+            co_await disconnectFromDiscord();
         }
         else if(m_socket.state() != QLocalSocket::UnconnectedState) {
             co_await disconnectFromDiscord();
@@ -203,6 +290,7 @@ QCoro::Task<bool> DiscordIPCClient::connectToDiscord()
 
     setError(u"No IPC pipe available"_s);
     co_await disconnectFromDiscord();
+    m_connectInProgress = false;
     co_return false;
 }
 
@@ -266,24 +354,26 @@ QCoro::Task<> DiscordIPCClient::changeClientId(const QString clientId)
         co_return;
     }
 
-    if(m_socket.isValid() || m_handshakeCompleted) {
+    ++m_connectGeneration;
+
+    if(m_socket.state() != QLocalSocket::UnconnectedState || m_handshakeCompleted || m_connectInProgress) {
         co_await disconnectFromDiscord();
-        connectToDiscord();
+        co_await connectToDiscord();
     }
 }
 
-void DiscordIPCClient::sendMessage(const QJsonObject& packet, int opCode)
+void DiscordIPCClient::logSocketError(QLocalSocket::LocalSocketError error)
 {
-    const QByteArray payload = QJsonDocument(packet).toJson(QJsonDocument::Compact);
-    qCDebug(DISCORD) << "→ SEND" << opCode << payload.length() << packet;
+    if(error == QLocalSocket::ServerNotFoundError) {
+        if(m_connectInProgress && std::exchange(m_loggedServerNotFound, true)) {
+            return;
+        }
 
-    MessageHeader header;
-    header.opcode = static_cast<uint32_t>(opCode);
-    header.length = static_cast<uint32_t>(payload.length());
+        qCDebug(DISCORD) << "Socket:" << socketErrorToString(error);
+        return;
+    }
 
-    m_stream.writeRawData(reinterpret_cast<const char*>(&header), sizeof(MessageHeader));
-    m_stream.writeRawData(payload.constData(), payload.size());
-    m_socket.flush();
+    qCWarning(DISCORD) << "Socket:" << socketErrorToString(error);
 }
 
 void DiscordIPCClient::setError(const QString& error)
@@ -292,9 +382,26 @@ void DiscordIPCClient::setError(const QString& error)
     qCWarning(DISCORD) << m_error;
 }
 
-std::optional<DiscordMessage> DiscordIPCClient::readMessage()
+bool DiscordIPCClient::hasCompleteMessage()
 {
     if(m_socket.bytesAvailable() < static_cast<qint64>(sizeof(MessageHeader))) {
+        return false;
+    }
+
+    const QByteArray headerData = m_socket.peek(sizeof(MessageHeader));
+    if(headerData.size() < static_cast<qsizetype>(sizeof(MessageHeader))) {
+        return false;
+    }
+
+    MessageHeader header;
+    memcpy(&header, headerData.constData(), sizeof(MessageHeader));
+
+    return std::cmp_greater_equal(m_socket.bytesAvailable(), sizeof(MessageHeader) + header.length);
+}
+
+std::optional<DiscordMessage> DiscordIPCClient::readMessage()
+{
+    if(!hasCompleteMessage()) {
         return {};
     }
 
@@ -320,47 +427,27 @@ std::optional<DiscordMessage> DiscordIPCClient::readMessage()
     return result;
 }
 
-QCoro::Task<bool> DiscordIPCClient::waitForReadyRead()
+void DiscordIPCClient::sendMessage(const QJsonObject& packet, int opCode)
 {
-    co_return co_await qCoro(m_socket).waitForReadyRead(std::chrono::milliseconds{ReplyTimeout});
+    const QByteArray payload = QJsonDocument(packet).toJson(QJsonDocument::Compact);
+    qCDebug(DISCORD) << "→ SEND" << opCode << payload.length() << packet;
+
+    MessageHeader header;
+    header.opcode = static_cast<uint32_t>(opCode);
+    header.length = static_cast<uint32_t>(payload.length());
+
+    m_stream.writeRawData(reinterpret_cast<const char*>(&header), sizeof(MessageHeader));
+    m_stream.writeRawData(payload.constData(), payload.size());
+    m_socket.flush();
 }
 
-QCoro::Task<bool> DiscordIPCClient::startHandshake()
-{
-    if(m_handshakeCompleted) {
-        co_return true;
-    }
-
-    static const QString nonce = u"HANDSHAKE"_s;
-    const QJsonObject handshake{{u"v"_s, 1}, {u"client_id"_s, m_clientId}};
-    sendMessage(handshake, Handshake);
-
-    if(co_await waitForReadyRead()) {
-        if(auto msg = readMessage()) {
-            const auto json = msg->json();
-
-            if(json.value("cmd"_L1).toString() == "DISPATCH"_L1 && json.value("evt"_L1).toString() == "READY"_L1) {
-                m_handshakeCompleted = true;
-                qInfo(DISCORD) << "Handshake successful, user:" << json["data"_L1]["user"_L1]["username"_L1].toString();
-                co_return true;
-            }
-        }
-    }
-
-    setError(u"Handshake failed"_s);
-    co_return false;
-}
-
-bool DiscordIPCClient::processMessage(const DiscordMessage message)
+bool DiscordIPCClient::processMessage(const DiscordMessage& message)
 {
     const auto json = message.json();
     if(json.isEmpty()) {
         qCDebug(DISCORD) << "Received empty message";
         return false;
     }
-
-    const QString cmd   = json.value("cmd"_L1).toString();
-    const QString nonce = json.value("nonce"_L1).toString();
 
     if(json.value("cmd"_L1) == "ERROR"_L1) {
         const int errorCode        = json.value("code"_L1).toInt();
@@ -378,5 +465,35 @@ bool DiscordIPCClient::processMessage(const DiscordMessage message)
     }
 
     return true;
+}
+
+QCoro::Task<bool> DiscordIPCClient::waitForReadyRead()
+{
+    co_return co_await qCoro(m_socket).waitForReadyRead(std::chrono::milliseconds{ReplyTimeout});
+}
+
+QCoro::Task<bool> DiscordIPCClient::startHandshake()
+{
+    if(m_handshakeCompleted) {
+        co_return true;
+    }
+
+    const QJsonObject handshake{{u"v"_s, 1}, {u"client_id"_s, m_clientId}};
+    sendMessage(handshake, Handshake);
+
+    if(co_await waitForReadyRead()) {
+        if(auto msg = readMessage()) {
+            const auto json = msg->json();
+
+            if(json.value("cmd"_L1).toString() == "DISPATCH"_L1 && json.value("evt"_L1).toString() == "READY"_L1) {
+                m_handshakeCompleted = true;
+                qInfo(DISCORD) << "Handshake successful, user:" << json["data"_L1]["user"_L1]["username"_L1].toString();
+                co_return true;
+            }
+        }
+    }
+
+    setError(u"Handshake failed"_s);
+    co_return false;
 }
 } // namespace Fooyin::Discord

@@ -1,0 +1,448 @@
+/*
+ * Fooyin
+ * Copyright © 2026, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#include "testutils.h"
+
+#include <core/playlist/playlisthandler.h>
+
+#include <core/coresettings.h>
+#include <core/engine/audioloader.h>
+#include <core/internalcoresettings.h>
+#include <core/track.h>
+#include <utils/database/dbconnectionhandler.h>
+#include <utils/database/dbconnectionpool.h>
+#include <utils/database/dbconnectionprovider.h>
+#include <utils/database/dbquery.h>
+#include <utils/settings/settingsmanager.h>
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+
+#include <gtest/gtest.h>
+
+#include <ranges>
+
+using namespace Qt::StringLiterals;
+
+namespace Fooyin::Testing {
+namespace {
+QCoreApplication* ensureCoreApplication()
+{
+    QStandardPaths::setTestModeEnabled(true);
+
+    if(auto* app = QCoreApplication::instance()) {
+        return app;
+    }
+
+    static int argc{1};
+    static char appName[]        = "fooyin-playlisthandler-test";
+    static char* argv[]          = {appName, nullptr};
+    static QCoreApplication* app = []() {
+        auto* instance = new QCoreApplication(argc, argv);
+        QCoreApplication::setApplicationName(QString::fromLatin1(appName));
+        return instance;
+    }();
+    return app;
+}
+
+void registerCoreSettings(SettingsManager& settings)
+{
+    settings.createSetting<Settings::Core::ShuffleAlbumsGroupScript>(u"%album%"_s,
+                                                                     u"Playback/ShuffleAlbumsGroupScript"_s);
+    settings.createSetting<Settings::Core::ShuffleAlbumsSortScript>(u"%track%"_s,
+                                                                    u"Playback/ShuffleAlbumsSortScript"_s);
+}
+
+bool createPlaylistTables(const DbConnectionPoolPtr& dbPool)
+{
+    const DbConnectionProvider dbProvider{dbPool};
+
+    DbQuery createPlaylists{dbProvider.db(), u"CREATE TABLE IF NOT EXISTS Playlists ("
+                                             "PlaylistID INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                             "Name TEXT NOT NULL UNIQUE, "
+                                             "PlaylistIndex INTEGER, "
+                                             "IsAutoPlaylist INTEGER DEFAULT 0, "
+                                             "Query TEXT, "
+                                             "SortQuery TEXT, "
+                                             "ForceSorted INTEGER DEFAULT 1, "
+                                             "ExtraProperties BLOB);"_s};
+    if(!createPlaylists.exec()) {
+        return false;
+    }
+
+    DbQuery createPlaylistTracks{dbProvider.db(), u"CREATE TABLE IF NOT EXISTS PlaylistTracks ("
+                                                  "PlaylistID INTEGER NOT NULL, "
+                                                  "TrackID INTEGER NOT NULL, "
+                                                  "TrackIndex INTEGER NOT NULL);"_s};
+    return createPlaylistTracks.exec();
+}
+
+Track makeTrack(const QString& path, int id)
+{
+    Track track{path, 0};
+    track.setId(id);
+    track.setTitle(QFileInfo{path}.completeBaseName());
+    track.generateHash();
+    return track;
+}
+
+struct PlaylistHandlerHarness
+{
+    explicit PlaylistHandlerHarness(SettingsManager& settings, QString dbFilePath = {})
+        : m_dbFilePath{std::move(dbFilePath)}
+        , dbPool{[this]() {
+            EXPECT_TRUE(dbDir.isValid());
+
+            DbConnection::DbParams params;
+            params.type     = u"QSQLITE"_s;
+            params.filePath = !m_dbFilePath.isEmpty() ? m_dbFilePath : dbDir.filePath(u"playlisthandler.sqlite"_s);
+
+            auto pool = DbConnectionPool::create(params, u"playlisthandler_test"_s);
+            EXPECT_TRUE(pool);
+            return pool;
+        }()}
+        , dbConnectionHandler{dbPool}
+        , dbInitialised{dbConnectionHandler.hasConnection() && createPlaylistTables(dbPool)}
+        , audioLoader{std::make_shared<AudioLoader>()}
+        , handler{dbPool, audioLoader, &library, &settings}
+    { }
+
+    QTemporaryDir dbDir;
+    QString m_dbFilePath;
+    DbConnectionPoolPtr dbPool;
+    DbConnectionHandler dbConnectionHandler;
+    bool dbInitialised;
+    std::shared_ptr<AudioLoader> audioLoader;
+    StubMusicLibrary library;
+    PlaylistHandler handler;
+};
+} // namespace
+
+TEST(PlaylistHandlerTest, RemovingOnlyEmptyDefaultIsNoOp)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_default_recreate_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    auto* originalDefault = harness.handler.playlistByName(u"Default"_s);
+    ASSERT_NE(originalDefault, nullptr);
+    const UId originalId = originalDefault->id();
+
+    harness.handler.removePlaylist(originalId);
+
+    auto* defaultAfterRemove = harness.handler.playlistByName(u"Default"_s);
+    ASSERT_NE(defaultAfterRemove, nullptr);
+    EXPECT_EQ(defaultAfterRemove, originalDefault);
+    EXPECT_EQ(defaultAfterRemove->id(), originalId);
+
+    EXPECT_TRUE(harness.handler.removedPlaylists().empty());
+    EXPECT_TRUE(harness.handler.pendingRemovedPlaylists().empty());
+
+    harness.handler.removePlaylist(originalId);
+
+    auto* defaultAfterSecondRemove = harness.handler.playlistByName(u"Default"_s);
+    ASSERT_NE(defaultAfterSecondRemove, nullptr);
+    EXPECT_EQ(defaultAfterSecondRemove, originalDefault);
+    EXPECT_EQ(defaultAfterSecondRemove->id(), originalId);
+    EXPECT_TRUE(harness.handler.removedPlaylists().empty());
+    EXPECT_TRUE(harness.handler.pendingRemovedPlaylists().empty());
+}
+
+TEST(PlaylistHandlerTest, ReaddingSameNameCancelsPendingRemovedExportOnly)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_pending_removed_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    auto* firstPlaylist = harness.handler.createPlaylist(u"Session A"_s, {makeTrack(u"/tmp/a.flac"_s, 1)});
+    auto* otherPlaylist = harness.handler.createPlaylist(u"Session B"_s, {makeTrack(u"/tmp/b.flac"_s, 2)});
+    ASSERT_NE(firstPlaylist, nullptr);
+    ASSERT_NE(otherPlaylist, nullptr);
+
+    harness.handler.removePlaylist(firstPlaylist->id());
+
+    const auto pendingAfterRemove = harness.handler.pendingRemovedPlaylists();
+    ASSERT_EQ(pendingAfterRemove.size(), 1U);
+    EXPECT_EQ(pendingAfterRemove.front(), firstPlaylist);
+
+    auto* recreatedPlaylist = harness.handler.createPlaylist(u"Session A"_s, {});
+    ASSERT_NE(recreatedPlaylist, nullptr);
+    EXPECT_NE(recreatedPlaylist, firstPlaylist);
+
+    const auto archived = harness.handler.removedPlaylists();
+    ASSERT_EQ(archived.size(), 1U);
+    EXPECT_EQ(archived.front(), firstPlaylist);
+    EXPECT_EQ(firstPlaylist->name(), u"Session A"_s);
+    EXPECT_TRUE(harness.handler.pendingRemovedPlaylists().empty());
+}
+
+TEST(PlaylistHandlerTest, RemovingLastNonEmptyPlaylistKeepsRestoreHistory)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_last_non_empty_restore_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    auto* defaultPlaylist = harness.handler.playlistByName(u"Default"_s);
+    ASSERT_NE(defaultPlaylist, nullptr);
+    harness.handler.replacePlaylistTracks(defaultPlaylist->id(), {makeTrack(u"/tmp/default.flac"_s, 1)});
+
+    harness.handler.removePlaylist(defaultPlaylist->id());
+
+    auto* recreatedDefault = harness.handler.playlistByName(u"Default"_s);
+    ASSERT_NE(recreatedDefault, nullptr);
+    EXPECT_NE(recreatedDefault, defaultPlaylist);
+
+    const auto archived = harness.handler.removedPlaylists();
+    ASSERT_EQ(archived.size(), 1U);
+    EXPECT_EQ(archived.front(), defaultPlaylist);
+
+    EXPECT_TRUE(harness.handler.pendingRemovedPlaylists().empty());
+}
+
+TEST(PlaylistHandlerTest, RestoreRemovedPlaylistReaddsSameObjectWithFreshDatabaseRow)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_restore_removed_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    auto* playlist = harness.handler.createPlaylist(u"Restore Me"_s, {makeTrack(u"/tmp/restore.flac"_s, 1)});
+    ASSERT_NE(playlist, nullptr);
+    playlist->setExtraProperty(u"restore/property"_s, u"kept"_s);
+
+    const UId playlistId = playlist->id();
+    const int oldDbId    = playlist->dbId();
+
+    harness.handler.removePlaylist(playlistId);
+    ASSERT_EQ(harness.handler.removedPlaylists().size(), 1U);
+    ASSERT_EQ(harness.handler.pendingRemovedPlaylists().size(), 1U);
+
+    auto* restored = harness.handler.restorePlaylist(playlistId);
+    ASSERT_EQ(restored, playlist);
+    EXPECT_EQ(restored->id(), playlistId);
+    EXPECT_NE(restored->dbId(), oldDbId);
+    EXPECT_EQ(restored->name(), u"Restore Me"_s);
+    EXPECT_EQ(restored->trackCount(), 1);
+    ASSERT_TRUE(restored->hasExtraProperty(u"restore/property"_s));
+    EXPECT_EQ(restored->extraProperties().value(u"restore/property"_s), u"kept"_s);
+
+    EXPECT_TRUE(harness.handler.removedPlaylists().empty());
+    EXPECT_TRUE(harness.handler.pendingRemovedPlaylists().empty());
+    EXPECT_EQ(harness.handler.playlistById(playlistId), restored);
+}
+
+TEST(PlaylistHandlerTest, LockedPlaylistRejectsContentChangesAndPersistsState)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_locked_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    const Track original = makeTrack(u"/tmp/original.flac"_s, 1);
+    auto* playlist       = harness.handler.createPlaylist(u"Locked"_s, {original});
+    ASSERT_NE(playlist, nullptr);
+
+    harness.handler.setPlaylistLocked(playlist->id(), true);
+    EXPECT_TRUE(playlist->isLocked());
+    EXPECT_TRUE(playlist->hasExtraProperty(u"core/locked"_s));
+
+    auto* restoredProperties = harness.handler.createNewPlaylist(u"Restored properties"_s);
+    restoredProperties->storeExtraProperties(playlist->serialiseExtraProperties());
+    EXPECT_TRUE(restoredProperties->isLocked());
+
+    harness.handler.appendToPlaylist(playlist->id(), {makeTrack(u"/tmp/appended.flac"_s, 2)});
+    harness.handler.replacePlaylistTracks(playlist->id(), {makeTrack(u"/tmp/replaced.flac"_s, 3)});
+    harness.handler.createPlaylist(playlist->name(), {makeTrack(u"/tmp/recreated.flac"_s, 4)});
+    harness.handler.removePlaylistTracks(playlist->id(), {0});
+    harness.handler.clearPlaylistTracks(playlist->id());
+
+    ASSERT_EQ(playlist->trackCount(), 1);
+    EXPECT_EQ(playlist->track(0)->filepath(), original.filepath());
+
+    harness.handler.setPlaylistLocked(playlist->id(), false);
+    EXPECT_FALSE(playlist->isLocked());
+    EXPECT_FALSE(playlist->hasExtraProperty(u"core/locked"_s));
+
+    harness.handler.clearPlaylistTracks(playlist->id());
+    EXPECT_EQ(playlist->trackCount(), 0);
+}
+
+TEST(PlaylistHandlerTest, AutoPlaylistRejectsAppendedTracks)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_auto_append_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    const Track libraryTrack = makeTrack(u"/music/library.flac"_s, 1);
+    harness.library.setTracks({libraryTrack});
+    harness.library.setLibraryTracks({libraryTrack});
+
+    auto* playlist = harness.handler.createNewAutoPlaylist(u"Read only"_s, u"title PRESENT"_s);
+    ASSERT_NE(playlist, nullptr);
+    ASSERT_EQ(playlist->trackCount(), 1);
+
+    harness.handler.appendToPlaylist(playlist->id(), {makeTrack(u"/music/appended.flac"_s, 2)});
+
+    ASSERT_EQ(playlist->trackCount(), 1);
+    EXPECT_EQ(playlist->tracks().front().filepath(), libraryTrack.filepath());
+}
+
+TEST(PlaylistHandlerTest, TracksMetadataChangedUpdatesPlaylistTrackWhenFilepathChanges)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_filepath_update_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    auto* playlist = harness.handler.createPlaylist(u"Renamed Track"_s, {makeTrack(u"/tmp/original.flac"_s, 1)});
+    ASSERT_NE(playlist, nullptr);
+    ASSERT_EQ(playlist->trackCount(), 1);
+
+    std::vector<int> updatedIndexes;
+    QObject::connect(&harness.handler, &PlaylistHandler::tracksChanged, &harness.handler,
+                     [&updatedIndexes, playlist](Playlist* changedPlaylist, const std::vector<int>& indexes,
+                                                 PlaylistTrackChangeSource) {
+                         if(changedPlaylist == playlist) {
+                             updatedIndexes = indexes;
+                         }
+                     });
+
+    const Track renamedTrack = makeTrack(u"/tmp/renamed.flac"_s, 1);
+    Q_EMIT harness.library.tracksMetadataChanged({renamedTrack});
+
+    ASSERT_EQ(updatedIndexes, std::vector<int>({0}));
+
+    const auto updatedTrack = playlist->playlistTrack(0);
+    ASSERT_TRUE(updatedTrack.has_value());
+    EXPECT_EQ(updatedTrack->track.id(), renamedTrack.id());
+    EXPECT_EQ(updatedTrack->track.filepath(), renamedTrack.filepath());
+}
+
+TEST(PlaylistHandlerTest, TracksMetadataChangedUpdatesAutoPlaylistTrackCustomTags)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_auto_custom_tag_update_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    Track originalTrack = makeTrack(u"/tmp/custom-tag.flac"_s, 1);
+    originalTrack.replaceExtraTag(u"CUSTOM"_s, QStringList{u"Before"_s});
+    harness.library.setTracks({originalTrack});
+
+    auto* playlist = harness.handler.createNewAutoPlaylist(u"Custom Tag Auto"_s, u"title PRESENT"_s);
+    ASSERT_NE(playlist, nullptr);
+    ASSERT_EQ(playlist->trackCount(), 1);
+
+    PlaylistChangeset changeSet;
+    QObject::connect(
+        &harness.handler, &PlaylistHandler::tracksPatched, &harness.handler,
+        [&changeSet, playlist](Playlist* changedPlaylist, const PlaylistChangeset& changed, PlaylistTrackChangeSource) {
+            if(changedPlaylist == playlist) {
+                changeSet = changed;
+            }
+        });
+
+    Track updatedTrack = makeTrack(u"/tmp/custom-tag.flac"_s, 1);
+    updatedTrack.replaceExtraTag(u"CUSTOM"_s, QStringList{u"After"_s});
+    ASSERT_EQ(updatedTrack.metaValue(u"custom"_s), u"After"_s);
+    harness.library.setTracks({updatedTrack});
+    Q_EMIT harness.library.tracksMetadataChanged({updatedTrack});
+
+    const auto playlistTrack = playlist->playlistTrack(0);
+    ASSERT_TRUE(playlistTrack.has_value());
+    ASSERT_EQ(changeSet.updatedEntries.size(), 1);
+    EXPECT_EQ(playlistTrack->track.metaValue(u"custom"_s), u"After"_s);
+    EXPECT_EQ(changeSet.updatedEntries.front(), playlistTrack->entryId);
+}
+
+TEST(PlaylistHandlerTest, AutoPlaylistsOnlyContainLibraryTracks)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_auto_library_tracks_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    const Track libraryTrack = makeTrack(u"/music/track.flac"_s, 1);
+    const Track portalTrack  = makeTrack(u"/run/user/1000/doc/portal/track.flac"_s, 2);
+    harness.library.setTracks({libraryTrack, portalTrack});
+    harness.library.setLibraryTracks({libraryTrack});
+
+    auto* playlist = harness.handler.createNewAutoPlaylist(u"Library only"_s, u"title PRESENT"_s);
+    ASSERT_NE(playlist, nullptr);
+    ASSERT_EQ(playlist->trackCount(), 1);
+    EXPECT_EQ(playlist->tracks().front().filepath(), libraryTrack.filepath());
+
+    harness.library.emitTracksLoaded();
+    ASSERT_EQ(playlist->trackCount(), 1);
+    EXPECT_EQ(playlist->tracks().front().filepath(), libraryTrack.filepath());
+
+    const Track addedLibraryTrack = makeTrack(u"/music/added.flac"_s, 3);
+    harness.library.setTracks({libraryTrack, portalTrack, addedLibraryTrack});
+    harness.library.setLibraryTracks({libraryTrack, addedLibraryTrack});
+    Q_EMIT harness.library.tracksAdded({addedLibraryTrack});
+
+    ASSERT_EQ(playlist->trackCount(), 2);
+    EXPECT_TRUE(std::ranges::any_of(playlist->tracks(), [&libraryTrack](const Track& track) {
+        return track.filepath() == libraryTrack.filepath();
+    }));
+    EXPECT_TRUE(std::ranges::any_of(playlist->tracks(), [&addedLibraryTrack](const Track& track) {
+        return track.filepath() == addedLibraryTrack.filepath();
+    }));
+}
+
+TEST(PlaylistHandlerTest, DeletedTracksAreRemovedFromAllPlaylists)
+{
+    ensureCoreApplication();
+    SettingsManager settings{QDir::tempPath() + u"/fooyin_playlisthandler_track_delete_test.ini"_s};
+    registerCoreSettings(settings);
+    PlaylistHandlerHarness harness{settings};
+    ASSERT_TRUE(harness.dbInitialised);
+
+    const Track deletedTrack  = makeTrack(u"/tmp/deleted.flac"_s, 1);
+    const Track retainedTrack = makeTrack(u"/tmp/retained.flac"_s, 2);
+
+    auto* firstPlaylist  = harness.handler.createPlaylist(u"First"_s, {deletedTrack, retainedTrack, deletedTrack});
+    auto* secondPlaylist = harness.handler.createPlaylist(u"Second"_s, {retainedTrack, deletedTrack});
+    ASSERT_NE(firstPlaylist, nullptr);
+    ASSERT_NE(secondPlaylist, nullptr);
+
+    harness.handler.handleTracksDeleted({deletedTrack});
+
+    ASSERT_EQ(firstPlaylist->trackCount(), 1);
+    EXPECT_EQ(firstPlaylist->tracks().front().identityKey(), retainedTrack.identityKey());
+    ASSERT_EQ(secondPlaylist->trackCount(), 1);
+    EXPECT_EQ(secondPlaylist->tracks().front().identityKey(), retainedTrack.identityKey());
+}
+} // namespace Fooyin::Testing

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,24 +19,36 @@
 
 #pragma once
 
+#include "dsp/dspsettingsregistry.h"
+#include "pluginsettingsregistry.h"
+
 #include <core/track.h>
 
 #include <QObject>
+#include <memory>
 
 namespace Fooyin {
 class Application;
 class ArtworkFinder;
+class CoverRepository;
 class CoverProvider;
 class CoverWidget;
+class DspPresetRegistry;
+class DspSettingsController;
 class FyWidget;
 class GuiApplication;
+class GuiStyleProvider;
+struct GuiPluginContext;
 class LibraryTreeController;
 class MainWindow;
+class NowPlayingOutputService;
+class OutputProfileManager;
 class PlaylistController;
 class PlaylistInteractor;
-struct ScanProgress;
-class StatusWidget;
+class ScriptCommandHandler;
+class SelectionInfoFieldRegistry;
 class SettingsManager;
+class StatusWidget;
 class ThemeRegistry;
 class WidgetProvider;
 
@@ -45,13 +57,21 @@ class Widgets : public QObject
     Q_OBJECT
 
 public:
-    Widgets(Application* core, MainWindow* window, GuiApplication* gui, PlaylistInteractor* playlistInteractor,
-            QObject* parent = nullptr);
+    Widgets(Application* core, GuiApplication* gui, const GuiPluginContext& guiPluginContext, MainWindow* mainWindow,
+            PlaylistInteractor* playlistInteractor, QObject* parent = nullptr);
+    ~Widgets() override;
 
     void registerWidgets();
     void registerPages();
+    void registerAdvancedSettings();
+    void registerDspSettings();
+    void registerDspWidgets();
     void registerPropertiesTabs();
     void registerFontEntries() const;
+    [[nodiscard]] DspSettingsRegistry* dspSettingsRegistry() const;
+    [[nodiscard]] DspSettingsController* dspSettingsController() const;
+    [[nodiscard]] PluginSettingsRegistry* pluginSettingsRegistry() const;
+    [[nodiscard]] OutputProfileManager* outputProfileManager() const;
 
     void showArtworkDialog(const TrackList& tracks, Track::Cover type, bool quick);
     void removeArtwork(const TrackList& tracks, Track::Cover type);
@@ -59,18 +79,27 @@ public:
 
 private:
     FyWidget* createDirBrowser();
-    static void showScanProgress(const ScanProgress& progress);
 
     Application* m_core;
     GuiApplication* m_gui;
 
     MainWindow* m_window;
     SettingsManager* m_settings;
+    GuiStyleProvider* m_styleProvider;
+    CoverRepository* m_coverRepository;
 
     ArtworkFinder* m_artworkFinder;
     CoverProvider* m_coverProvider;
     PlaylistInteractor* m_playlistInteractor;
     PlaylistController* m_playlistController;
     LibraryTreeController* m_libraryTreeController;
+    SelectionInfoFieldRegistry* m_selectionInfoFieldRegistry;
+    DspPresetRegistry* m_dspPresetRegistry;
+    OutputProfileManager* m_outputProfileManager;
+    NowPlayingOutputService* m_nowPlayingOutputService;
+    std::unique_ptr<DspSettingsRegistry> m_dspSettingsRegistry;
+    std::unique_ptr<DspSettingsController> m_dspSettingsController;
+    std::unique_ptr<PluginSettingsRegistry> m_pluginSettingsRegistry;
+    ScriptCommandHandler* m_scriptCommandHandler;
 };
 } // namespace Fooyin

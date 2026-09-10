@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,92 +20,143 @@
 #pragma once
 
 #include "filterfwd.h"
+#include "filterrows.h"
 
 #include <core/track.h>
 #include <gui/fywidget.h>
 #include <gui/widgets/expandedtreeview.h>
 
+#include <QBasicTimer>
+
+class QTimerEvent;
+
 namespace Fooyin {
+class AudioLoader;
 class AutoHeaderView;
+class ActionManager;
 class CoverProvider;
+class CoverRepository;
 class LibraryManager;
+class MusicLibrary;
 class SettingsManager;
-class SignalThrottler;
 class WidgetContext;
+enum class TrackAction;
 
 namespace Filters {
 class FilterColumnRegistry;
+class FilterDelegate;
 class FilterModel;
 class FilterSortModel;
-class FilterWidgetPrivate;
+class FilterView;
+
+enum class FilterSource : uint8_t
+{
+    Library = 0,
+    CurrentPlaylist,
+};
 
 class FilterWidget : public FyWidget
 {
     Q_OBJECT
 
 public:
-    explicit FilterWidget(FilterColumnRegistry* columnRegistry, LibraryManager* libraryManager,
-                          CoverProvider* coverProvider, SettingsManager* settings, QWidget* parent = nullptr);
+    struct FilterViewState
+    {
+        FilterRowList rows;
+        std::vector<RowKey> selectedKeys;
+        QString searchText;
+    };
+
+    explicit FilterWidget(ActionManager* actionManager, FilterColumnRegistry* columnRegistry, MusicLibrary* library,
+                          CoverRepository* coverRepository, SettingsManager* settings, QWidget* parent = nullptr);
     ~FilterWidget() override;
 
     [[nodiscard]] Id group() const;
     [[nodiscard]] int index() const;
+    [[nodiscard]] const FilterColumnList& columns() const;
     [[nodiscard]] bool multipleColumns() const;
     [[nodiscard]] bool isActive() const;
-    [[nodiscard]] TrackList tracks() const;
-    [[nodiscard]] TrackList filteredTracks() const;
-    [[nodiscard]] QString searchFilter() const;
+    [[nodiscard]] std::vector<RowKey> selectedKeys() const;
+    [[nodiscard]] QString searchText() const;
     [[nodiscard]] WidgetContext* widgetContext() const;
+    [[nodiscard]] TrackAction doubleClickAction() const;
+    [[nodiscard]] TrackAction middleClickAction() const;
+    [[nodiscard]] bool sendPlayback() const;
+    [[nodiscard]] FilterSource source() const;
+    [[nodiscard]] bool playlistEnabled() const;
+    [[nodiscard]] bool autoSwitch() const;
+    [[nodiscard]] bool preservePlaybackPlaylist() const;
+    [[nodiscard]] QString playlistName() const;
+    [[nodiscard]] bool hasSelection() const;
+    void openConfigDialog() override;
 
     void setGroup(const Id& group);
     void setIndex(int index);
-    void refetchFilteredTracks();
-    void setFilteredTracks(const TrackList& tracks);
-    void clearFilteredTracks();
-
-    void reset(const TrackList& tracks);
-    void softReset(const TrackList& tracks);
+    void setViewState(const FilterViewState& state);
 
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
     void saveLayoutData(QJsonObject& layout) override;
+    void saveCopyLayoutData(QJsonObject& layout, LayoutCopyContext& context, bool isRoot) override;
     void loadLayoutData(const QJsonObject& layout) override;
     void finalise() override;
 
-    void searchEvent(const QString& search) override;
+    void searchEvent(const SearchRequest& request) override;
 
-    void tracksAdded(const TrackList& tracks);
-    void tracksChanged(const TrackList& tracks);
-    void tracksUpdated(const TrackList& tracks);
-    void tracksRemoved(const TrackList& tracks);
+    struct ConfigData
+    {
+        int doubleClickAction{1};
+        int middleClickAction{0};
+        bool sendPlayback{true};
+        FilterSource source{FilterSource::Library};
+        bool playlistEnabled{true};
+        bool autoSwitch{true};
+        bool preservePlaybackPlaylist{true};
+        QString playlistName;
+        int rowHeight{0};
+        QSize iconSize{100, 100};
+        int iconHorizontalGap{-1};
+        int iconVerticalGap{10};
+        int artworkCornerRadius{0};
+        bool alignCaptionsToArtwork{true};
+    };
 
-    void addFilterHeaderMenu(QMenu* menu, const QPoint& pos);
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
+    void applyConfig(const ConfigData& config);
 
-signals:
+    void addFilterHeaderMenu(QMenu* menu, const QPoint& pos, bool includeWidgetActions = true);
+
+Q_SIGNALS:
     void doubleClicked();
     void middleClicked();
 
     void filterDeleted();
     void filterUpdated();
-    void finishedUpdating();
-    void selectionChanged();
+    void selectionKeysChanged(const std::vector<Fooyin::Filters::RowKey>& keys);
+    void configChanged();
     void requestHeaderMenu(Fooyin::AutoHeaderView* header, const QPoint& pos);
     void requestContextMenu(const QPoint& pos);
     void requestEditConnections();
-    void requestSearch(const QString& search);
+    void searchTextChanged(const QString& search);
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
+    void timerEvent(QTimerEvent* event) override;
 
 private:
     void setupConnections();
 
-    void refreshFilteredTracks();
     void handleSelectionChanged(const QItemSelection& selected, const QItemSelection& deselected);
     void updateViewMode(ExpandedTreeView::ViewMode mode);
     void updateCaptions(ExpandedTreeView::CaptionDisplay captions);
     void updateAppearance();
+    void scheduleVisibleCoverPinUpdate(int delay = 0);
+    void updateVisibleCoverPins();
 
     void addDisplayMenu(QMenu* menu);
     void filterHeaderMenu(const QPoint& pos);
@@ -114,33 +165,35 @@ private:
     void columnChanged(const FilterColumn& changedColumn);
     void columnRemoved(int id);
 
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    static void saveConfigToLayout(const ConfigData& config, QJsonObject& layout);
+
+    ActionManager* m_actionManager;
     FilterColumnRegistry* m_columnRegistry;
     SettingsManager* m_settings;
 
-    ExpandedTreeView* m_view;
+    FilterView* m_view;
+    FilterDelegate* m_delegate;
     AutoHeaderView* m_header;
     FilterModel* m_model;
     FilterSortModel* m_sortProxy;
-    SignalThrottler* m_resetThrottler;
 
     Id m_group;
-    int m_index{-1};
+    int m_index;
     FilterColumnList m_columns;
-    bool m_multipleColumns{false};
-    TrackList m_tracks;
-    TrackList m_filteredTracks;
+    bool m_multipleColumns;
 
     WidgetContext* m_widgetContext;
 
     QString m_searchStr;
-    bool m_searching{false};
-    bool m_updating{false};
+    bool m_applyingViewState;
 
     QByteArray m_headerState;
 
-    bool m_showHeader;
     bool m_showScrollbar;
     bool m_alternatingColours;
+    ConfigData m_config;
+    QBasicTimer m_visibleCoverPinUpdateTimer;
 };
 } // namespace Filters
 } // namespace Fooyin

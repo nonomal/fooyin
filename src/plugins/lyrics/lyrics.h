@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,14 @@
 
 #pragma once
 
+#include <gui/guistyleprovider.h>
+
+#include <cstdint>
+#include <tuple>
+#include <vector>
+
+#include <QApplication>
+#include <QFont>
 #include <QString>
 #include <QStringList>
 
@@ -112,13 +120,56 @@ struct Lyrics
     QString data;
     QString source;
     bool isLocal{false};
+    QString tag;      // if tag-based
+    QString filepath; // if local file
     Metadata metadata;
-    uint64_t offset{0};
+    int64_t offset{0};
     std::vector<ParsedLine> lines;
 
     [[nodiscard]] bool isValid() const noexcept
     {
         return type != Type::Unknown;
+    }
+
+    [[nodiscard]] bool isEmpty() const noexcept
+    {
+        return data.isEmpty() && lines.empty();
+    }
+
+    [[nodiscard]] bool isSynced() const
+    {
+        return type == Type::Synced || type == Type::SyncedWords;
+    }
+
+    [[nodiscard]] bool isSyncedWords() const
+    {
+        return type == Type::SyncedWords;
+    }
+
+    static QFont defaultFont(const GuiStyleProvider& styleProvider)
+    {
+        if(styleProvider.isResolved()) {
+            return styleProvider.font(QStringLiteral("Fooyin::Lyrics::LyricsArea"));
+        }
+        return QApplication::font("Fooyin::Lyrics::LyricsArea");
+    }
+
+    static QFont defaultLineFont(const GuiStyleProvider& styleProvider)
+    {
+        QFont font{defaultFont(styleProvider)};
+        return font;
+    }
+
+    static QFont defaultWordLineFont(const GuiStyleProvider& styleProvider)
+    {
+        QFont font{defaultFont(styleProvider)};
+        return font;
+    }
+
+    static QFont defaultWordFont(const GuiStyleProvider& styleProvider)
+    {
+        QFont font{defaultWordLineFont(styleProvider)};
+        return font;
     }
 
     bool operator==(const Lyrics& other) const noexcept

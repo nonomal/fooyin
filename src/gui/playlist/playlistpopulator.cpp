@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,35 +21,52 @@
 
 #include "playlistitemmodels.h"
 #include "playlistpreset.h"
-#include "playlistscriptregistry.h"
+#include "scripting/scriptvariableproviders.h"
 
 #include <core/player/playercontroller.h>
+#include <core/scripting/scriptenvironmenthelpers.h>
+#include <gui/guiutils.h>
+#include <utils/settings/settingsmanager.h>
 
 #include <QTimer>
 
 #include <ranges>
+#include <utility>
 
 namespace Fooyin {
 class PlaylistPopulatorPrivate
 {
 public:
-    explicit PlaylistPopulatorPrivate(PlaylistPopulator* self, PlayerController* playerController)
+    explicit PlaylistPopulatorPrivate(PlaylistPopulator* self, PlayerController* playerController,
+                                      SettingsManager* settings)
         : m_self{self}
         , m_playerController{playerController}
-        , m_registry{new PlaylistScriptRegistry()}
-        , m_parser{m_registry}
-    { }
+        , m_settings{settings}
+    {
+        m_scriptContext.environment = &m_scriptEnvironment;
+        m_parser.addProvider(playlistVariableProvider());
+        m_parser.addProvider(artworkMarkerVariableProvider());
+    }
 
-    void reset();
+    void resetState();
+
+    void prepareScripts();
 
     PlaylistItem* getOrInsertItem(const UId& key, PlaylistItem::ItemType type, const Data& item, PlaylistItem* parent,
                                   const Md5Hash& baseKey);
 
+    RichText evaluateTrackScript(const ParsedScript& parsedScript, const Track& track, const ScriptContext& context);
+    RichText evaluateGroupScript(const ParsedScript& parsedScript, const TrackList& tracks,
+                                 const ScriptContext& context);
+    [[nodiscard]] const ScriptContext& makeContext(int index = -1, int depth = 0);
+    PendingData buildBatchData() const;
+    void clearBatchData();
+    void updateContainerText(PlaylistContainerItem& container, PlaylistItem::ItemType type, int scriptIndex,
+                             const TrackList& tracks);
     void updateContainers();
 
     void iterateHeader(const Track& track, PlaylistItem*& parent, int index);
     void iterateSubheaders(const Track& track, PlaylistItem*& parent, int index);
-    void evaluateTrackScript(RichScript& script, const Track& track);
     PlaylistItem* iterateTrack(const PlaylistTrack& track, int index);
 
     void runBatch(int size, int index);
@@ -57,13 +74,41 @@ public:
 
     PlaylistPopulator* m_self;
     PlayerController* m_playerController;
+    SettingsManager* m_settings;
 
     PlaylistPreset m_currentPreset;
     PlaylistColumnList m_columns;
 
-    PlaylistScriptRegistry* m_registry;
+    struct ParsedHeaderRow
+    {
+        ParsedScript grouping;
+        ParsedScript title;
+        ParsedScript subtitle;
+        ParsedScript sideText;
+        ParsedScript info;
+    };
+    ParsedHeaderRow m_parsedHeader;
+
+    struct ParsedSubheaderRow
+    {
+        ParsedScript grouping;
+        ParsedScript leftText;
+        ParsedScript rightText;
+    };
+    std::vector<ParsedSubheaderRow> m_parsedSubheaders;
+
+    struct ParsedTrackRow
+    {
+        std::vector<ParsedScript> columns;
+        ParsedScript leftText;
+        ParsedScript rightText;
+    };
+    ParsedTrackRow m_parsedTrack;
+
     ScriptParser m_parser;
     ScriptFormatter m_formatter;
+    PlaylistScriptEnvironment m_scriptEnvironment;
+    ScriptContext m_scriptContext;
 
     int m_preloadCount{2000};
     int m_trackDepth{0};
@@ -73,16 +118,26 @@ public:
     std::vector<Md5Hash> m_prevBaseSubheaderKey;
     std::vector<UId> m_prevSubheaderKey;
 
-    std::vector<PlaylistContainerItem> m_subheaders;
-
     PlaylistItem m_root;
     PendingData m_data;
-    using ContainerKeyMap = std::unordered_map<UId, PlaylistContainerItem*, UId::UIdHash>;
+
+    struct ContainerState
+    {
+        UId itemKey;
+        TrackList tracks;
+        int scriptIndex{-1};
+        bool emitted{false};
+        bool dirty{false};
+    };
+    using ContainerKeyMap = std::unordered_map<UId, ContainerState, UId::UIdHash>;
+
     ContainerKeyMap m_headers;
-    PlaylistTrackList m_pendingTracks;
+    PlaylistTrackList m_tracks;
+    Playlist* m_playlist{nullptr};
+    qsizetype m_nextTrack{0};
 };
 
-void PlaylistPopulatorPrivate::reset()
+void PlaylistPopulatorPrivate::resetState()
 {
     m_data.clear();
     m_headers.clear();
@@ -91,7 +146,42 @@ void PlaylistPopulatorPrivate::reset()
     m_prevSubheaderKey.clear();
     m_prevBaseHeaderKey = nullptr;
     m_prevHeaderKey     = {};
+    m_tracks.clear();
+    m_playlist     = nullptr;
+    m_nextTrack    = 0;
+    m_parsedHeader = {};
+    m_parsedSubheaders.clear();
+    m_parsedTrack = {};
 }
+
+void PlaylistPopulatorPrivate::prepareScripts()
+{
+    m_parsedHeader.grouping = m_parser.parse(m_currentPreset.header.grouping);
+    m_parsedHeader.title    = m_parser.parse(m_currentPreset.header.title.script);
+    m_parsedHeader.subtitle = m_parser.parse(m_currentPreset.header.subtitle.script);
+    m_parsedHeader.sideText = m_parser.parse(m_currentPreset.header.sideText.script);
+    m_parsedHeader.info     = m_parser.parse(m_currentPreset.header.info.script);
+
+    m_parsedSubheaders.clear();
+    m_parsedSubheaders.reserve(m_currentPreset.subHeaders.size());
+    for(const auto& subheader : std::as_const(m_currentPreset.subHeaders)) {
+        m_parsedSubheaders.emplace_back(m_parser.parse(subheader.grouping), m_parser.parse(subheader.leftText.script),
+                                        m_parser.parse(subheader.rightText.script));
+    }
+
+    m_parsedTrack = {};
+    if(!m_columns.empty()) {
+        m_parsedTrack.columns.reserve(m_columns.size());
+        for(const auto& column : m_columns) {
+            m_parsedTrack.columns.push_back(m_parser.parse(column.field));
+        }
+    }
+    else {
+        m_parsedTrack.leftText  = m_parser.parse(m_currentPreset.track.leftText.script);
+        m_parsedTrack.rightText = m_parser.parse(m_currentPreset.track.rightText.script);
+    }
+}
+
 PlaylistItem* PlaylistPopulatorPrivate::getOrInsertItem(const UId& key, PlaylistItem::ItemType type, const Data& item,
                                                         PlaylistItem* parent, const Md5Hash& baseKey)
 {
@@ -112,57 +202,196 @@ PlaylistItem* PlaylistPopulatorPrivate::getOrInsertItem(const UId& key, Playlist
     return child;
 }
 
+RichText PlaylistPopulatorPrivate::evaluateTrackScript(const ParsedScript& parsedScript, const Track& track,
+                                                       const ScriptContext& context)
+{
+    const auto evalScript = m_parser.evaluate(parsedScript, track, context);
+    if(evalScript.isEmpty()) {
+        return {};
+    }
+    return m_formatter.evaluate(evalScript);
+}
+
+RichText PlaylistPopulatorPrivate::evaluateGroupScript(const ParsedScript& parsedScript, const TrackList& tracks,
+                                                       const ScriptContext& context)
+{
+    const auto evalScript = m_parser.evaluate(parsedScript, tracks, context);
+    if(evalScript.isEmpty()) {
+        return {};
+    }
+    return m_formatter.evaluate(evalScript);
+}
+
+const ScriptContext& PlaylistPopulatorPrivate::makeContext(int index, int depth)
+{
+    int currentPlayingTrackIndex{-1};
+    int currentPlayingTrackId{-1};
+
+    if(m_playerController && m_playlist) {
+        const auto playingTrack = m_playerController->currentPlaylistTrack();
+        if(playingTrack.playlistId == m_playlist->id()) {
+            currentPlayingTrackIndex = playingTrack.indexInPlaylist;
+            currentPlayingTrackId    = playingTrack.track.id();
+        }
+    }
+
+    m_scriptEnvironment.setPlaylistData(m_playlist, &m_playerController->playbackQueue(), nullptr,
+                                        m_playerController ? m_playerController->queuedTracksCount() : 0);
+    m_scriptEnvironment.setTrackState(index, currentPlayingTrackIndex, currentPlayingTrackId, depth);
+    m_scriptEnvironment.setPlaybackState(m_playerController ? m_playerController->currentPosition() : 0,
+                                         m_playerController ? m_playerController->currentTrack().duration() : 0,
+                                         m_playerController ? m_playerController->bitrate() : 0,
+                                         m_playerController ? m_playerController->playState()
+                                                            : Player::PlayState::Stopped);
+    m_scriptContext.playlist = m_playlist;
+    return m_scriptContext;
+}
+
+PendingData PlaylistPopulatorPrivate::buildBatchData() const
+{
+    PendingData batchData;
+    batchData.playlistId     = m_data.playlistId;
+    batchData.updatedItems   = m_data.updatedItems;
+    batchData.nodes          = m_data.nodes;
+    batchData.containerOrder = m_data.containerOrder;
+    batchData.trackParents   = m_data.trackParents;
+    batchData.parent         = m_data.parent;
+    batchData.row            = m_data.row;
+    batchData.indexNodes     = m_data.indexNodes;
+
+    for(const auto& childKeys : batchData.nodes | std::views::values) {
+        for(const auto& childKey : childKeys) {
+            if(const auto it = m_data.items.find(childKey); it != m_data.items.cend()) {
+                batchData.items.emplace(childKey, it->second);
+            }
+        }
+    }
+
+    return batchData;
+}
+
+void PlaylistPopulatorPrivate::clearBatchData()
+{
+    for(auto itemIt = m_data.items.begin(); itemIt != m_data.items.end();) {
+        if(itemIt->second.type() == PlaylistItem::Track) {
+            itemIt = m_data.items.erase(itemIt);
+        }
+        else {
+            ++itemIt;
+        }
+    }
+
+    m_data.updatedItems.clear();
+    m_data.nodes.clear();
+    m_data.containerOrder.clear();
+    m_data.trackParents.clear();
+    m_data.parent.clear();
+    m_data.row = -1;
+    m_data.indexNodes.clear();
+
+    for(auto& state : m_headers | std::views::values) {
+        state.emitted = true;
+    }
+}
+
+void PlaylistPopulatorPrivate::updateContainerText(PlaylistContainerItem& container, PlaylistItem::ItemType type,
+                                                   int scriptIndex, const TrackList& tracks)
+{
+    if(tracks.empty()) {
+        container.setTitle({});
+        container.setSubtitle({});
+        container.setSideText({});
+        container.setInfo({});
+        container.clearCoverTrack();
+        container.calculateSize();
+        return;
+    }
+
+    if(type == PlaylistItem::Header) {
+        const auto& context = makeContext();
+
+        container.setTitle(evaluateGroupScript(m_parsedHeader.title, tracks, context));
+        container.setSubtitle(evaluateGroupScript(m_parsedHeader.subtitle, tracks, context));
+        container.setSideText(evaluateGroupScript(m_parsedHeader.sideText, tracks, context));
+        container.setInfo(evaluateGroupScript(m_parsedHeader.info, tracks, context));
+    }
+    else if(type == PlaylistItem::Subheader && scriptIndex >= 0
+            && std::cmp_less(scriptIndex, m_parsedSubheaders.size())) {
+        const auto& parsedSubheader = m_parsedSubheaders.at(scriptIndex);
+
+        const auto& context = makeContext();
+
+        container.setTitle(evaluateGroupScript(parsedSubheader.leftText, tracks, context));
+        container.setSubtitle(evaluateGroupScript(parsedSubheader.rightText, tracks, context));
+        container.setSideText({});
+        container.setInfo({});
+    }
+
+    container.setCoverTrack(tracks.front());
+    container.calculateSize();
+}
+
 void PlaylistPopulatorPrivate::updateContainers()
 {
-    for(const auto& [key, container] : m_headers) {
-        container->updateGroupText(&m_parser, &m_formatter);
+    for(auto& state : m_headers | std::views::values) {
+        if(!state.dirty) {
+            continue;
+        }
+        if(auto itemIt = m_data.items.find(state.itemKey); itemIt != m_data.items.end()) {
+            auto& item      = itemIt->second;
+            auto& container = std::get<PlaylistContainerItem>(item.data());
+            updateContainerText(container, itemIt->second.type(), state.scriptIndex, state.tracks);
+            if(state.emitted) {
+                m_data.updatedItems.insert_or_assign(state.itemKey, item);
+            }
+            state.dirty = false;
+        }
     }
 }
 
 void PlaylistPopulatorPrivate::iterateHeader(const Track& track, PlaylistItem*& parent, int index)
 {
-    HeaderRow row{m_currentPreset.header};
-    if(!row.isValid()) {
+    if(!m_currentPreset.header.isValid()) {
         return;
     }
 
-    auto evaluateBlocks = [this, track](RichScript& script) -> QString {
-        script.text.clear();
-        const auto evalScript = m_parser.evaluate(script.script, track);
-        if(!evalScript.isEmpty()) {
-            script.text = m_formatter.evaluate(evalScript);
-        }
-        return evalScript;
-    };
+    const auto& context       = makeContext(index, m_trackDepth);
+    const auto titleScript    = m_parser.evaluate(m_parsedHeader.title, track, context);
+    const auto subtitleScript = m_parser.evaluate(m_parsedHeader.subtitle, track, context);
+    const auto sideScript     = m_parser.evaluate(m_parsedHeader.sideText, track, context);
+    const auto infoScript     = m_parser.evaluate(m_parsedHeader.info, track, context);
 
-    auto generateHeaderKey = [&row, &evaluateBlocks]() {
-        return Utils::generateMd5Hash(evaluateBlocks(row.title), evaluateBlocks(row.subtitle),
-                                      evaluateBlocks(row.sideText), evaluateBlocks(row.info));
-    };
+    const auto baseKey = !m_currentPreset.header.grouping.isEmpty()
+                           ? Utils::generateMd5Hash(m_parser.evaluate(m_parsedHeader.grouping, track, context))
+                           : Utils::generateMd5Hash(titleScript, subtitleScript, sideScript, infoScript);
 
-    const auto baseKey = generateHeaderKey();
-    UId key{UId::create()};
+    UId key;
     if(m_prevHeaderKey.isValid() && m_prevBaseHeaderKey == baseKey && index == m_prevIndex + 1) {
         key = m_prevHeaderKey;
     }
+    else {
+        key = UId::create();
+    }
+
     m_prevBaseHeaderKey = baseKey;
     m_prevHeaderKey     = key;
 
     if(!m_headers.contains(key)) {
-        PlaylistContainerItem header{m_currentPreset.header.simple};
-        header.setTitle(row.title);
-        header.setSubtitle(row.subtitle);
-        header.setSideText(row.sideText);
-        header.setInfo(row.info);
-        header.setRowHeight(row.rowHeight);
-        header.calculateSize();
+        const auto layoutKind = m_currentPreset.header.simple ? PlaylistContainerItem::LayoutKind::SimpleHeader
+                                                              : PlaylistContainerItem::LayoutKind::Header;
+        PlaylistContainerItem headerData{layoutKind};
+        headerData.setRowHeight(m_currentPreset.header.rowHeight);
+        headerData.setScriptIndex(-1);
 
-        auto* headerItem      = getOrInsertItem(key, PlaylistItem::Header, header, parent, baseKey);
-        auto& headerContainer = std::get<1>(headerItem->data());
-        m_headers.emplace(key, &headerContainer);
+        getOrInsertItem(key, PlaylistItem::Header, headerData, parent, baseKey);
+        ContainerState state;
+        state.itemKey = key;
+        m_headers.emplace(key, std::move(state));
     }
-    PlaylistContainerItem* header = m_headers.at(key);
-    header->addTrack(track);
+
+    auto& headerState = m_headers.at(key);
+    headerState.tracks.emplace_back(track);
+    headerState.dirty = true;
     m_data.trackParents[track.id()].push_back(key);
 
     auto* headerItem = &m_data.items.at(key);
@@ -172,37 +401,17 @@ void PlaylistPopulatorPrivate::iterateHeader(const Track& track, PlaylistItem*& 
 
 void PlaylistPopulatorPrivate::iterateSubheaders(const Track& track, PlaylistItem*& parent, int index)
 {
-    for(auto& subheader : m_currentPreset.subHeaders) {
-        const auto leftScript    = m_parser.evaluate(subheader.leftText.script, track);
-        subheader.leftText.text  = m_formatter.evaluate(leftScript);
-        const auto rightScript   = m_parser.evaluate(subheader.rightText.script, track);
-        subheader.rightText.text = m_formatter.evaluate(rightScript);
-
-        PlaylistContainerItem currentContainer{false};
-        currentContainer.setTitle(subheader.leftText);
-        currentContainer.setSubtitle(subheader.rightText);
-        currentContainer.setRowHeight(subheader.rowHeight);
-        currentContainer.calculateSize();
-        m_subheaders.push_back(currentContainer);
-    }
-
-    const int subheaderCount = static_cast<int>(m_subheaders.size());
+    const auto subheaderCount = static_cast<int>(m_currentPreset.subHeaders.size());
     m_prevSubheaderKey.resize(subheaderCount);
     m_prevBaseSubheaderKey.resize(subheaderCount);
 
-    auto generateSubheaderKey = [](const PlaylistContainerItem& subheader) {
-        QString subheaderKey;
-        for(const auto& block : subheader.title().text.blocks) {
-            subheaderKey += block.text;
-        }
-        for(const auto& block : subheader.subtitle().text.blocks) {
-            subheaderKey += block.text;
-        }
-        return subheaderKey;
-    };
-
-    for(int i{0}; const auto& subheader : m_subheaders) {
-        const QString subheaderKey = generateSubheaderKey(subheader);
+    for(int i{0}; i < subheaderCount; ++i) {
+        auto subheader              = m_currentPreset.subHeaders.at(i);
+        const auto& parsedSubheader = m_parsedSubheaders.at(i);
+        const auto& context         = makeContext(index, m_trackDepth);
+        const auto leftScript       = m_parser.evaluate(parsedSubheader.leftText, track, context);
+        const auto rightScript      = m_parser.evaluate(parsedSubheader.rightText, track, context);
+        const QString subheaderKey  = leftScript + rightScript;
 
         if(subheaderKey.isEmpty()) {
             m_prevBaseSubheaderKey[i] = {};
@@ -210,39 +419,42 @@ void PlaylistPopulatorPrivate::iterateSubheaders(const Track& track, PlaylistIte
             continue;
         }
 
-        const auto baseKey = Utils::generateMd5Hash(parent->baseKey(), subheaderKey);
-        UId key{UId::create()};
-        if(static_cast<int>(m_prevSubheaderKey.size()) > i && m_prevBaseSubheaderKey.at(i) == baseKey
+        const auto groupingKey = !subheader.grouping.isEmpty()
+                                   ? m_parser.evaluate(parsedSubheader.grouping, track, context)
+                                   : subheaderKey;
+        const auto baseKey     = Utils::generateMd5Hash(parent->baseKey(), groupingKey);
+
+        UId key;
+        if(std::cmp_greater(m_prevSubheaderKey.size(), i) && m_prevBaseSubheaderKey.at(i) == baseKey
            && index == m_prevIndex + 1) {
             key = m_prevSubheaderKey.at(i);
         }
+        else {
+            key = UId::create();
+        }
+
         m_prevBaseSubheaderKey[i] = baseKey;
         m_prevSubheaderKey[i]     = key;
 
         if(!m_headers.contains(key)) {
-            auto* subheaderItem      = getOrInsertItem(key, PlaylistItem::Subheader, subheader, parent, baseKey);
-            auto& subheaderContainer = std::get<1>(subheaderItem->data());
-            m_headers.emplace(key, &subheaderContainer);
+            PlaylistContainerItem subheaderData{PlaylistContainerItem::LayoutKind::Subheader};
+            subheaderData.setRowHeight(subheader.rowHeight);
+            subheaderData.setScriptIndex(i);
+
+            getOrInsertItem(key, PlaylistItem::Subheader, subheaderData, parent, baseKey);
+            ContainerState state;
+            state.itemKey     = key;
+            state.scriptIndex = i;
+            m_headers.emplace(key, std::move(state));
         }
-        PlaylistContainerItem* subheaderContainer = m_headers.at(key);
-        subheaderContainer->addTrack(track);
+        auto& subheaderState = m_headers.at(key);
+        subheaderState.tracks.emplace_back(track);
+        subheaderState.dirty = true;
         m_data.trackParents[track.id()].push_back(key);
 
         auto* subheaderItem = &m_data.items.at(key);
         parent              = subheaderItem;
-        ++i;
         ++m_trackDepth;
-    }
-
-    m_subheaders.clear();
-}
-
-void PlaylistPopulatorPrivate::evaluateTrackScript(RichScript& script, const Track& track)
-{
-    script.text.clear();
-    const auto evalScript = m_parser.evaluate(script.script, track);
-    if(!evalScript.isEmpty()) {
-        script.text = m_formatter.evaluate(evalScript);
     }
 }
 
@@ -257,28 +469,26 @@ PlaylistItem* PlaylistPopulatorPrivate::iterateTrack(const PlaylistTrack& track,
         return nullptr;
     }
 
-    m_registry->setTrackProperties(index, m_trackDepth);
+    const auto& context = makeContext(index, m_trackDepth);
 
-    TrackRow trackRow{m_currentPreset.track};
-    PlaylistTrackItem playlistTrack;
-
-    if(!m_columns.empty()) {
-        for(const auto& column : m_columns) {
-            const auto evalScript = m_parser.evaluate(column.field, track.track);
-            trackRow.columns.emplace_back(column.field, m_formatter.evaluate(evalScript));
+    PlaylistTrackItem playlistTrack = [&] {
+        if(!m_columns.empty()) {
+            std::vector<RichText> trackColumns;
+            trackColumns.reserve(m_columns.size());
+            for(size_t i{0}; i < m_columns.size(); ++i) {
+                const auto evalScript = m_parser.evaluate(m_parsedTrack.columns.at(i), track.track, context);
+                trackColumns.emplace_back(m_formatter.evaluate(evalScript));
+            }
+            return PlaylistTrackItem{std::move(trackColumns), track};
         }
-        playlistTrack = {trackRow.columns, track};
-    }
-    else {
-        evaluateTrackScript(trackRow.leftText, track.track);
-        evaluateTrackScript(trackRow.rightText, track.track);
 
-        playlistTrack = {trackRow.leftText, trackRow.rightText, track};
-    }
+        return PlaylistTrackItem{evaluateTrackScript(m_parsedTrack.leftText, track.track, context),
+                                 evaluateTrackScript(m_parsedTrack.rightText, track.track, context), track};
+    }();
 
-    playlistTrack.setRowHeight(trackRow.rowHeight);
+    playlistTrack.setRowHeight(m_currentPreset.track.rowHeight);
     playlistTrack.setDepth(m_trackDepth);
-    playlistTrack.calculateSize();
+    playlistTrack.calculateHeight();
 
     const auto baseKey
         = Utils::generateMd5Hash(parent->key().toString(UId::Id128), track.track.hash(), QString::number(index));
@@ -294,11 +504,13 @@ PlaylistItem* PlaylistPopulatorPrivate::iterateTrack(const PlaylistTrack& track,
 
 void PlaylistPopulatorPrivate::runBatch(int size, int index)
 {
-    if(size <= 0) {
+    if(size <= 0 || std::cmp_greater_equal(m_nextTrack, m_tracks.size())) {
         return;
     }
 
-    auto tracksBatch = std::ranges::views::take(m_pendingTracks, size);
+    const auto remainingTracks = static_cast<qsizetype>(m_tracks.size()) - m_nextTrack;
+    const int batchSize        = std::min(size, static_cast<int>(remainingTracks));
+    auto tracksBatch           = m_tracks | std::views::drop(m_nextTrack) | std::views::take(batchSize);
 
     for(const PlaylistTrack& track : tracksBatch) {
         if(!m_self->mayRun()) {
@@ -313,25 +525,24 @@ void PlaylistPopulatorPrivate::runBatch(int size, int index)
         return;
     }
 
-    emit m_self->populated(m_data);
+    const PendingData batchData = buildBatchData();
+    Q_EMIT m_self->populated(batchData);
 
-    auto tracksToKeep = std::ranges::views::drop(m_pendingTracks, size);
-    PlaylistTrackList tempTracks;
-    std::ranges::copy(tracksToKeep, std::back_inserter(tempTracks));
-    m_pendingTracks = std::move(tempTracks);
+    m_nextTrack += batchSize;
+    clearBatchData();
 
-    m_data.nodes.clear();
-
-    const auto remaining = static_cast<int>(m_pendingTracks.size());
+    const auto remaining = static_cast<int>(m_tracks.size() - m_nextTrack);
     runBatch(remaining, index);
 }
 
 void PlaylistPopulatorPrivate::runTracksGroup(const std::map<int, PlaylistTrackList>& tracks)
 {
+    int nextIndex = m_playlist ? m_playlist->trackCount() : 0;
+
     for(const auto& [index, trackGroup] : tracks) {
         std::vector<UId> trackKeys;
 
-        int trackIndex{index};
+        int trackIndex = index >= 0 ? index : nextIndex;
 
         for(const PlaylistTrack& track : trackGroup) {
             if(!m_self->mayRun()) {
@@ -341,6 +552,8 @@ void PlaylistPopulatorPrivate::runTracksGroup(const std::map<int, PlaylistTrackL
                 trackKeys.push_back(trackItem->key());
             }
         }
+
+        nextIndex = trackIndex;
         m_data.indexNodes.emplace(index, trackKeys);
     }
 
@@ -350,12 +563,14 @@ void PlaylistPopulatorPrivate::runTracksGroup(const std::map<int, PlaylistTrackL
         return;
     }
 
-    emit m_self->populatedTrackGroup(m_data);
+    const PendingData batchData = buildBatchData();
+    Q_EMIT m_self->populatedTrackGroup(batchData);
+    clearBatchData();
 }
 
-PlaylistPopulator::PlaylistPopulator(PlayerController* playerController, QObject* parent)
+PlaylistPopulator::PlaylistPopulator(PlayerController* playerController, SettingsManager* settings, QObject* parent)
     : Worker{parent}
-    , p{std::make_unique<PlaylistPopulatorPrivate>(this, playerController)}
+    , p{std::make_unique<PlaylistPopulatorPrivate>(this, playerController, settings)}
 {
     qRegisterMetaType<PendingData>();
 }
@@ -369,7 +584,9 @@ void PlaylistPopulator::setFont(const QFont& font)
 
 void PlaylistPopulator::setUseVarious(bool enabled)
 {
-    p->m_registry->setUseVariousArtists(enabled);
+    p->m_scriptEnvironment.setRatingStarSymbols(Gui::ratingStarSymbols(*p->m_settings));
+    p->m_scriptEnvironment.setEvaluationPolicy(TrackListContextPolicy::Placeholder, QStringLiteral("|Loading|"), true,
+                                               enabled);
 }
 
 void PlaylistPopulator::setPreloadCount(int count)
@@ -382,20 +599,23 @@ void PlaylistPopulator::run(Playlist* playlist, const PlaylistPreset& preset, co
 {
     setState(Running);
 
-    p->reset();
+    p->resetState();
 
     if(playlist) {
         p->m_data.playlistId = playlist->id();
     }
     p->m_currentPreset = preset;
     p->m_columns       = columns;
-    p->m_pendingTracks = tracks;
-    p->m_registry->setup(playlist, p->m_playerController->playbackQueue());
+    p->m_tracks        = tracks;
+    p->m_playlist      = playlist;
+    p->prepareScripts();
 
     const int preloadCount = p->m_preloadCount > 0 ? p->m_preloadCount : static_cast<int>(tracks.size());
     p->runBatch(preloadCount, 0);
 
-    emit finished();
+    if(mayRun()) {
+        Q_EMIT finished();
+    }
 
     setState(Idle);
 }
@@ -405,14 +625,15 @@ void PlaylistPopulator::runTracks(Playlist* playlist, const PlaylistPreset& pres
 {
     setState(Running);
 
-    p->reset();
+    p->resetState();
 
     if(playlist) {
         p->m_data.playlistId = playlist->id();
     }
     p->m_currentPreset = preset;
     p->m_columns       = columns;
-    p->m_registry->setup(playlist, p->m_playerController->playbackQueue());
+    p->m_playlist      = playlist;
+    p->prepareScripts();
 
     p->runTracksGroup(tracks);
 
@@ -426,7 +647,9 @@ void PlaylistPopulator::updateTracks(Playlist* playlist, const PlaylistPreset& p
     setState(Running);
 
     p->m_currentPreset = preset;
-    p->m_registry->setup(playlist, p->m_playerController->playbackQueue());
+    p->m_columns       = columns;
+    p->m_playlist      = playlist;
+    p->prepareScripts();
 
     ItemList updatedTracks;
 
@@ -434,53 +657,55 @@ void PlaylistPopulator::updateTracks(Playlist* playlist, const PlaylistPreset& p
         PlaylistTrackItem& trackData = std::get<0>(item.data());
 
         trackData.setTrack(track);
-        p->m_registry->setTrackProperties(trackData.track().indexInPlaylist, trackData.depth());
+        const auto& context = p->makeContext(trackData.track().indexInPlaylist, trackData.depth());
 
         if(!columnsToUpdate.empty()) {
-            std::vector<RichScript> trackColumns;
-            for(int i{0}; const auto& column : columns) {
-                if(columnsToUpdate.contains(i)) {
-                    const auto evalScript = p->m_parser.evaluate(column.field, track.track);
-                    trackColumns.emplace_back(column.field, p->m_formatter.evaluate(evalScript));
+            std::vector<RichText> trackColumns;
+            trackColumns.reserve(columns.size());
+            for(size_t i{0}; i < columns.size(); ++i) {
+                const int columnIndex = static_cast<int>(i);
+                if(columnsToUpdate.contains(columnIndex)) {
+                    const auto evalScript = p->m_parser.evaluate(p->m_parsedTrack.columns.at(i), track.track, context);
+                    trackColumns.emplace_back(p->m_formatter.evaluate(evalScript));
                 }
                 else {
-                    trackColumns.emplace_back(trackData.column(i));
+                    trackColumns.emplace_back(trackData.column(columnIndex));
                 }
-                ++i;
             }
             trackData.setColumns(trackColumns);
         }
         else {
-            RichScript trackLeft{preset.track.leftText};
-            RichScript trackRight{preset.track.rightText};
-
-            p->evaluateTrackScript(trackLeft, track.track);
-            p->evaluateTrackScript(trackRight, track.track);
-
+            const auto trackLeft  = p->evaluateTrackScript(p->m_parsedTrack.leftText, track.track, context);
+            const auto trackRight = p->evaluateTrackScript(p->m_parsedTrack.rightText, track.track, context);
             trackData.setLeftRight(trackLeft, trackRight);
         }
 
         updatedTracks.push_back(item);
     }
 
-    emit tracksUpdated(updatedTracks, columnsToUpdate);
+    Q_EMIT tracksUpdated(updatedTracks, columnsToUpdate);
 
     setState(Idle);
 }
 
-void PlaylistPopulator::updateHeaders(const ItemList& headers)
+void PlaylistPopulator::updateHeaders(Playlist* playlist, const PlaylistPreset& preset, const HeaderUpdateList& headers)
 {
     setState(Running);
 
+    p->m_currentPreset = preset;
+    p->m_playlist      = playlist;
+    p->prepareScripts();
+
     ItemKeyMap updatedHeaders;
 
-    for(const PlaylistItem& item : headers) {
-        PlaylistContainerItem& header = std::get<1>(item.data());
-        header.updateGroupText(&p->m_parser, &p->m_formatter);
-        updatedHeaders.emplace(item.key(), item);
+    for(const auto& request : headers) {
+        PlaylistItem item = request.item;
+        auto& header      = std::get<PlaylistContainerItem>(item.data());
+        p->updateContainerText(header, item.type(), header.scriptIndex(), request.tracks);
+        updatedHeaders.emplace(item.key(), std::move(item));
     }
 
-    emit headersUpdated(updatedHeaders);
+    Q_EMIT headersUpdated(updatedHeaders);
 
     setState(Idle);
 }

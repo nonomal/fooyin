@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,8 +24,6 @@
 #include "waveformgenerator.h"
 #include "waveformrescaler.h"
 
-#include <core/track.h>
-
 #include <QObject>
 #include <QThread>
 
@@ -33,6 +31,7 @@ namespace Fooyin {
 class AudioBuffer;
 class AudioLoader;
 class SettingsManager;
+class Track;
 
 namespace WaveBar {
 class WaveformBuilder : public QObject
@@ -48,7 +47,14 @@ public:
     void generateAndScale(const Track& track, bool update = false);
     void rescale(int width);
 
-signals:
+    void setSampleWidth(int width);
+    void setDownmix(DownmixOption option);
+    void setSupersampleFactor(int factor);
+    void setPeakDisplayMode(PeakDisplayMode mode);
+    void setNormaliseToPeak(bool normalise);
+    void setDecibelScale(bool decibelScale);
+
+Q_SIGNALS:
     void generatingWaveform();
     void waveformGenerated(const Fooyin::Track& track);
     void waveformRescaled(const Fooyin::WaveBar::WaveformData<float>& data);
@@ -66,6 +72,12 @@ private:
 
     int m_width;
     int m_samplesPerChannel;
+    int m_sampleWidth;
+    int m_supersampleFactor;
+    DownmixOption m_downmix;
+    PeakDisplayMode m_peakDisplayMode;
+    bool m_normaliseToPeak;
+    bool m_decibelScale;
     bool m_rescale;
 };
 } // namespace WaveBar

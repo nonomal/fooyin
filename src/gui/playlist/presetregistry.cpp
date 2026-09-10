@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,11 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 PresetRegistry::PresetRegistry(SettingsManager* settings, QObject* parent)
-    : ItemRegistry{u"PlaylistWidget/Presets"_s, settings, parent}
+    : ItemRegistry{u"PlaylistWidget/Presets"_s, settings, u"PlaylistWidget/PresetOverrides"_s, parent}
 {
     QObject::connect(this, &RegistryBase::itemChanged, this, [this](int id) {
         if(const auto preset = itemById(id)) {
-            emit presetChanged(preset.value());
+            Q_EMIT presetChanged(preset.value());
         }
     });
 
@@ -38,15 +38,15 @@ void PresetRegistry::loadDefaults()
 {
     PlaylistPreset preset;
 
-    preset.name = tr("Track Table");
+    preset.name = tr("Track list");
 
-    preset.track.leftText.script = u" $padright(,$mul($sub(%depth%,1),5))[\\[%queueindexes%\\]  ]"
-                                   "[$num(%track%,2).  ]%title%[<alpha=180>  ▪  %uniqueartist%]"_s;
+    preset.track.leftText.script  = u" $padright(,$mul($sub(%depth%,1),5))[\\[%queueindexes%\\]  ]"
+                                    "[$num(%track%,2).  ]%title%[<alpha=180>  ▪  %uniqueartist%]"_s;
     preset.track.rightText.script = u"$ifgreater(%playcount%,0,%playcount% |)      %duration% "_s;
 
     addDefaultItem(preset);
 
-    preset.name = tr("Album/Disc");
+    preset.name = tr("Albums grouped by disc");
 
     preset.header.title.script    = u"<b><sized=2>$if2(%albumartist%,Unknown Artist)"_s;
     preset.header.subtitle.script = u"<sized=1>$if2(%album%,Unknown Album)"_s;
@@ -63,13 +63,13 @@ void PresetRegistry::loadDefaults()
 
     preset.subHeaders.clear();
 
-    preset.name = tr("Disc Albums");
+    preset.name = tr("Albums with disc headers");
 
     preset.header.subtitle.script = u"<sized=1>$if2(%album%,Unknown Album)$ifgreater(%disctotal%,1, ▪ Disc #%disc%)"_s;
 
     addDefaultItem(preset);
 
-    preset.name = tr("Simple Artist/Album/Year");
+    preset.name = tr("Compact album headers");
 
     preset.header.simple = true;
     preset.header.subtitle.script.clear();

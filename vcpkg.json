@@ -1,16 +1,24 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-  "builtin-baseline": "4334d8b4c8916018600212ab4dd4bbdc343065d1",
+  "builtin-baseline": "40f3c709db80acf154ac4b17a1f83c564ebd022e",
   "dependencies": [
-    "ffmpeg",
+    {
+      "name": "ffmpeg",
+      "features": [ "mp3lame", "opus", "vorbis" ]
+    },
     "icu",
     "taglib",
+    "glm",
     "sdl2",
     "getopt",
+    "libebur128",
     "libopenmpt",
     "libsndfile",
     "libarchive",
-    "libgme"
+    "libgme",
+    "soundtouch",
+    "soxr",
+    "projectm"
   ],
   "features": {
     "fooyin-tests": {

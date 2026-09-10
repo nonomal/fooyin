@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,14 +21,18 @@
 
 #include "internalguisettings.h"
 #include "menubar/mainmenubar.h"
-#include "statusevent.h"
+#include "scanprogresstext.h"
 #include "widgets/statuswidget.h"
 
 #include <core/application.h>
 #include <core/coresettings.h>
+#include <core/library/musiclibrary.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
+#include <gui/statusevent.h>
 #include <utils/actions/actionmanager.h>
+#include <utils/actions/command.h>
 #include <utils/enum.h>
 #include <utils/settings/settingsdialogcontroller.h>
 #include <utils/settings/settingsmanager.h>
@@ -46,9 +50,12 @@ using namespace Qt::StringLiterals;
 constexpr auto MainWindowPrevState = "Interface/PrevState";
 
 namespace Fooyin {
-MainWindow::MainWindow(ActionManager* actionManager, MainMenuBar* menubar, SettingsManager* settings, QWidget* parent)
+MainWindow::MainWindow(ActionManager* actionManager, MainMenuBar* menubar, MusicLibrary* library,
+                       SettingsManager* settings, QWidget* parent)
     : QMainWindow{parent}
+    , m_actionManager{actionManager}
     , m_mainMenu{menubar}
+    , m_library{library}
     , m_settings{settings}
     , m_prevState{Normal}
     , m_state{Normal}
@@ -71,7 +78,7 @@ MainWindow::MainWindow(ActionManager* actionManager, MainMenuBar* menubar, Setti
 
     resetTitle();
 
-    setWindowIcon(Utils::iconFromTheme(Constants::Icons::FooyinWindow));
+    setWindowIcon(Gui::applicationIcon());
 
     if(windowHandle()) {
         QObject::connect(windowHandle(), &QWindow::screenChanged, this,
@@ -80,6 +87,7 @@ MainWindow::MainWindow(ActionManager* actionManager, MainMenuBar* menubar, Setti
 
     m_settings->subscribe<Settings::Gui::ShowStatusTips>(this, [this](const bool show) { m_showStatusTips = show; });
     m_settings->subscribe<Settings::Gui::ShowMenuBar>(this, [this](const bool show) { menuBar()->setVisible(show); });
+    QObject::connect(m_library, &MusicLibrary::scanProgress, this, &MainWindow::showScanProgress);
 
     menuBar()->setVisible(m_settings->value<Settings::Gui::ShowMenuBar>());
 }
@@ -92,16 +100,16 @@ MainWindow::~MainWindow()
 void MainWindow::open()
 {
     switch(m_settings->value<Settings::Gui::StartupBehaviour>()) {
-        case(StartMaximised):
+        case StartMaximised:
             showMaximized();
             break;
-        case(StartPrev):
+        case StartPrev:
             restoreState(m_prevState);
             break;
-        case(StartHidden):
+        case StartHidden:
             m_state = Hidden;
             break;
-        case(StartNormal):
+        case StartNormal:
         default:
             show();
             break;
@@ -232,6 +240,51 @@ void MainWindow::closeEvent(QCloseEvent* event)
     QMainWindow::closeEvent(event);
 }
 
+void MainWindow::showScanProgress(const ScanProgress& progress)
+{
+    if(!m_statusWidget) {
+        return;
+    }
+
+    if(progress.id < 0) {
+        m_statusWidget->setScanProgress({});
+        return;
+    }
+
+    QString scanText = ScanProgressText::requestText(progress, "StatusWidget");
+
+    if(const QString phaseText = ScanProgressText::phaseText(progress, "StatusWidget"); !phaseText.isEmpty()) {
+        scanText += u": "_s + phaseText;
+    }
+
+    if(progress.discovered > 0) {
+        scanText += u": "_s + ScanProgressText::discoveredText(progress.discovered, "StatusWidget");
+    }
+
+    if(progress.phase == ScanProgress::Phase::Finished) {
+        m_statusWidget->setScanProgress({});
+        return;
+    }
+
+    m_statusWidget->setScanProgress(scanText,
+                                    [library = m_library, scanId = progress.id]() { library->cancelScan(scanId); });
+}
+
+void MainWindow::mousePressEvent(QMouseEvent* event)
+{
+    if(event->button() == Qt::BackButton) {
+        if(auto* prevCmd = m_actionManager->command(Constants::Actions::Previous)) {
+            prevCmd->action()->activate(QAction::Trigger);
+        }
+    }
+    if(event->button() == Qt::ForwardButton) {
+        if(auto* nextCmd = m_actionManager->command(Constants::Actions::Next)) {
+            nextCmd->action()->activate(QAction::Trigger);
+        }
+    }
+    QMainWindow::mousePressEvent(event);
+}
+
 MainWindow::WindowState MainWindow::currentState()
 {
     if(isHidden()) {
@@ -259,15 +312,15 @@ void MainWindow::restoreWindowGeometry()
 void MainWindow::restoreState(WindowState state)
 {
     switch(state) {
-        case(Normal): {
+        case Normal: {
             restoreWindowGeometry();
             show();
             break;
         }
-        case(Maximised):
+        case Maximised:
             showMaximized();
             break;
-        case(Hidden):
+        case Hidden:
             m_state = Hidden;
             break;
     }

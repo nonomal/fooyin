@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -47,9 +47,9 @@ public:
     void setConnectedWidgets(const Id& id, const IdSet& widgets);
     void removeConnectedWidgets(const Id& id);
 
-    void changeSearch(const Id& id, const QString& search);
+    void changeSearch(const Id& id, const SearchRequest& request);
 
-signals:
+Q_SIGNALS:
     void connectionChanged(const Fooyin::Id& id);
 
 private:

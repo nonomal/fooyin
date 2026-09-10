@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,18 +19,24 @@
 
 #include "decoderpage.h"
 
+#include "decoderdelegate.h"
 #include "decodermodel.h"
 
 #include <core/engine/audioloader.h>
+#include <core/engine/inputplugin.h>
 #include <core/internalcoresettings.h>
+#include <core/plugins/plugin.h>
+#include <core/plugins/plugininfo.h>
+#include <core/plugins/pluginmanager.h>
 #include <gui/guiconstants.h>
+#include <gui/plugins/pluginsettingsprovider.h>
+#include <pluginsettingsregistry.h>
 #include <utils/settings/settingsmanager.h>
 
-#include <QCheckBox>
 #include <QGridLayout>
-#include <QGroupBox>
 #include <QLabel>
 #include <QListView>
+#include <QMenu>
 
 using namespace Qt::StringLiterals;
 
@@ -55,6 +61,42 @@ void applyChanges(std::vector<T> existing, std::vector<T> loaders,
         }
     }
 }
+
+Fooyin::DecoderModel::SettingsHandlerMap inputSettingsHandlers(Fooyin::PluginManager& pluginManager,
+                                                               Fooyin::PluginSettingsRegistry& registry)
+{
+    Fooyin::DecoderModel::SettingsHandlerMap handlers;
+
+    for(const auto& [pluginId, pluginInfo] : pluginManager.allPluginInfo()) {
+        auto* const inputPlugin = pluginInfo ? qobject_cast<Fooyin::InputPlugin*>(pluginInfo->root()) : nullptr;
+        if(!inputPlugin) {
+            continue;
+        }
+
+        auto* provider = registry.providerFor(pluginId);
+        if(!provider) {
+            continue;
+        }
+
+        handlers[inputPlugin->inputName()] = [provider](QWidget* parent) {
+            provider->showSettings(parent);
+        };
+    }
+
+    return handlers;
+}
+
+Fooyin::DecoderModel::SettingsHandlerMap
+readerSettingsHandlers(const std::vector<Fooyin::AudioLoader::LoaderEntry<Fooyin::DecoderCreator>>& decoders,
+                       Fooyin::DecoderModel::SettingsHandlerMap handlers)
+{
+    for(const auto& decoder : decoders) {
+        handlers.erase(decoder.name);
+    }
+
+    return handlers;
+}
+
 } // namespace
 
 namespace Fooyin {
@@ -63,32 +105,41 @@ class DecoderPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit DecoderPageWidget(AudioLoader* audioLoader, SettingsManager* settings);
+    explicit DecoderPageWidget(AudioLoader* audioLoader, PluginManager* pluginManager,
+                               PluginSettingsRegistry* pluginSettingsRegistry, SettingsManager* settings);
 
     void load() override;
     void apply() override;
     void reset() override;
 
 private:
+    void showConfigureMenu(QListView* view, DecoderModel* model, const QPoint& pos);
+
     AudioLoader* m_audioLoader;
+    PluginManager* m_pluginManager;
+    PluginSettingsRegistry* m_pluginSettingsRegistry;
     SettingsManager* m_settings;
 
     QListView* m_decoderList;
     DecoderModel* m_decoderModel;
+    DecoderDelegate* m_decoderDelegate;
     QListView* m_readerList;
     DecoderModel* m_readerModel;
-
-    QCheckBox* m_ffmpegAllExts;
+    DecoderDelegate* m_readerDelegate;
 };
 
-DecoderPageWidget::DecoderPageWidget(AudioLoader* audioLoader, SettingsManager* settings)
+DecoderPageWidget::DecoderPageWidget(AudioLoader* audioLoader, PluginManager* pluginManager,
+                                     PluginSettingsRegistry* pluginSettingsRegistry, SettingsManager* settings)
     : m_audioLoader{audioLoader}
+    , m_pluginManager{pluginManager}
+    , m_pluginSettingsRegistry{pluginSettingsRegistry}
     , m_settings{settings}
     , m_decoderList{new QListView(this)}
     , m_decoderModel{new DecoderModel(this)}
+    , m_decoderDelegate{new DecoderDelegate(m_decoderList, this)}
     , m_readerList{new QListView(this)}
     , m_readerModel{new DecoderModel(this)}
-    , m_ffmpegAllExts{new QCheckBox(tr("Enable all supported extensions"), this)}
+    , m_readerDelegate{new DecoderDelegate(m_readerList, this)}
 {
     auto setupModel = [](QAbstractItemView* view) {
         view->setDragDropMode(QAbstractItemView::InternalMove);
@@ -97,35 +148,49 @@ DecoderPageWidget::DecoderPageWidget(AudioLoader* audioLoader, SettingsManager* 
         view->setSelectionMode(QAbstractItemView::SingleSelection);
         view->setDragEnabled(true);
         view->setDropIndicatorShown(true);
+        view->setMouseTracking(true);
     };
 
     m_decoderList->setModel(m_decoderModel);
+    m_decoderList->setItemDelegate(m_decoderDelegate);
     m_readerList->setModel(m_readerModel);
+    m_readerList->setItemDelegate(m_readerDelegate);
     setupModel(m_decoderList);
     setupModel(m_readerList);
 
-    auto* ffmpegGroup       = new QGroupBox(u"FFmpeg"_s, this);
-    auto* ffmpegGroupLayout = new QGridLayout(ffmpegGroup);
+    m_decoderList->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_readerList->setContextMenuPolicy(Qt::CustomContextMenu);
 
-    ffmpegGroupLayout->addWidget(m_ffmpegAllExts);
-
+    int row{0};
     auto* layout = new QGridLayout(this);
-    layout->addWidget(new QLabel(tr("Decoders") + ":"_L1, this), 0, 0);
-    layout->addWidget(m_decoderList, 1, 0);
-    layout->addWidget(new QLabel(tr("Tag readers") + ":"_L1, this), 0, 1);
-    layout->addWidget(m_readerList, 1, 1);
-    layout->addWidget(ffmpegGroup, 2, 0, 1, 2);
 
-    layout->setRowStretch(1, 1);
+    row = 0;
+    layout->addWidget(new QLabel(tr("Decoders") + ":"_L1, this), row, 0);
+    layout->addWidget(new QLabel(tr("Tag readers") + ":"_L1, this), row++, 1);
+    layout->addWidget(m_decoderList, row, 0);
+    layout->addWidget(m_readerList, row, 1);
+    layout->setRowStretch(row++, 1);
+
     layout->setColumnStretch(0, 1);
     layout->setColumnStretch(1, 1);
+
+    QObject::connect(m_decoderDelegate, &DecoderDelegate::configureClicked, this,
+                     [this](const QModelIndex& index) { m_decoderModel->showSettings(index, this); });
+    QObject::connect(m_readerDelegate, &DecoderDelegate::configureClicked, this,
+                     [this](const QModelIndex& index) { m_readerModel->showSettings(index, this); });
+    QObject::connect(m_decoderList, &QWidget::customContextMenuRequested, this,
+                     [this](const QPoint& pos) { showConfigureMenu(m_decoderList, m_decoderModel, pos); });
+    QObject::connect(m_readerList, &QWidget::customContextMenuRequested, this,
+                     [this](const QPoint& pos) { showConfigureMenu(m_readerList, m_readerModel, pos); });
 }
 
 void DecoderPageWidget::load()
 {
-    m_decoderModel->setup(m_audioLoader->decoders());
-    m_readerModel->setup(m_audioLoader->readers());
-    m_ffmpegAllExts->setChecked(m_settings->fileValue(Settings::Core::Internal::FFmpegAllExtensions).toBool());
+    const auto decoderHandlers = inputSettingsHandlers(*m_pluginManager, *m_pluginSettingsRegistry);
+    const auto decoders        = m_audioLoader->decoders();
+
+    m_decoderModel->setup(decoders, decoderHandlers);
+    m_readerModel->setup(m_audioLoader->readers(), readerSettingsHandlers(decoders, decoderHandlers));
 }
 
 void DecoderPageWidget::apply()
@@ -140,27 +205,42 @@ void DecoderPageWidget::apply()
         [this](const QString& name, int index) { m_audioLoader->changeReaderIndex(name, index); },
         [this](const QString& name, bool enabled) { m_audioLoader->setReaderEnabled(name, enabled); });
 
-    if(m_settings->fileSet(Settings::Core::Internal::FFmpegAllExtensions, m_ffmpegAllExts->isChecked())) {
-        m_audioLoader->reloadDecoderExtensions(u"FFmpeg"_s);
-        m_audioLoader->reloadReaderExtensions(u"FFmpeg"_s);
-    }
-
     load();
 }
 
 void DecoderPageWidget::reset()
 {
     m_audioLoader->reset();
-    m_settings->fileRemove(Settings::Core::Internal::FFmpegAllExtensions);
 }
 
-DecoderPage::DecoderPage(AudioLoader* audioLoader, SettingsManager* settings, QObject* parent)
+void DecoderPageWidget::showConfigureMenu(QListView* view, DecoderModel* model, const QPoint& pos)
+{
+    const QModelIndex index = view->indexAt(pos);
+    if(!index.isValid() || !index.data(DecoderModel::HasSettings).toBool()) {
+        return;
+    }
+
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto* configureAction = new QAction(tr("Configure…"), menu);
+    menu->addAction(configureAction);
+    QObject::connect(configureAction, &QAction::triggered, this,
+                     [this, model, index]() { model->showSettings(index, this); });
+
+    menu->popup(view->viewport()->mapToGlobal(pos));
+}
+
+DecoderPage::DecoderPage(AudioLoader* audioLoader, PluginManager* pluginManager,
+                         PluginSettingsRegistry* pluginSettingsRegistry, SettingsManager* settings, QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::Decoding);
     setName(tr("General"));
     setCategory({tr("Playback"), tr("Decoding")});
-    setWidgetCreator([audioLoader, settings] { return new DecoderPageWidget(audioLoader, settings); });
+    setWidgetCreator([audioLoader, pluginManager, pluginSettingsRegistry, settings] {
+        return new DecoderPageWidget(audioLoader, pluginManager, pluginSettingsRegistry, settings);
+    });
 }
 } // namespace Fooyin
 

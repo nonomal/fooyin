@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@
 #include <QPointer>
 #include <QPushButton>
 
+#include <ranges>
 #include <set>
 
 namespace Fooyin {
@@ -54,7 +55,7 @@ public:
 
     void retrieveWidgets();
     void setupWidgetConnections(const Id& sourceId);
-    void removeWidget(const Id& widgetId);
+    void removeWidget(const Id& widgetId, QObject* object);
 
     void setSearch(const Id& id, const QString& Search);
 
@@ -196,7 +197,7 @@ void SearchControllerPrivate::addOrRemoveConnection(const Id& sourceId, FyWidget
 
     updateAllOverlays();
     updateDialog(sourceId);
-    emit m_self->connectionChanged(sourceId);
+    Q_EMIT m_self->connectionChanged(sourceId);
 }
 
 void SearchControllerPrivate::setupWidgetOverlay(const Id& sourceId, FyWidget* widget)
@@ -277,14 +278,16 @@ void SearchControllerPrivate::retrieveWidgets()
     const auto widgets = m_editableLayout->findWidgetsByFeatures(FyWidget::Search | FyWidget::ExclusiveSearch);
 
     if(widgets.empty()) {
+        m_searchableWidgets.clear();
         return;
     }
 
     for(FyWidget* widget : widgets) {
         const Id widgetId = widget->id();
 
-        if(!m_searchableWidgets.contains(widgetId)) {
-            QObject::connect(widget, &QObject::destroyed, m_self, [this, widgetId]() { removeWidget(widgetId); });
+        if(!m_searchableWidgets.contains(widgetId) || m_searchableWidgets.at(widgetId) != widget) {
+            QObject::connect(widget, &QObject::destroyed, m_self,
+                             [this, widgetId](QObject* object) { removeWidget(widgetId, object); });
             if(widget->hasFeature(FyWidget::ExclusiveSearch)) {
                 QObject::connect(widget, &FyWidget::changeSearch, m_self, [this, widgetId](const QString& search) {
                     const Id sourceId = exclusiveConnection(widgetId);
@@ -294,12 +297,21 @@ void SearchControllerPrivate::retrieveWidgets()
                 });
             }
         }
-        m_searchableWidgets.emplace(widgetId, widget);
+        m_searchableWidgets[widgetId] = widget;
+    }
+
+    std::erase_if(m_searchableWidgets, [&widgets](const auto& entry) {
+        return std::ranges::none_of(widgets, [&entry](const FyWidget* widget) { return widget == entry.second; });
+    });
+
+    for(auto& connections : m_connections | std::views::values) {
+        std::erase_if(connections, [this](const Id& id) { return !m_searchableWidgets.contains(id); });
     }
 }
 
 void SearchControllerPrivate::setupWidgetConnections(const Id& sourceId)
 {
+    retrieveWidgets();
     clearOverlays();
 
     if(m_searchableWidgets.empty()) {
@@ -318,8 +330,12 @@ void SearchControllerPrivate::setupWidgetConnections(const Id& sourceId)
     m_controlDialog->show();
 }
 
-void SearchControllerPrivate::removeWidget(const Id& widgetId)
+void SearchControllerPrivate::removeWidget(const Id& widgetId, QObject* object)
 {
+    if(m_searchableWidgets.contains(widgetId) && m_searchableWidgets.at(widgetId) != object) {
+        return;
+    }
+
     m_searchableWidgets.erase(widgetId);
     m_connections.erase(widgetId);
 }
@@ -390,7 +406,7 @@ void SearchController::removeConnectedWidgets(const Id& id)
     p->m_connections.erase(id);
 }
 
-void SearchController::changeSearch(const Id& id, const QString& search)
+void SearchController::changeSearch(const Id& id, const SearchRequest& request)
 {
     if(!p->m_connections.contains(id)) {
         return;
@@ -400,7 +416,7 @@ void SearchController::changeSearch(const Id& id, const QString& search)
     for(const auto& widgetId : connections) {
         if(p->m_searchableWidgets.contains(widgetId)) {
             auto* widget = p->m_searchableWidgets.at(widgetId);
-            widget->searchEvent(search);
+            widget->searchEvent(request);
         }
     }
 }

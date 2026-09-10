@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,13 @@
 #include <map>
 
 namespace Fooyin::FileOps {
+namespace Settings {
+inline constexpr auto ConfirmDelete               = "FileOps/ConfirmDelete";
+inline constexpr auto ConfirmDeleteSourceArchives = "FileOps/ConfirmDeleteSourceArchives";
+inline constexpr auto ImmediateDelete             = "FileOps/ImmediateDelete";
+inline constexpr auto RemoveEmptyParentFolders    = "FileOps/DeleteEmptyFolders";
+} // namespace Settings
+
 std::vector<FileOpPreset> getPresets();
 std::map<Operation, std::vector<FileOpPreset>> getMappedPresets();
 void savePresets(const std::vector<FileOpPreset>& presets);

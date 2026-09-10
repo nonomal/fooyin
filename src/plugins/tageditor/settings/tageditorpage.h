@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,7 +22,6 @@
 #include <utils/settings/settingspage.h>
 
 namespace Fooyin {
-class ActionManager;
 class SettingsManager;
 
 namespace TagEditor {
@@ -33,8 +32,7 @@ class TagEditorFieldsPage : public SettingsPage
     Q_OBJECT
 
 public:
-    TagEditorFieldsPage(TagEditorFieldRegistry* registry, ActionManager* actionManager, SettingsManager* settings,
-                        QObject* parent = nullptr);
+    TagEditorFieldsPage(TagEditorFieldRegistry* registry, SettingsManager* settings, QObject* parent = nullptr);
 };
 } // namespace TagEditor
 } // namespace Fooyin

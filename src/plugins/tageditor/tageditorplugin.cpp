@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,28 +21,56 @@
 
 #include "settings/tageditorfieldregistry.h"
 #include "settings/tageditorpage.h"
-#include "tageditorwidget.h"
+#include "tageditorpanel.h"
+#include "tageditorpropertiestab.h"
+#include "tageditorsettings.h"
+#include "tagfilldialog.h"
 
 #include <core/engine/audioloader.h>
 #include <core/library/musiclibrary.h>
+#include <gui/guiconstants.h>
 #include <gui/plugins/guiplugincontext.h>
 #include <gui/propertiesdialog.h>
 #include <gui/trackselectioncontroller.h>
 #include <gui/widgetprovider.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
+#include <utils/settings/advancedsettingsregistry.h>
 #include <utils/settings/settingsmanager.h>
+#include <utils/utils.h>
 
+#include <QAction>
+#include <QMainWindow>
 #include <QMenu>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin::TagEditor {
+namespace {
+bool isDbOnlyMetadataTrack(const Track& track)
+{
+    return track.isRemote() && track.isInDatabase();
+}
+
+bool canWriteTracks(const TrackList& tracks, const std::shared_ptr<AudioLoader>& audioLoader)
+{
+    return !tracks.empty() && std::ranges::all_of(tracks, [&audioLoader](const Track& track) {
+        return !track.hasCue() && !track.isInArchive()
+            && (isDbOnlyMetadataTrack(track) || audioLoader->canWriteMetadata(track));
+    });
+}
+} // namespace
+
 void TagEditorPlugin::initialise(const CorePluginContext& context)
 {
     m_settings    = context.settingsManager;
     m_library     = context.library;
     m_audioLoader = context.audioLoader;
+
+    m_settings->createSetting(QString::fromLatin1(SettingsKeys::MultiValueSeparators),
+                              QString::fromLatin1(SettingsKeys::DefaultMultiValueSeparators));
+    m_settings->createSetting(QString::fromLatin1(SettingsKeys::AutoFillMultiValueSeparators),
+                              QString::fromLatin1(SettingsKeys::DefaultMultiValueSeparators));
 
     m_registry = new TagEditorFieldRegistry(m_settings, this);
 }
@@ -54,27 +82,85 @@ void TagEditorPlugin::initialise(const GuiPluginContext& context)
     m_propertiesDialog = context.propertiesDialog;
     m_widgetProvider   = context.widgetProvider;
 
-    m_fieldsPage = new TagEditorFieldsPage(m_registry, m_actionManager, m_settings, this);
+    context.advancedSettingsRegistry->add(
+        {.id           = QString::fromLatin1(SettingsKeys::MultiValueSeparators),
+         .category     = {tr("Tag Editor"), tr("Editing")},
+         .label        = tr("Split manually edited multivalue tags on"),
+         .description  = tr("Whitespace-separated list of separators used when editing multivalue tag fields."),
+         .defaultValue = QString::fromLatin1(SettingsKeys::DefaultMultiValueSeparators),
+         .editor       = AdvancedSettingLineEdit{},
+         .read         = [this] { return m_settings->value(SettingsKeys::MultiValueSeparators); },
+         .write
+         = [this](
+               const QVariant& value) { return m_settings->set(SettingsKeys::MultiValueSeparators, value.toString()); },
+         .normalise = [](const QVariant& value) { return normaliseMultiValueSeparators(value.toString()).join(u' '); },
+         .validate  = {}});
+    context.advancedSettingsRegistry->add(
+        {.id           = QString::fromLatin1(SettingsKeys::AutoFillMultiValueSeparators),
+         .category     = {tr("Tag Editor"), tr("Auto Fill")},
+         .label        = tr("Split auto-filled multivalue tags on"),
+         .description  = tr("Whitespace-separated list of separators used when auto-filling multivalue tag fields."),
+         .defaultValue = QString::fromLatin1(SettingsKeys::DefaultMultiValueSeparators),
+         .editor       = AdvancedSettingLineEdit{},
+         .read         = [this] { return m_settings->value(SettingsKeys::AutoFillMultiValueSeparators); },
+         .write =
+             [this](const QVariant& value) {
+                 return m_settings->set(SettingsKeys::AutoFillMultiValueSeparators, value.toString());
+             },
+         .normalise = [](const QVariant& value) { return normaliseMultiValueSeparators(value.toString()).join(u' '); },
+         .validate  = {}});
 
-    // m_widgetProvider->registerWidget(
-    //     u"TagEditor"_s, [this]() { return createEditor(); }, u"Tag Editor"_s);
+    m_fieldsPage = new TagEditorFieldsPage(m_registry, m_settings, this);
+
+    m_widgetProvider->registerWidget(u"TagEditor"_s, [this]() { return createPanel(); }, tr("Tag Editor"));
 
     m_propertiesDialog->insertTab(0, u"Metadata"_s, [this](const TrackList& tracks) { return createEditor(tracks); });
-}
 
-TagEditorWidget* TagEditorPlugin::createEditor(const TrackList& tracks)
-{
-    const bool canWrite = std::ranges::all_of(tracks, [this](const Track& track) {
-        return !track.hasCue() && !track.isInArchive() && m_audioLoader->canWriteMetadata(track);
+    auto* autoFillValuesAction = new QAction(tr("Automatically fill values…"), this);
+    QObject::connect(autoFillValuesAction, &QAction::triggered, this, [this]() {
+        const auto* selection = m_trackSelection->selectedSelection();
+        if(!selection || !canWriteTracks(selection->tracks, m_audioLoader)) {
+            return;
+        }
+
+        openFillDialog(selection->tracks, m_settings, Utils::getMainWindow(), [this](const FillValuesResult& result) {
+            if(!result.tracks.empty()) {
+                m_library->writeTrackMetadata(result.tracks);
+            }
+        });
     });
 
-    auto* tagEditor = new TagEditorWidget(m_actionManager, m_registry, m_settings);
-    tagEditor->setReadOnly(!canWrite);
+    m_trackSelection->registerTrackContextAction(
+        this, TrackContextMenuArea::Track, Constants::Menus::Context::Tagging, "TagEditor.AutoFillValues",
+        autoFillValuesAction->text(), [this, autoFillValuesAction](QMenu* menu, const TrackSelection& selection) {
+            if(selection.tracks.empty()) {
+                return;
+            }
+
+            autoFillValuesAction->setEnabled(canWriteTracks(selection.tracks, m_audioLoader));
+            menu->addAction(autoFillValuesAction);
+        });
+}
+
+TagEditorPropertiesTab* TagEditorPlugin::createEditor(const TrackList& tracks)
+{
+    auto* tagEditor = new TagEditorPropertiesTab(m_actionManager, m_registry, m_settings);
+    tagEditor->setReadOnly(!canWriteTracks(tracks, m_audioLoader));
     tagEditor->setTracks(tracks);
-    QObject::connect(tagEditor, &TagEditorWidget::trackMetadataChanged, m_library, &MusicLibrary::writeTrackMetadata);
-    QObject::connect(tagEditor, &TagEditorWidget::trackStatsChanged, m_library,
-                     [this](const TrackList& changedTracks) { m_library->updateTrackStats(changedTracks); });
+    QObject::connect(tagEditor, &TagEditorPropertiesTab::trackMetadataChanged, tagEditor,
+                     [this, tagEditor](const TrackList& changedTracks) {
+                         Q_EMIT tagEditor->writeRequestStarted(m_library->writeTrackMetadata(changedTracks));
+                     });
+    QObject::connect(tagEditor, &TagEditorPropertiesTab::trackStatsChanged, m_library,
+                     [this](const TrackList& changedTracks) {
+                         m_library->updateTrackStats(changedTracks, Track::Stat::Rating | Track::Stat::Loved);
+                     });
     return tagEditor;
+}
+
+TagEditorPanel* TagEditorPlugin::createPanel()
+{
+    return new TagEditorPanel(m_actionManager, m_registry, m_library, m_audioLoader, m_trackSelection, m_settings);
 }
 } // namespace Fooyin::TagEditor
 

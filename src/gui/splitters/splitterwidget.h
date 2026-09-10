@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -57,6 +57,10 @@ public:
     void replaceWidget(int index, FyWidget* newWidget) override;
     void moveWidget(int index, int newIndex) override;
 
+    [[nodiscard]] bool isWidgetLocked(int index) const;
+    [[nodiscard]] bool canLockWidget(int index) const;
+    bool setWidgetLocked(int index, bool locked);
+
     [[nodiscard]] QString name() const override;
     [[nodiscard]] QString layoutName() const override;
     void layoutEditingMenu(QMenu* menu) override;
@@ -69,6 +73,7 @@ private:
 
     Splitter* m_splitter;
     WidgetList m_widgets;
+    int m_customSpacing;
 };
 
 class VerticalSplitterWidget : public SplitterWidget

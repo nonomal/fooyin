@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,17 +19,15 @@
 
 #pragma once
 
+#include <core/playlist/playlist.h>
 #include <core/plugins/coreplugin.h>
 #include <core/plugins/plugin.h>
-#include <core/track.h>
 #include <gui/coverprovider.h>
 #include <gui/plugins/guiplugin.h>
 
 class QDBusObjectPath;
 
 namespace Fooyin {
-struct PlaylistTrack;
-
 namespace Mpris {
 class MprisPlugin : public QObject,
                     public Plugin,
@@ -118,7 +116,7 @@ public:
     void Seek(int64_t offset);
     void SetPosition(const QDBusObjectPath& path, int64_t position);
 
-signals:
+Q_SIGNALS:
     void Seeked(qlonglong position);
     void fullscreenChanged(bool fullscreen);
     void volumeChanged(double volume);
@@ -130,17 +128,20 @@ signals:
 private:
     QString currentCoverPath() const;
     void notify(const QString& name, const QVariant& value);
+    void notify(const QVariantMap& properties);
     void trackChanged(const PlaylistTrack& playlistTrack);
     void loadMetaData(const PlaylistTrack& playlistTrack);
 
     PlayerController* m_playerController;
-    PlaylistHandler* m_playlistHandler;
     std::shared_ptr<AudioLoader> m_audioLoader;
     WindowController* m_windowController;
     SettingsManager* m_settings;
 
     bool m_registered;
+    bool m_mprisPausePending;
     QString m_currCoverKey;
+    uint64_t m_coverLoadGeneration;
+    PlaylistTrack m_currentPlaylistTrack;
     QVariantMap m_currentMetaData;
     CoverProvider* m_coverProvider;
 };

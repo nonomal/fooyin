@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,10 @@
 
 #include <gui/propertiesdialog.h>
 
+#include <QByteArray>
+
+class QContextMenuEvent;
+
 namespace Fooyin {
 class MusicLibrary;
 class ReplayGainModel;
@@ -31,16 +35,34 @@ class ReplayGainWidget : public PropertiesTabWidget
     Q_OBJECT
 
 public:
-    ReplayGainWidget(MusicLibrary* library, const TrackList& tracks, bool readOnly, QWidget* parent = nullptr);
-
-    [[nodiscard]] QString name() const override;
-    [[nodiscard]] QString layoutName() const override;
+    ReplayGainWidget(MusicLibrary* library, const TrackList& tracks, bool readOnly, SettingsManager* settings,
+                     QWidget* parent = nullptr);
+    ~ReplayGainWidget() override;
 
     void apply() override;
+    void updateTracks(const TrackList& tracks) override;
+    void setTrackScope(const TrackList& tracks) override;
+    [[nodiscard]] bool hasPendingScopeChanges() const override;
+    bool commitPendingChanges() override;
+
+protected:
+    void contextMenuEvent(QContextMenuEvent* event) override;
 
 private:
+    void finalise();
+    void saveLayoutData() const;
+    void loadLayoutData();
+    void updateHeaderModes() const;
+
     MusicLibrary* m_library;
+    SettingsManager* m_settings;
+
     ReplayGainView* m_view;
     ReplayGainModel* m_model;
+    OpusRGWriteMode m_opusWriteMode;
+
+    TrackList m_pendingTracks;
+    bool m_showHeader;
+    bool m_alternatingColours;
 };
 } // namespace Fooyin

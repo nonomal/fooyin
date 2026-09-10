@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,18 +19,27 @@
 
 #include "statuswidget.h"
 
+#include "scripting/scriptvariableproviders.h"
+
 #include "internalguisettings.h"
 
+#include <core/engine/enginecontroller.h>
 #include <core/player/playercontroller.h>
 #include <core/playlist/playlisthandler.h>
+#include <core/scripting/scriptenvironmenthelpers.h>
 #include <core/scripting/scriptparser.h>
-#include <core/scripting/scriptregistry.h>
 #include <core/track.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/guiutils.h>
+#include <gui/iconloader.h>
+#include <gui/playlist/playlistcontroller.h>
+#include <gui/playlist/playlistuicontroller.h>
+#include <gui/scripting/scriptformatter.h>
 #include <gui/trackselectioncontroller.h>
 #include <gui/widgets/clickablelabel.h>
 #include <gui/widgets/elidedlabel.h>
+#include <utils/settings/settingsdialogcontroller.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/utils.h>
 
@@ -38,10 +47,12 @@
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
 #include <QMenu>
+#include <QSize>
+#include <QToolButton>
 
 using namespace Qt::StringLiterals;
 
-constexpr int IconSize = 50;
+constexpr QSize IconSize{22, 22};
 
 namespace Fooyin {
 class StatusLabel : public ElidedLabel
@@ -57,35 +68,48 @@ class StatusWidgetPrivate : public QObject
     Q_OBJECT
 
 public:
-    StatusWidgetPrivate(StatusWidget* self, PlayerController* playerController, PlaylistHandler* playlistHandler,
+    StatusWidgetPrivate(StatusWidget* self, EngineController* engine, PlayerController* playerController,
+                        PlaylistHandler* playlistHandler, PlaylistController* playlistController,
                         TrackSelectionController* selectionController, SettingsManager* settings);
 
     void setupConnections();
+    [[nodiscard]] RatingStarSymbols ratingSymbols() const;
+    [[nodiscard]] PlaybackScriptContext makeSelectionContext(const TrackSelection* selection) const;
+    void updateSelectionVisibility() const;
 
     void clearMessage();
+    void updateActionVisibility() const;
     void updateMessageVisibility() const;
 
     void showMessage(const QString& message, int timeout = 0);
     void showStatusMessage(const QString& message) const;
-    void showPlayingMessage(const QString& message) const;
+    void showScanMessage(const QString& message, std::function<void()> cancel);
     void showLayoutEditing() const;
 
     void updateScripts();
     void updatePlayingText();
     void updateSelectionText();
+    void updateRemoteStreamStatus(const Engine::TrackStatusContext& context);
+    static void setRichLabelText(StatusLabel* label, const QString& text, ScriptFormatter& formatter);
 
     void stateChanged(Player::PlayState state);
 
     StatusWidget* m_self;
+    EngineController* m_engine;
     PlayerController* m_playerController;
     PlaylistHandler* m_playlistHandler;
+    PlaylistController* m_playlistController;
     TrackSelectionController* m_selectionController;
 
     SettingsManager* m_settings;
 
     ScriptParser m_scriptParser;
+    ScriptFormatter m_playingFormatter;
+    ScriptFormatter m_selectionFormatter;
 
     ClickableLabel* m_iconLabel;
+    QToolButton* m_scanCancelButton;
+    StatusLabel* m_scanText;
     StatusLabel* m_playingText;
     StatusLabel* m_statusText;
     StatusLabel* m_messageText;
@@ -93,65 +117,116 @@ public:
 
     QString m_playingScript;
     QString m_selectionScript;
+    QString m_playlistScript;
+    std::function<void()> m_cancelScan;
+    uint64_t m_streamStatusGeneration{0};
+    bool m_scanActive{false};
+    bool m_remoteStreamBuffering{false};
 
     QBasicTimer m_clearTimer;
 };
 
-StatusWidgetPrivate::StatusWidgetPrivate(StatusWidget* self, PlayerController* playerController,
-                                         PlaylistHandler* playlistHandler,
+StatusWidgetPrivate::StatusWidgetPrivate(StatusWidget* self, EngineController* engine,
+                                         PlayerController* playerController, PlaylistHandler* playlistHandler,
+                                         PlaylistController* playlistController,
                                          TrackSelectionController* selectionController, SettingsManager* settings)
     : QObject{self}
     , m_self{self}
+    , m_engine{engine}
     , m_playerController{playerController}
     , m_playlistHandler{playlistHandler}
+    , m_playlistController{playlistController}
     , m_selectionController{selectionController}
     , m_settings{settings}
-    , m_scriptParser{new ScriptRegistry(m_playerController)}
     , m_iconLabel{new ClickableLabel(m_self)}
+    , m_scanCancelButton{new QToolButton(m_self)}
+    , m_scanText{new StatusLabel(m_self)}
     , m_playingText{new StatusLabel(m_self)}
     , m_statusText{new StatusLabel(m_self)}
     , m_messageText{new StatusLabel(m_self)}
     , m_selectionText{new StatusLabel(m_self)}
 {
+    m_scriptParser.addProvider(playlistVariableProvider());
+
     auto* layout = new QHBoxLayout(m_self);
     layout->setContentsMargins(5, 0, 5, 0);
 
-    m_iconLabel->setPixmap(Utils::iconFromTheme(Constants::Icons::Fooyin).pixmap(IconSize));
-    m_iconLabel->setScaledContents(true);
-    m_iconLabel->setMaximumSize(22, 22);
+    m_iconLabel->setPixmap(Gui::applicationIcon().pixmap(IconSize, m_iconLabel->devicePixelRatioF()));
+    m_iconLabel->setMaximumSize(IconSize);
+    m_scanCancelButton->setAutoRaise(true);
+    m_scanCancelButton->setIcon(Gui::iconFromTheme(Constants::Icons::Close));
+    m_scanCancelButton->setToolTip(tr("Cancel scan"));
 
     layout->addWidget(m_iconLabel, 0, Qt::AlignLeft);
+    layout->addWidget(m_scanCancelButton, 0, Qt::AlignLeft);
+    layout->addWidget(m_scanText, 1);
     layout->addWidget(m_messageText, 1);
     layout->addWidget(m_statusText, 1);
     layout->addWidget(m_playingText, 1);
     layout->addWidget(m_selectionText, 0, Qt::AlignRight);
 
+    m_scanText->hide();
     m_statusText->hide();
     m_playingText->hide();
     m_messageText->hide();
+    updateSelectionVisibility();
 
-    m_iconLabel->setHidden(!m_settings->value<Settings::Gui::Internal::StatusShowIcon>());
-    m_selectionText->setHidden(!m_settings->value<Settings::Gui::Internal::StatusShowSelection>());
+    m_selectionText->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_selectionText->setElideMode(Qt::ElideNone);
+
+    updateActionVisibility();
 
     setupConnections();
     updateScripts();
     updatePlayingText();
+    updateSelectionText();
 }
 
 void StatusWidgetPrivate::setupConnections()
 {
+    QObject::connect(m_engine, &EngineController::trackStatusContextChanged, this,
+                     &StatusWidgetPrivate::updateRemoteStreamStatus);
     QObject::connect(m_playerController, &PlayerController::playStateChanged, this, &StatusWidgetPrivate::stateChanged);
-    QObject::connect(m_playerController, &PlayerController::positionChanged, this,
+    QObject::connect(m_playerController, &PlayerController::positionChangedSeconds, this,
                      &StatusWidgetPrivate::updatePlayingText);
-    QObject::connect(m_selectionController, &TrackSelectionController::selectionChanged, this,
+    QObject::connect(m_playerController, &PlayerController::bitrateChanged, this, [this](int) { updatePlayingText(); });
+    QObject::connect(m_selectionController, &TrackSelectionController::displaySelectionChanged, this,
                      &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistChanged, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistUpdated, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistTracksPatched, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistTracksChanged, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistTracksUpdated, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistTracksRemoved, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playlistController, &PlaylistController::currentPlaylistQueueChanged, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_scanCancelButton, &QToolButton::clicked, this, [this]() {
+        if(m_cancelScan) {
+            m_cancelScan();
+        }
+    });
 
     m_settings->subscribe<Settings::Gui::IconTheme>(
-        this, [this]() { m_iconLabel->setPixmap(Utils::iconFromTheme(Constants::Icons::Fooyin).pixmap(IconSize)); });
-    m_settings->subscribe<Settings::Gui::Internal::StatusShowIcon>(
-        this, [this](bool show) { m_iconLabel->setHidden(!show); });
-    m_settings->subscribe<Settings::Gui::Internal::StatusShowSelection>(
-        this, [this](bool show) { m_selectionText->setHidden(!show); });
+        this, [this]() { m_scanCancelButton->setIcon(Gui::iconFromTheme(Constants::Icons::Close)); });
+    m_settings->subscribe<Settings::Gui::ResolvedAppStyle>(this, [this]() {
+        updatePlayingText();
+        updateSelectionText();
+    });
+    m_settings->subscribe<Settings::Gui::Internal::StatusShowIcon>(this, [this](bool) { updateActionVisibility(); });
+    m_settings->subscribe<Settings::Gui::Internal::StatusShowSelection>(this, [this]() {
+        updateSelectionVisibility();
+        updateSelectionText();
+    });
+    m_settings->subscribe<Settings::Gui::Internal::StatusShowPlaylist>(this, [this]() {
+        updateSelectionVisibility();
+        updateSelectionText();
+    });
     m_settings->subscribe<Settings::Gui::Internal::StatusPlayingScript>(this, [this](const QString& script) {
         m_playingScript = script;
         updatePlayingText();
@@ -160,7 +235,36 @@ void StatusWidgetPrivate::setupConnections()
         m_selectionScript = script;
         updateSelectionText();
     });
+    m_settings->subscribe<Settings::Gui::Internal::StatusPlaylistScript>(this, [this](const QString& script) {
+        m_playlistScript = script;
+        updateSelectionText();
+    });
+    m_settings->subscribe<Settings::Gui::RatingFullStarSymbol>(this, [this](const QString&) {
+        updatePlayingText();
+        updateSelectionText();
+    });
+    m_settings->subscribe<Settings::Gui::RatingHalfStarSymbol>(this, [this](const QString&) {
+        updatePlayingText();
+        updateSelectionText();
+    });
+    m_settings->subscribe<Settings::Gui::RatingEmptyStarSymbol>(this, [this](const QString&) {
+        updatePlayingText();
+        updateSelectionText();
+    });
     m_settings->subscribe<Settings::Gui::LayoutEditing>(this, [this]() { showLayoutEditing(); });
+
+    QObject::connect(m_playerController, &PlayerController::currentTrackChanged, this,
+                     &StatusWidgetPrivate::updatePlayingText);
+    QObject::connect(m_playerController, &PlayerController::currentTrackUpdated, this,
+                     &StatusWidgetPrivate::updatePlayingText);
+    QObject::connect(m_playerController, &PlayerController::playlistTrackUpdated, this,
+                     &StatusWidgetPrivate::updatePlayingText);
+    QObject::connect(m_playerController, &PlayerController::playlistTrackChanged, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playerController, &PlayerController::playlistTrackUpdated, this,
+                     &StatusWidgetPrivate::updateSelectionText);
+    QObject::connect(m_playerController, &PlayerController::trackQueueChanged, this,
+                     &StatusWidgetPrivate::updateSelectionText);
 }
 
 void StatusWidgetPrivate::clearMessage()
@@ -170,33 +274,55 @@ void StatusWidgetPrivate::clearMessage()
     updateMessageVisibility();
 }
 
+void StatusWidgetPrivate::updateActionVisibility() const
+{
+    const bool showCancel = m_scanActive && m_cancelScan;
+    const bool showIcon   = !showCancel && m_settings->value<Settings::Gui::Internal::StatusShowIcon>();
+
+    m_scanCancelButton->setVisible(showCancel);
+    m_iconLabel->setVisible(showIcon);
+}
+
 void StatusWidgetPrivate::updateMessageVisibility() const
 {
     // Show first non-empty message with the highest priority
 
     // Status tip
     if(!m_statusText->text().isEmpty()) {
+        m_scanText->hide();
         m_statusText->show();
+        m_messageText->hide();
+        m_playingText->hide();
+    }
+    // Scan progress
+    else if(m_scanActive && !m_scanText->text().isEmpty()) {
+        m_scanText->show();
+        m_statusText->hide();
         m_messageText->hide();
         m_playingText->hide();
     }
     // Message (temp or perm)
     else if(!m_messageText->text().isEmpty()) {
+        m_scanText->hide();
         m_messageText->show();
         m_statusText->hide();
         m_playingText->hide();
     }
     // Playing text
     else if(!m_playingText->text().isEmpty()) {
+        m_scanText->hide();
         m_playingText->show();
         m_messageText->hide();
         m_statusText->hide();
     }
     else {
+        m_scanText->hide();
         m_playingText->hide();
         m_messageText->hide();
         m_statusText->hide();
     }
+
+    updateActionVisibility();
 }
 
 void StatusWidgetPrivate::showMessage(const QString& message, int timeout)
@@ -222,9 +348,11 @@ void StatusWidgetPrivate::showStatusMessage(const QString& message) const
     updateMessageVisibility();
 }
 
-void StatusWidgetPrivate::showPlayingMessage(const QString& message) const
+void StatusWidgetPrivate::showScanMessage(const QString& message, std::function<void()> cancel)
 {
-    m_playingText->setText(message);
+    m_scanActive = !message.isEmpty();
+    m_scanText->setText(message);
+    m_cancelScan = std::move(cancel);
     updateMessageVisibility();
 }
 
@@ -237,50 +365,161 @@ void StatusWidgetPrivate::updateScripts()
 {
     m_playingScript   = m_settings->value<Settings::Gui::Internal::StatusPlayingScript>();
     m_selectionScript = m_settings->value<Settings::Gui::Internal::StatusSelectionScript>();
+    m_playlistScript  = m_settings->value<Settings::Gui::Internal::StatusPlaylistScript>();
+}
+
+RatingStarSymbols StatusWidgetPrivate::ratingSymbols() const
+{
+    return Gui::ratingStarSymbols(*m_settings);
+}
+
+PlaybackScriptContext StatusWidgetPrivate::makeSelectionContext(const TrackSelection* selection) const
+{
+    PlaybackScriptContext contextData;
+
+    auto* currentPlaylist = m_playlistController->currentPlaylist();
+    auto* trackList       = selection && !selection->tracks.empty() ? &selection->tracks
+                          : currentPlaylist                         ? &currentPlaylist->tracks()
+                                                                    : nullptr;
+
+    contextData.context.playlist = currentPlaylist;
+
+    int playlistTrackIndex{-1};
+    int currentPlayingTrackIndex{-1};
+    int currentPlayingTrackId{-1};
+
+    if(currentPlaylist) {
+        const auto playingTrack = m_playerController->currentPlaylistTrack();
+        if(playingTrack.playlistId == currentPlaylist->id()) {
+            currentPlayingTrackIndex = playingTrack.indexInPlaylist;
+            currentPlayingTrackId    = playingTrack.track.id();
+        }
+    }
+
+    if(selection && selection->primaryPlaylistIndex && currentPlaylist
+       && selection->playlistId == currentPlaylist->id()) {
+        playlistTrackIndex = *selection->primaryPlaylistIndex;
+    }
+    else if(currentPlaylist) {
+        playlistTrackIndex = currentPlaylist->currentTrackIndex();
+    }
+
+    contextData.environment.setPlaylistData(currentPlaylist, &m_playerController->playbackQueue(), trackList,
+                                            m_playerController->queuedTracksCount());
+    contextData.environment.setTrackState(playlistTrackIndex, currentPlayingTrackIndex, currentPlayingTrackId, 0);
+    contextData.environment.setPlaybackState(m_playerController->currentPosition(),
+                                             m_playerController->currentTrack().duration(),
+                                             m_playerController->bitrate(), m_playerController->playState());
+    contextData.environment.setRatingStarSymbols(ratingSymbols());
+    contextData.environment.setEvaluationPolicy(TrackListContextPolicy::Fallback, {}, true);
+
+    return contextData;
+}
+
+void StatusWidgetPrivate::updateSelectionVisibility() const
+{
+    const bool showSelection = m_settings->value<Settings::Gui::Internal::StatusShowSelection>();
+    const bool showPlaylist  = m_settings->value<Settings::Gui::Internal::StatusShowPlaylist>();
+    m_selectionText->setHidden(!showSelection && !showPlaylist);
+}
+
+void StatusWidgetPrivate::setRichLabelText(StatusLabel* label, const QString& text, ScriptFormatter& formatter)
+{
+    formatter.setBaseFont(label->font());
+    label->setRichText(formatter.evaluate(text));
 }
 
 void StatusWidgetPrivate::updatePlayingText()
 {
+    if(m_remoteStreamBuffering) {
+        m_playingText->setText(tr("Buffering stream…"));
+        updateMessageVisibility();
+        return;
+    }
+
     const auto ps = m_playerController->playState();
     if(ps == Player::PlayState::Playing || ps == Player::PlayState::Paused) {
         QString playingText;
-        if(auto* playlist = m_playlistHandler->activePlaylist(); playlist && playlist->currentTrack().isValid()) {
-            playingText = m_scriptParser.evaluate(m_playingScript, *playlist);
+
+        if(const Track currentTrack = m_playerController->currentTrack(); currentTrack.isValid()) {
+            auto contextData
+                = makePlaybackScriptContext(m_playerController, m_playlistHandler->activePlaylist(),
+                                            TrackListContextPolicy::Fallback, {}, true, false, ratingSymbols());
+            playingText = m_scriptParser.evaluate(m_playingScript, currentTrack, contextData.context);
         }
-        else {
-            playingText = m_scriptParser.evaluate(m_playingScript, m_playerController->currentTrack());
-        }
-        showPlayingMessage(playingText);
+
+        setRichLabelText(m_playingText, playingText, m_playingFormatter);
+        updateMessageVisibility();
     }
     else {
         m_playingText->clear();
     }
 }
 
+void StatusWidgetPrivate::updateRemoteStreamStatus(const Engine::TrackStatusContext& context)
+{
+    if(context.generation < m_streamStatusGeneration) {
+        return;
+    }
+
+    m_streamStatusGeneration = context.generation;
+
+    const bool bufferingRemoteStream
+        = context.track.isRemote()
+       && (context.status == Engine::TrackStatus::Loading || context.status == Engine::TrackStatus::Buffering);
+
+    if(std::exchange(m_remoteStreamBuffering, bufferingRemoteStream) != bufferingRemoteStream) {
+        updatePlayingText();
+    }
+}
+
 void StatusWidgetPrivate::updateSelectionText()
 {
-    m_selectionText->setText(m_scriptParser.evaluate(m_selectionScript, m_selectionController->selectedTracks()));
+    const bool showSelection = m_settings->value<Settings::Gui::Internal::StatusShowSelection>();
+    const bool showPlaylist  = m_settings->value<Settings::Gui::Internal::StatusShowPlaylist>();
+    if(!showSelection && !showPlaylist) {
+        return;
+    }
+
+    QString selectionText;
+
+    const auto* selection  = m_selectionController->displaySelection();
+    const auto contextData = makeSelectionContext(selection);
+
+    if(showSelection && selection && !selection->tracks.empty()) {
+        selectionText = m_scriptParser.evaluate(m_selectionScript, selection->tracks, contextData.context);
+    }
+    else if(showPlaylist && !m_playlistScript.isEmpty()) {
+        if(auto* currentPlaylist = m_playlistController->currentPlaylist()) {
+            selectionText = m_scriptParser.evaluate(m_playlistScript, *currentPlaylist, contextData.context);
+        }
+    }
+
+    setRichLabelText(m_selectionText, selectionText, m_selectionFormatter);
 }
 
 void StatusWidgetPrivate::stateChanged(const Player::PlayState state)
 {
     switch(state) {
         case(Player::PlayState::Stopped):
+            m_streamStatusGeneration = 0;
+            m_remoteStreamBuffering  = false;
             updatePlayingText();
             clearMessage();
             break;
         case(Player::PlayState::Playing):
-            updatePlayingText();
-            break;
         case(Player::PlayState::Paused):
+            updatePlayingText();
             break;
     }
 }
 
-StatusWidget::StatusWidget(PlayerController* playerController, PlaylistHandler* playlistHandler,
+StatusWidget::StatusWidget(EngineController* engine, PlayerController* playerController,
+                           PlaylistHandler* playlistHandler, PlaylistController* playlistController,
                            TrackSelectionController* selectionController, SettingsManager* settings, QWidget* parent)
     : FyWidget{parent}
-    , p{std::make_unique<StatusWidgetPrivate>(this, playerController, playlistHandler, selectionController, settings)}
+    , p{std::make_unique<StatusWidgetPrivate>(this, engine, playerController, playlistHandler, playlistController,
+                                              selectionController, settings)}
 {
     setObjectName(StatusWidget::name());
 }
@@ -307,6 +546,11 @@ QString StatusWidget::defaultSelectionScript()
     return u"[%trackcount% $ifequal(%trackcount%,1,Track,Tracks) | %playtime%]"_s;
 }
 
+QString StatusWidget::defaultPlaylistScript()
+{
+    return defaultSelectionScript();
+}
+
 void StatusWidget::showMessage(const QString& message)
 {
     p->showMessage(message, 0);
@@ -327,10 +571,16 @@ void StatusWidget::showStatusTip(const QString& message)
     p->showStatusMessage(message);
 }
 
+void StatusWidget::setScanProgress(const QString& message, std::function<void()> cancel)
+{
+    p->showScanMessage(message, std::move(cancel));
+}
+
 QSize StatusWidget::sizeHint() const
 {
     QSize hint;
 
+    hint = hint.expandedTo(p->m_scanText->sizeHint());
     hint = hint.expandedTo(p->m_playingText->sizeHint());
     hint = hint.expandedTo(p->m_statusText->sizeHint());
     hint = hint.expandedTo(p->m_messageText->sizeHint());
@@ -343,6 +593,7 @@ QSize StatusWidget::minimumSizeHint() const
 {
     QSize hint{0, 22};
 
+    hint = hint.expandedTo(p->m_scanText->minimumSizeHint());
     hint = hint.expandedTo(p->m_playingText->minimumSizeHint());
     hint = hint.expandedTo(p->m_statusText->minimumSizeHint());
     hint = hint.expandedTo(p->m_messageText->minimumSizeHint());
@@ -362,11 +613,18 @@ void StatusWidget::contextMenuEvent(QContextMenuEvent* event)
     QObject::connect(showIcon, &QAction::triggered, this,
                      [this](bool checked) { p->m_settings->set<Settings::Gui::Internal::StatusShowIcon>(checked); });
 
-    auto* showSelection = new QAction(tr("Show track selection"), menu);
+    auto* showSelection = new QAction(tr("Show selection info"), menu);
     showSelection->setCheckable(true);
     showSelection->setChecked(p->m_settings->value<Settings::Gui::Internal::StatusShowSelection>());
     QObject::connect(showSelection, &QAction::triggered, this, [this](bool checked) {
         p->m_settings->set<Settings::Gui::Internal::StatusShowSelection>(checked);
+    });
+
+    auto* showPlaylist = new QAction(tr("Show current playlist info"), menu);
+    showPlaylist->setCheckable(true);
+    showPlaylist->setChecked(p->m_settings->value<Settings::Gui::Internal::StatusShowPlaylist>());
+    QObject::connect(showPlaylist, &QAction::triggered, this, [this](bool checked) {
+        p->m_settings->set<Settings::Gui::Internal::StatusShowPlaylist>(checked);
     });
 
     auto* showTips = new QAction(tr("Show action tips"), menu);
@@ -377,9 +635,54 @@ void StatusWidget::contextMenuEvent(QContextMenuEvent* event)
 
     menu->addAction(showIcon);
     menu->addAction(showSelection);
+    menu->addAction(showPlaylist);
     menu->addAction(showTips);
+    menu->addSeparator();
+
+    auto* statusSettings = new QAction(tr("Status bar settings…"), menu);
+    QObject::connect(statusSettings, &QAction::triggered, this, [this]() {
+        if(p->m_settings && p->m_settings->settingsDialog()) {
+            p->m_settings->settingsDialog()->openAtPage(Constants::Page::StatusWidget);
+        }
+    });
+    menu->addAction(statusSettings);
+
+    const QPoint playingPoint = p->m_playingText->mapFrom(this, event->pos());
+    const bool clickedPlaying = p->m_playingText->isVisible() && p->m_playingText->rect().contains(playingPoint);
+
+    TrackSelection playingSelection;
+
+    if(clickedPlaying) {
+        if(const auto playlistTrack = p->m_playerController->currentPlaylistTrack(); playlistTrack.isValid()) {
+            playingSelection.tracks.push_back(playlistTrack.track);
+            playingSelection.playlistId           = playlistTrack.playlistId;
+            playingSelection.primaryPlaylistIndex = playlistTrack.indexInPlaylist;
+            playingSelection.playlistIndexes.push_back(playlistTrack.indexInPlaylist);
+            playingSelection.playlistEntryIds.push_back(playlistTrack.entryId);
+            playingSelection.playlistBacked = true;
+        }
+        else if(const Track currentTrack = p->m_playerController->currentTrack(); currentTrack.isValid()) {
+            playingSelection.tracks.push_back(currentTrack);
+        }
+    }
+
+    if(!playingSelection.tracks.empty()) {
+        menu->addSeparator();
+        p->m_selectionController->addTrackContextMenu(menu, playingSelection);
+    }
 
     menu->popup(event->globalPos());
+}
+
+void StatusWidget::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    if(event->button() == Qt::LeftButton) {
+        if(auto* activePlaylist = p->m_playlistController->playlistHandler()->activePlaylist()) {
+            p->m_playlistController->uiController()->showNowPlaying();
+            p->m_playlistController->changeCurrentPlaylist(activePlaylist);
+        }
+    }
+    FyWidget::mouseDoubleClickEvent(event);
 }
 
 void StatusWidget::timerEvent(QTimerEvent* event)

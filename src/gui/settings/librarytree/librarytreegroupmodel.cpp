@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,7 +23,9 @@
 
 #include <utils/treestatusitem.h>
 
+#include <QApplication>
 #include <QLoggingCategory>
+#include <QPalette>
 
 Q_LOGGING_CATEGORY(LIBTREE_MOD, "fy.libtreegroupmodel")
 
@@ -82,7 +84,7 @@ void LibraryTreeGroupModel::processQueue()
         const LibraryTreeGrouping group               = node.group();
 
         switch(status) {
-            case(LibraryTreeGroupItem::Added): {
+            case LibraryTreeGroupItem::Added: {
                 if(group.script.isEmpty()) {
                     break;
                 }
@@ -97,7 +99,7 @@ void LibraryTreeGroupModel::processQueue()
                 }
                 break;
             }
-            case(LibraryTreeGroupItem::Removed): {
+            case LibraryTreeGroupItem::Removed: {
                 if(m_groupsRegistry->removeById(group.id)) {
                     beginRemoveRows({}, node.row(), node.row());
                     m_root.removeChild(node.row());
@@ -109,7 +111,7 @@ void LibraryTreeGroupModel::processQueue()
                 }
                 break;
             }
-            case(LibraryTreeGroupItem::Changed): {
+            case LibraryTreeGroupItem::Changed: {
                 if(m_groupsRegistry->changeItem(group)) {
                     if(const auto updatedGroup = m_groupsRegistry->itemById(group.id)) {
                         node.changeGroup(updatedGroup.value());
@@ -121,7 +123,7 @@ void LibraryTreeGroupModel::processQueue()
                 }
                 break;
             }
-            case(LibraryTreeGroupItem::None):
+            case LibraryTreeGroupItem::None:
                 break;
         }
     }
@@ -139,20 +141,13 @@ Qt::ItemFlags LibraryTreeGroupModel::flags(const QModelIndex& index) const
         return Qt::NoItemFlags;
     }
 
-    auto flags = ExtendableTableModel::flags(index);
-
-    auto* item = static_cast<LibraryTreeGroupItem*>(index.internalPointer());
-    if(item && !item->group().isDefault) {
-        flags |= Qt::ItemIsEditable;
-    }
-
-    return flags;
+    return ExtendableTableModel::flags(index) | Qt::ItemIsEditable;
 }
 
 QVariant LibraryTreeGroupModel::headerData(int section, Qt::Orientation orientation, int role) const
 {
     if(role == Qt::TextAlignmentRole) {
-        return (Qt::AlignHCenter);
+        return Qt::AlignCenter;
     }
 
     if(role != Qt::DisplayRole || orientation == Qt::Orientation::Vertical) {
@@ -160,12 +155,14 @@ QVariant LibraryTreeGroupModel::headerData(int section, Qt::Orientation orientat
     }
 
     switch(section) {
-        case(0):
+        case 0:
             return tr("Index");
-        case(1):
+        case 1:
             return tr("Name");
-        case(2):
-            return tr("Grouping");
+        case 2:
+            return tr("Display Grouping");
+        case 3:
+            return tr("Sort Grouping");
         default:
             break;
     }
@@ -189,17 +186,42 @@ QVariant LibraryTreeGroupModel::data(const QModelIndex& index, int role) const
         return QVariant::fromValue(item->group());
     }
 
-    if(role == Qt::DisplayRole || role == Qt::EditRole) {
+    const LibraryTreeGrouping& group = item->group();
+
+    if(role == Qt::ForegroundRole && index.column() == 3 && group.sortScript.isEmpty()) {
+        return QApplication::palette().color(QPalette::PlaceholderText);
+    }
+
+    if(role == Qt::EditRole) {
         switch(index.column()) {
-            case(0):
-                return item->group().index;
-            case(1): {
-                const QString& name = item->group().name;
+            case 0:
+                return group.index;
+            case 1:
+                return group.name;
+            case 2:
+                return group.script;
+            case 3:
+                return group.sortScript;
+            default:
+                break;
+        }
+    }
+
+    if(role == Qt::DisplayRole) {
+        switch(index.column()) {
+            case 0:
+                return group.index;
+            case 1: {
+                const QString& name = group.name;
                 return !name.isEmpty() ? name : u"<enter name here>"_s;
             }
-            case(2): {
-                const QString& field = item->group().script;
+            case 2: {
+                const QString& field = group.script;
                 return !field.isEmpty() ? field : u"<enter grouping here>"_s;
+            }
+            case 3: {
+                const QString& field = group.sortScript;
+                return !field.isEmpty() ? field : tr("Use display grouping");
             }
             default:
                 break;
@@ -219,21 +241,29 @@ bool LibraryTreeGroupModel::setData(const QModelIndex& index, const QVariant& va
     auto group = item->group();
 
     switch(index.column()) {
-        case(1): {
+        case 1: {
             if(value.toString() == u"<enter name here>"_s || group.name == value.toString()) {
                 if(item->status() == LibraryTreeGroupItem::Added) {
-                    emit pendingRowCancelled();
+                    Q_EMIT pendingRowCancelled();
                 }
                 return false;
             }
             group.name = value.toString();
             break;
         }
-        case(2): {
+        case 2: {
             if(group.script == value.toString()) {
                 return false;
             }
             group.script = value.toString();
+            break;
+        }
+        case 3: {
+            const QString sortScript = value.toString();
+            if(group.sortScript == sortScript) {
+                return false;
+            }
+            group.sortScript = sortScript;
             break;
         }
         default:
@@ -245,7 +275,7 @@ bool LibraryTreeGroupModel::setData(const QModelIndex& index, const QVariant& va
     }
 
     item->changeGroup(group);
-    emit dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::FontRole, Qt::DisplayRole});
+    Q_EMIT dataChanged(index, index.siblingAtColumn(columnCount({}) - 1), {Qt::FontRole, Qt::DisplayRole});
 
     return true;
 }
@@ -268,7 +298,7 @@ int LibraryTreeGroupModel::rowCount(const QModelIndex& /*parent*/) const
 
 int LibraryTreeGroupModel::columnCount(const QModelIndex& /*parent*/) const
 {
-    return 3;
+    return 4;
 }
 
 bool LibraryTreeGroupModel::removeRows(int row, int count, const QModelIndex& /*parent*/)

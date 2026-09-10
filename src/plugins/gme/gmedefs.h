@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,10 +20,12 @@
 #pragma once
 
 namespace Fooyin::Gme {
-constexpr auto DefaultMaxLength  = 3.0;
-constexpr auto MaxLength         = "Gme/MaxLength";
-constexpr auto DefaultLoopCount  = 2;
-constexpr auto LoopCount         = "Gme/LoopCount";
-constexpr auto DefaultFadeLength = 4000;
-constexpr auto FadeLength        = "Gme/FadeLength";
+constexpr auto DefaultLengthMinutes        = 3.0;
+constexpr auto DefaultLength               = "Gme/MaxLength";
+constexpr auto DefaultLoopCount            = 2;
+constexpr auto LoopCount                   = "Gme/LoopCount";
+constexpr auto DefaultFadeLength           = 4000;
+constexpr auto FadeLength                  = "Gme/FadeLength";
+constexpr auto DefaultFadeNonLoopingTracks = false;
+constexpr auto FadeNonLoopingTracks        = "Gme/FadeNonLoopingTracks";
 } // namespace Fooyin::Gme

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,5 +35,10 @@ DiscordSettings::DiscordSettings(SettingsManager* settingsManager)
     m_settings->createSetting<TitleField>(u"%title%"_s, u"Discord/TitleField"_s);
     m_settings->createSetting<ShowStateIcon>(true, u"Discord/ShowPlayStateIcon"_s);
     m_settings->createSetting<DiscordEnabled>(false, u"Discord/Enable"_s);
+    m_settings->createSetting<ClearOnPause>(false, u"Discord/ClearOnPause"_s);
+    m_settings->createSetting<ArtworkEnabled>(false, u"Discord/ArtworkEnable"_s);
+    m_settings->createSetting<ArtworkRetention>(24, u"Discord/ArtworkRetentionHours"_s);
+    m_settings->createSetting<ArtworkSource>(static_cast<int>(ArtworkMode::MusicBrainzOnly),
+                                             u"Discord/ArtworkSource"_s);
 }
 } // namespace Fooyin::Discord

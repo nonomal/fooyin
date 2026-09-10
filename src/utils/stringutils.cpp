@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,9 +24,48 @@
 #include <QJsonValue>
 #include <QKeySequence>
 
+#include <algorithm>
+#include <vector>
+
+#include <unicode/ucnv.h>
 #include <unicode/ucsdet.h>
 
 using namespace Qt::StringLiterals;
+
+namespace {
+bool isEncoding(const QByteArray& encoding, const char* name)
+{
+    return encoding.compare(name, Qt::CaseInsensitive) == 0;
+}
+
+bool isLatinEncoding(const QByteArray& encoding)
+{
+    return encoding.startsWith("ISO-8859-") || isEncoding(encoding, "windows-1252");
+}
+
+bool canDecode(const QByteArray& encoding, const QByteArray& content)
+{
+    UErrorCode status{U_ZERO_ERROR};
+    UConverter* converter = ucnv_open(encoding.constData(), &status);
+    if(U_FAILURE(status) || !converter) {
+        return false;
+    }
+
+    UConverterToUCallback oldAction{nullptr};
+    const void* oldContext{nullptr};
+    ucnv_setToUCallBack(converter, UCNV_TO_U_CALLBACK_STOP, nullptr, &oldAction, &oldContext, &status);
+    if(U_FAILURE(status)) {
+        ucnv_close(converter);
+        return false;
+    }
+
+    status = U_ZERO_ERROR;
+    ucnv_toUChars(converter, nullptr, 0, content.constData(), static_cast<int32_t>(content.size()), &status);
+    ucnv_close(converter);
+
+    return U_SUCCESS(status) || status == U_BUFFER_OVERFLOW_ERROR;
+}
+} // namespace
 
 namespace Fooyin::Utils {
 QString readMultiLineString(const QJsonValue& value)
@@ -62,34 +101,125 @@ QString elideTextWithBreaks(const QString& text, const QFontMetrics& fontMetrics
 
 QString capitalise(const QString& str)
 {
-    QStringList parts = str.split(u' ', Qt::SkipEmptyParts);
+    QString capitalised{str};
+    bool capitaliseNext{true};
 
-    for(auto& part : parts) {
-        part.replace(0, 1, part[0].toUpper());
+    for(auto& character : capitalised) {
+        if(capitaliseNext && character.isLetter()) {
+            character      = character.toUpper();
+            capitaliseNext = false;
+            continue;
+        }
+        capitaliseNext = character.isSpace();
     }
 
-    return parts.join(u' ');
+    return capitalised;
 }
 
-QByteArray detectEncoding(const QByteArray& content)
+QByteArray detectEncoding(const QByteArray& content, const DetectEncodingOptions& options)
 {
     QByteArray encoding;
     UErrorCode status{U_ZERO_ERROR};
 
     UCharsetDetector* csd = ucsdet_open(&status);
-    ucsdet_setText(csd, content.constData(), static_cast<int32_t>(content.length()), &status);
+    if(U_FAILURE(status) || !csd) {
+        return {};
+    }
 
-    const UCharsetMatch* ucm = ucsdet_detect(csd, &status);
-    if(U_SUCCESS(status) && ucm) {
-        const char* cname = ucsdet_getName(ucm, &status);
-        if(U_SUCCESS(status)) {
-            encoding = QByteArray{cname};
+    ucsdet_setText(csd, content.constData(), static_cast<int32_t>(content.length()), &status);
+    if(U_FAILURE(status)) {
+        ucsdet_close(csd);
+        return {};
+    }
+
+    int32_t count{0};
+    const UCharsetMatch** matches = ucsdet_detectAll(csd, &count, &status);
+    if(U_SUCCESS(status) && matches) {
+        for(int32_t i{0}; i < count; ++i) {
+            UErrorCode matchStatus{U_ZERO_ERROR};
+            const char* name = ucsdet_getName(matches[i], &matchStatus);
+            if(U_FAILURE(matchStatus) || !name) {
+                continue;
+            }
+
+            const QByteArray candidate{name};
+            if(!canDecode(candidate, content)) {
+                continue;
+            }
+
+            if(encoding.isEmpty()) {
+                encoding = candidate;
+            }
+        }
+
+        if(!options.preferredFallbackEncoding.isEmpty() && isLatinEncoding(encoding)
+           && canDecode(options.preferredFallbackEncoding, content)) {
+            encoding = options.preferredFallbackEncoding;
         }
     }
 
     ucsdet_close(csd);
 
     return encoding;
+}
+
+std::optional<QString> decodeText(const QByteArray& content, const QByteArray& encoding)
+{
+    UErrorCode status{U_ZERO_ERROR};
+    UConverter* converter = ucnv_open(encoding.constData(), &status);
+    if(U_FAILURE(status) || !converter) {
+        return {};
+    }
+
+    UConverterToUCallback oldAction{nullptr};
+    const void* oldContext{nullptr};
+    ucnv_setToUCallBack(converter, UCNV_TO_U_CALLBACK_STOP, nullptr, &oldAction, &oldContext, &status);
+    if(U_FAILURE(status)) {
+        ucnv_close(converter);
+        return {};
+    }
+
+    status = U_ZERO_ERROR;
+    const int32_t requiredSize
+        = ucnv_toUChars(converter, nullptr, 0, content.constData(), static_cast<int32_t>(content.size()), &status);
+    if(status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status)) {
+        ucnv_close(converter);
+        return {};
+    }
+
+    std::vector<UChar> decoded(static_cast<size_t>(requiredSize) + 1);
+    status                    = U_ZERO_ERROR;
+    const int32_t decodedSize = ucnv_toUChars(converter, decoded.data(), static_cast<int32_t>(decoded.size()),
+                                              content.constData(), static_cast<int32_t>(content.size()), &status);
+    ucnv_close(converter);
+
+    if(U_FAILURE(status)) {
+        return {};
+    }
+
+    return QString::fromUtf16(decoded.data(), decodedSize);
+}
+
+QString foldForSearch(QStringView text)
+{
+    const QString normalised = text.toString().normalized(QString::NormalizationForm_D);
+
+    QString folded;
+    folded.reserve(normalised.size());
+
+    for(const QChar ch : normalised) {
+        switch(ch.category()) {
+            case QChar::Mark_NonSpacing:
+            case QChar::Mark_SpacingCombining:
+            case QChar::Mark_Enclosing:
+                continue;
+            default:
+                folded.append(ch);
+                break;
+        }
+    }
+
+    return folded.toCaseFolded();
 }
 
 QString msToString(std::chrono::milliseconds ms, bool includeMs)
@@ -140,7 +270,11 @@ QString msToString(uint64_t ms)
 
 QString formatFileSize(uint64_t bytes, bool includeBytes)
 {
-    static const QStringList units = {u"bytes"_s, u"KB"_s, u"MB"_s, u"GB"_s, u"TB"_s};
+    if(bytes == 0) {
+        return u"0 B"_s;
+    }
+
+    static const QStringList units = {u"B"_s, u"KB"_s, u"MB"_s, u"GB"_s, u"TB"_s};
     auto size                      = static_cast<double>(bytes);
     int unitIndex{0};
 
@@ -237,8 +371,7 @@ int levenshteinDistance(const QString& first, const QString& second, Qt::CaseSen
         col[0] = i + 1;
         bChar  = bStart;
         for(int j{0}; j < secondLength; ++j) {
-            col[j + 1]
-                = std::min(std::min(1 + col.at(j), 1 + prevCol.at(1 + j)), prevCol[j] + ((*aChar == *bChar) ? 0 : 1));
+            col[j + 1] = std::min({1 + col.at(j), 1 + prevCol.at(1 + j), prevCol[j] + ((*aChar == *bChar) ? 0 : 1)});
             ++bChar;
         }
         col.swap(prevCol);
@@ -258,7 +391,7 @@ int similarityRatio(const QString& first, const QString& second, Qt::CaseSensiti
 
     const int distance = levenshteinDistance(first, second, cs);
 
-    const double similarity = (1.0 - static_cast<double>(distance) / static_cast<double>(maxLength)) * 100;
+    const double similarity = (1.0 - (static_cast<double>(distance) / static_cast<double>(maxLength))) * 100;
     return static_cast<int>(similarity);
 }
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,23 +21,18 @@
 
 #include "internalguisettings.h"
 
-#include <core/corepaths.h>
 #include <core/coresettings.h>
-#include <core/internalcoresettings.h>
-#include <core/playlist/playlistloader.h>
 #include <gui/guiconstants.h>
+#include <gui/guisettings.h>
 #include <gui/trackselectioncontroller.h>
+#include <gui/widgets/scriptlineedit.h>
 #include <utils/settings/settingsmanager.h>
-#include <utils/utils.h>
 
-#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QFileDialog>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
 #include <QSpinBox>
 
 using namespace Qt::StringLiterals;
@@ -48,70 +43,48 @@ class PlaylistGeneralPageWidget : public SettingsPageWidget
     Q_OBJECT
 
 public:
-    explicit PlaylistGeneralPageWidget(const QStringList& playlistExtensions, SettingsManager* settings);
+    explicit PlaylistGeneralPageWidget(SettingsManager* settings);
 
     void load() override;
     void apply() override;
     void reset() override;
 
 private:
-    void browseExportPath();
+    void updateStartPlaybackState() const;
 
-    QStringList m_playlistExtensions;
     SettingsManager* m_settings;
 
     QSpinBox* m_preloadCount;
-
+    QComboBox* m_doubleClick;
     QComboBox* m_middleClick;
-
-    QCheckBox* m_scrollBars;
-    QCheckBox* m_header;
-    QCheckBox* m_altColours;
-
-    QCheckBox* m_tabsExpand;
-    QCheckBox* m_tabsAddButton;
-    QCheckBox* m_tabsClearButton;
-    QCheckBox* m_tabsCloseButton;
-    QCheckBox* m_tabsMiddleClose;
-
-    QSpinBox* m_imagePadding;
-    QSpinBox* m_imagePaddingTop;
-
+    QCheckBox* m_startPlaybackOnSend;
+    QCheckBox* m_inlineTagEditing;
     QCheckBox* m_skipMissing;
-
-    QGroupBox* m_autoExporting;
-    QComboBox* m_exportPathType;
-    QCheckBox* m_exportMetadata;
-    QComboBox* m_autoExportType;
-    QLineEdit* m_autoExportPath;
+    QCheckBox* m_ignoreFolderPlaylists;
+    QCheckBox* m_preventDuplicates;
+    QCheckBox* m_integratedSearch;
+    QComboBox* m_searchMode;
+    ScriptLineEdit* m_searchScript;
 };
 
-PlaylistGeneralPageWidget::PlaylistGeneralPageWidget(const QStringList& playlistExtensions, SettingsManager* settings)
-    : m_playlistExtensions{playlistExtensions}
-    , m_settings{settings}
+PlaylistGeneralPageWidget::PlaylistGeneralPageWidget(SettingsManager* settings)
+    : m_settings{settings}
     , m_preloadCount{new QSpinBox(this)}
+    , m_doubleClick{new QComboBox(this)}
     , m_middleClick{new QComboBox(this)}
-    , m_scrollBars{new QCheckBox(tr("Show scrollbar"), this)}
-    , m_header{new QCheckBox(tr("Show header"), this)}
-    , m_altColours{new QCheckBox(tr("Alternating row colours"), this)}
-    , m_tabsExpand{new QCheckBox(tr("Expand tabs to fill empty space"), this)}
-    , m_tabsAddButton{new QCheckBox(tr("Show add button"), this)}
-    , m_tabsClearButton{new QCheckBox(tr("Show clear button"), this)}
-    , m_tabsCloseButton{new QCheckBox(tr("Show delete button on tabs"), this)}
-    , m_tabsMiddleClose{new QCheckBox(tr("Delete playlists on middle click"), this)}
-    , m_imagePadding{new QSpinBox(this)}
-    , m_imagePaddingTop{new QSpinBox(this)}
+    , m_startPlaybackOnSend{new QCheckBox(tr("Start playback immediately"), this)}
+    , m_inlineTagEditing{new QCheckBox(tr("Enable inline tag editing"), this)}
     , m_skipMissing{new QCheckBox(tr("Skip missing tracks"), this)}
-    , m_autoExporting{new QGroupBox(tr("Auto-export"), this)}
-    , m_exportPathType{new QComboBox(this)}
-    , m_exportMetadata{new QCheckBox(tr("Write metadata"), this)}
-    , m_autoExportType{new QComboBox(this)}
-    , m_autoExportPath{new QLineEdit(this)}
+    , m_ignoreFolderPlaylists{new QCheckBox(tr("Ignore playlist files when adding folders"), this)}
+    , m_preventDuplicates{new QCheckBox(tr("Prevent duplicate tracks when loading playlists"), this)}
+    , m_integratedSearch{new QCheckBox(tr("Open search bar instead of pop-up playlist search"), this)}
+    , m_searchMode{new QComboBox(this)}
+    , m_searchScript{new ScriptLineEdit(this)}
 {
     auto* behaviour       = new QGroupBox(tr("Behaviour"), this);
     auto* behaviourLayout = new QGridLayout(behaviour);
 
-    auto* preloadCountLabel = new QLabel(tr("Preload count") + ":"_L1, this);
+    auto* preloadCountLabel = new QLabel(tr("Tracks to preload") + ":"_L1, this);
     const auto preloadTooltip
         = tr("Number of tracks used to preload the playlist before loading the rest of the playlist");
     preloadCountLabel->setToolTip(preloadTooltip);
@@ -119,100 +92,59 @@ PlaylistGeneralPageWidget::PlaylistGeneralPageWidget(const QStringList& playlist
 
     m_preloadCount->setMinimum(0);
     m_preloadCount->setMaximum(10000);
-    m_preloadCount->setSuffix(tr(" tracks"));
+    m_inlineTagEditing->setToolTip(tr("Allow editing writable track tag columns directly from the playlist"));
 
     int row{0};
     behaviourLayout->addWidget(preloadCountLabel, row, 0);
     behaviourLayout->addWidget(m_preloadCount, row++, 1);
     behaviourLayout->addWidget(new QLabel(u"🛈 "_s + tr("Set to '0' to disable preloading."), this), row++, 0, 1, 2);
+    behaviourLayout->addWidget(m_inlineTagEditing, row++, 0, 1, 2);
     behaviourLayout->setColumnStretch(behaviourLayout->columnCount(), 1);
 
     auto* clickBehaviour       = new QGroupBox(tr("Click Behaviour"), this);
     auto* clickBehaviourLayout = new QGridLayout(clickBehaviour);
 
-    auto* middleClickLabel = new QLabel(tr("Middle-click") + ":"_L1, this);
-
     row = 0;
-    clickBehaviourLayout->addWidget(middleClickLabel, row, 0);
+    clickBehaviourLayout->addWidget(new QLabel(tr("Double-click") + ":"_L1, this), row, 0);
+    clickBehaviourLayout->addWidget(m_doubleClick, row++, 1);
+    clickBehaviourLayout->addWidget(new QLabel(tr("Middle-click") + ":"_L1, this), row, 0);
     clickBehaviourLayout->addWidget(m_middleClick, row++, 1);
+    clickBehaviourLayout->addWidget(m_startPlaybackOnSend, row++, 0, 1, 2);
     clickBehaviourLayout->setColumnStretch(clickBehaviourLayout->columnCount(), 1);
 
-    m_imagePadding->setMinimum(0);
-    m_imagePadding->setMaximum(100);
-    m_imagePadding->setSuffix(u"px"_s);
-
-    m_imagePaddingTop->setMinimum(0);
-    m_imagePaddingTop->setMaximum(100);
-    m_imagePaddingTop->setSuffix(u"px"_s);
+    m_startPlaybackOnSend->setToolTip(
+        tr("After adding tracks to the front of or replacing the playback queue, start playback immediately"));
+    QObject::connect(m_doubleClick, &QComboBox::currentIndexChanged, this,
+                     &PlaylistGeneralPageWidget::updateStartPlaybackState);
+    QObject::connect(m_middleClick, &QComboBox::currentIndexChanged, this,
+                     &PlaylistGeneralPageWidget::updateStartPlaybackState);
 
     m_skipMissing->setToolTip(tr("Skip unavailable tracks when loading playlists"));
+    m_ignoreFolderPlaylists->setToolTip(
+        tr("Only add media files from folders, without loading playlist files found inside"));
+    m_preventDuplicates->setToolTip(tr("Skip playlist entries that are already present in the target playlist"));
 
     auto* loading       = new QGroupBox(tr("Loading"), this);
     auto* loadingLayout = new QGridLayout(loading);
 
     row = 0;
-    loadingLayout->addWidget(m_skipMissing, row, 0);
+    loadingLayout->addWidget(m_skipMissing, row++, 0);
+    loadingLayout->addWidget(m_ignoreFolderPlaylists, row++, 0);
+    loadingLayout->addWidget(m_preventDuplicates, row++, 0);
 
-    auto* saving       = new QGroupBox(tr("Saving"), this);
-    auto* savingLayout = new QGridLayout(saving);
+    auto* search       = new QGroupBox(tr("Search"), this);
+    auto* searchLayout = new QGridLayout(search);
 
-    auto* pathTypeLabel = new QLabel(tr("Path type") + ":"_L1, this);
-
-    row = 0;
-    savingLayout->addWidget(pathTypeLabel, row, 0);
-    savingLayout->addWidget(m_exportPathType, row++, 1);
-    savingLayout->addWidget(m_exportMetadata, row++, 0, 1, 2);
-    savingLayout->setColumnStretch(2, 1);
-
-    auto* autoTypeLabel = new QLabel(tr("Format") + ":"_L1, this);
-    auto* autoPathLabel = new QLabel(tr("Location") + ":"_L1, this);
-
-    m_autoExporting->setToolTip(tr("Export and synchronise playlists in the specified format and location"));
-
-    auto* browseAction = new QAction(Utils::iconFromTheme(Constants::Icons::Options), {}, this);
-    QObject::connect(browseAction, &QAction::triggered, this, &PlaylistGeneralPageWidget::browseExportPath);
-    m_autoExportPath->addAction(browseAction, QLineEdit::TrailingPosition);
-
-    auto* autoExportLayout = new QGridLayout(m_autoExporting);
-    m_autoExporting->setCheckable(true);
+    m_searchMode->addItem(tr("Match beginnings of words"), 0);
+    m_searchMode->addItem(tr("Match anywhere"), 1);
 
     row = 0;
-    autoExportLayout->addWidget(autoTypeLabel, row, 0);
-    autoExportLayout->addWidget(m_autoExportType, row++, 1);
-    autoExportLayout->addWidget(autoPathLabel, row, 0);
-    autoExportLayout->addWidget(m_autoExportPath, row++, 1, 1, 2);
-    autoExportLayout->setColumnStretch(2, 1);
-
-    auto* padding       = new QGroupBox(tr("Image Padding"), this);
-    auto* paddingLayout = new QGridLayout(padding);
-
-    row = 0;
-    paddingLayout->addWidget(new QLabel(tr("Left/Right") + u":"_s, this), row, 0);
-    paddingLayout->addWidget(m_imagePadding, row++, 1);
-    paddingLayout->addWidget(new QLabel(tr("Top") + u":"_s, this), row, 0);
-    paddingLayout->addWidget(m_imagePaddingTop, row++, 1);
-    paddingLayout->setColumnStretch(2, 1);
-
-    auto* appearance       = new QGroupBox(tr("Appearance"), this);
-    auto* appearanceLayout = new QGridLayout(appearance);
-
-    row = 0;
-    appearanceLayout->addWidget(m_scrollBars, row++, 0, 1, 2);
-    appearanceLayout->addWidget(m_header, row++, 0, 1, 2);
-    appearanceLayout->addWidget(m_altColours, row++, 0, 1, 2);
-    appearanceLayout->addWidget(padding, row, 0, 1, 3);
-    appearanceLayout->setColumnStretch(2, 1);
-    appearanceLayout->setRowStretch(appearanceLayout->rowCount(), 1);
-
-    auto* tabsGroup       = new QGroupBox(tr("Playlist Tabs"), this);
-    auto* tabsGroupLayout = new QGridLayout(tabsGroup);
-
-    row = 0;
-    tabsGroupLayout->addWidget(m_tabsExpand, row++, 0);
-    tabsGroupLayout->addWidget(m_tabsAddButton, row++, 0);
-    tabsGroupLayout->addWidget(m_tabsClearButton, row++, 0);
-    tabsGroupLayout->addWidget(m_tabsCloseButton, row++, 0);
-    tabsGroupLayout->addWidget(m_tabsMiddleClose, row++, 0);
+    searchLayout->addWidget(m_integratedSearch, row++, 0, 1, 2);
+    searchLayout->addWidget(new QLabel(tr("Search mode") + ":"_L1, this), row, 0);
+    searchLayout->addWidget(m_searchMode, row++, 1);
+    searchLayout->addWidget(new QLabel(tr("Search script") + ":"_L1, this), row, 0);
+    searchLayout->addWidget(m_searchScript, row++, 1);
+    searchLayout->setColumnStretch(1, 1);
 
     auto* mainLayout = new QGridLayout(this);
 
@@ -220,147 +152,89 @@ PlaylistGeneralPageWidget::PlaylistGeneralPageWidget(const QStringList& playlist
     mainLayout->addWidget(behaviour, row++, 0);
     mainLayout->addWidget(clickBehaviour, row++, 0);
     mainLayout->addWidget(loading, row++, 0);
-    mainLayout->addWidget(saving, row++, 0);
-    mainLayout->addWidget(m_autoExporting, row++, 0);
-    mainLayout->addWidget(appearance, row++, 0);
-    mainLayout->addWidget(tabsGroup, row++, 0);
+    mainLayout->addWidget(search, row++, 0);
     mainLayout->setRowStretch(mainLayout->rowCount(), 1);
-
-    m_exportPathType->addItem(u"Auto"_s);
-    m_exportPathType->addItem(u"Absolute"_s);
-    m_exportPathType->addItem(u"Relative"_s);
 }
 
 void PlaylistGeneralPageWidget::load()
 {
     m_preloadCount->setValue(m_settings->value<Settings::Gui::Internal::PlaylistTrackPreloadCount>());
+    m_inlineTagEditing->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistInlineTagEditing>());
 
-    using ActionIndexMap = std::map<int, int>;
-    ActionIndexMap middleActions;
-
-    auto addTrackAction = [](QComboBox* box, const QString& text, TrackAction action, ActionIndexMap& actionMap) {
-        const int actionValue = static_cast<int>(action);
-        actionMap.emplace(actionValue, box->count());
-        box->addItem(text, actionValue);
+    const auto addClickActions = [](QComboBox* box) {
+        box->clear();
+        TrackSelectionController::addAction(box, tr("None"), TrackAction::None);
+        TrackSelectionController::addAction(box, tr("Play"), TrackAction::Play);
+        TrackSelectionController::addStandardActions(box, ActionGroup::Queue);
     };
 
-    addTrackAction(m_middleClick, tr("None"), TrackAction::None, middleActions);
-    addTrackAction(m_middleClick, tr("Add to playback queue"), TrackAction::AddToQueue, middleActions);
-    addTrackAction(m_middleClick, tr("Add to front of playback queue"), TrackAction::QueueNext, middleActions);
-    addTrackAction(m_middleClick, tr("Send to playback queue"), TrackAction::SendToQueue, middleActions);
+    addClickActions(m_doubleClick);
+    TrackSelectionController::setCurrentAction(m_doubleClick,
+                                               m_settings->value<Settings::Gui::Internal::PlaylistDoubleClick>());
 
-    auto middleAction = m_settings->value<Settings::Gui::Internal::PlaylistMiddleClick>();
-    if(middleActions.contains(middleAction)) {
-        m_middleClick->setCurrentIndex(middleActions.at(middleAction));
-    }
+    addClickActions(m_middleClick);
+    TrackSelectionController::setCurrentAction(m_middleClick,
+                                               m_settings->value<Settings::Gui::Internal::PlaylistMiddleClick>());
+
+    m_startPlaybackOnSend->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistStartPlaybackOnSend>());
+    updateStartPlaybackState();
 
     m_skipMissing->setChecked(m_settings->value<Settings::Core::PlaylistSkipMissing>());
-
-    m_exportPathType->setCurrentIndex(m_settings->fileValue(Settings::Core::Internal::PlaylistSavePathType, 0).toInt());
-    m_exportMetadata->setChecked(m_settings->fileValue(Settings::Core::Internal::PlaylistSaveMetadata, false).toBool());
-
-    m_autoExportType->clear();
-    for(const QString& ext : std::as_const(m_playlistExtensions)) {
-        m_autoExportType->addItem(ext);
-    }
-
-    m_autoExporting->setChecked(m_settings->fileValue(Settings::Core::Internal::AutoExportPlaylists, false).toBool());
-    m_autoExportType->setCurrentText(
-        m_settings->fileValue(Settings::Core::Internal::AutoExportPlaylistsType, u"m3u8"_s).toString());
-    m_autoExportPath->setText(
-        m_settings->fileValue(Settings::Core::Internal::AutoExportPlaylistsPath, Core::playlistsPath()).toString());
-
-    m_scrollBars->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistScrollBar>());
-    m_header->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistHeader>());
-    m_altColours->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistAltColours>());
-
-    m_tabsExpand->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistTabsExpand>());
-    m_tabsAddButton->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistTabsAddButton>());
-    m_tabsClearButton->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistTabsClearButton>());
-    m_tabsCloseButton->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistTabsCloseButton>());
-    m_tabsMiddleClose->setChecked(m_settings->value<Settings::Gui::Internal::PlaylistTabsMiddleClose>());
-
-    m_imagePadding->setValue(m_settings->value<Settings::Gui::Internal::PlaylistImagePadding>());
-    m_imagePaddingTop->setValue(m_settings->value<Settings::Gui::Internal::PlaylistImagePaddingTop>());
+    m_ignoreFolderPlaylists->setChecked(m_settings->value<Settings::Core::AddFoldersIgnorePlaylists>());
+    m_preventDuplicates->setChecked(m_settings->value<Settings::Core::PlaylistPreventDuplicates>());
+    m_integratedSearch->setChecked(m_settings->value<Settings::Gui::PlaylistIntegratedSearch>());
+    m_searchMode->setCurrentIndex(m_searchMode->findData(m_settings->value<Settings::Gui::PlaylistSearchMode>()));
+    m_searchScript->setText(m_settings->value<Settings::Gui::PlaylistSearchScript>());
 }
 
 void PlaylistGeneralPageWidget::apply()
 {
     m_settings->set<Settings::Gui::Internal::PlaylistTrackPreloadCount>(m_preloadCount->value());
-
+    m_settings->set<Settings::Gui::Internal::PlaylistInlineTagEditing>(m_inlineTagEditing->isChecked());
+    m_settings->set<Settings::Gui::Internal::PlaylistDoubleClick>(m_doubleClick->currentData().toInt());
     m_settings->set<Settings::Gui::Internal::PlaylistMiddleClick>(m_middleClick->currentData().toInt());
-
+    m_settings->set<Settings::Gui::Internal::PlaylistStartPlaybackOnSend>(m_startPlaybackOnSend->isChecked());
     m_settings->set<Settings::Core::PlaylistSkipMissing>(m_skipMissing->isChecked());
-
-    m_settings->fileSet(Settings::Core::Internal::PlaylistSavePathType, m_exportPathType->currentIndex());
-    m_settings->fileSet(Settings::Core::Internal::PlaylistSaveMetadata, m_exportMetadata->isChecked());
-
-    m_settings->fileSet(Settings::Core::Internal::AutoExportPlaylists, m_autoExporting->isChecked());
-    m_settings->fileSet(Settings::Core::Internal::AutoExportPlaylistsType, m_autoExportType->currentText());
-    m_settings->fileSet(Settings::Core::Internal::AutoExportPlaylistsPath, m_autoExportPath->text());
-
-    m_settings->set<Settings::Gui::Internal::PlaylistScrollBar>(m_scrollBars->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistHeader>(m_header->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistAltColours>(m_altColours->isChecked());
-
-    m_settings->set<Settings::Gui::Internal::PlaylistTabsExpand>(m_tabsExpand->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistTabsAddButton>(m_tabsAddButton->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistTabsClearButton>(m_tabsClearButton->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistTabsCloseButton>(m_tabsCloseButton->isChecked());
-    m_settings->set<Settings::Gui::Internal::PlaylistTabsMiddleClose>(m_tabsMiddleClose->isChecked());
-
-    m_settings->set<Settings::Gui::Internal::PlaylistImagePadding>(m_imagePadding->value());
-    m_settings->set<Settings::Gui::Internal::PlaylistImagePaddingTop>(m_imagePaddingTop->value());
+    m_settings->set<Settings::Core::AddFoldersIgnorePlaylists>(m_ignoreFolderPlaylists->isChecked());
+    m_settings->set<Settings::Core::PlaylistPreventDuplicates>(m_preventDuplicates->isChecked());
+    m_settings->set<Settings::Gui::PlaylistIntegratedSearch>(m_integratedSearch->isChecked());
+    m_settings->set<Settings::Gui::PlaylistSearchMode>(m_searchMode->currentData().toInt());
+    m_settings->set<Settings::Gui::PlaylistSearchScript>(m_searchScript->text());
 }
 
 void PlaylistGeneralPageWidget::reset()
 {
     m_settings->reset<Settings::Gui::Internal::PlaylistTrackPreloadCount>();
-
+    m_settings->reset<Settings::Gui::Internal::PlaylistInlineTagEditing>();
+    m_settings->reset<Settings::Gui::Internal::PlaylistDoubleClick>();
     m_settings->reset<Settings::Gui::Internal::PlaylistMiddleClick>();
-
+    m_settings->reset<Settings::Gui::Internal::PlaylistStartPlaybackOnSend>();
     m_settings->reset<Settings::Core::PlaylistSkipMissing>();
-
-    m_settings->fileRemove(Settings::Core::Internal::PlaylistSavePathType);
-    m_settings->fileRemove(Settings::Core::Internal::PlaylistSaveMetadata);
-
-    m_settings->fileRemove(Settings::Core::Internal::AutoExportPlaylists);
-    m_settings->fileRemove(Settings::Core::Internal::AutoExportPlaylistsType);
-    m_settings->fileRemove(Settings::Core::Internal::AutoExportPlaylistsPath);
-
-    m_settings->reset<Settings::Gui::Internal::PlaylistScrollBar>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistHeader>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistAltColours>();
-
-    m_settings->reset<Settings::Gui::Internal::PlaylistTabsExpand>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistTabsAddButton>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistTabsClearButton>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistTabsCloseButton>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistTabsMiddleClose>();
-
-    m_settings->reset<Settings::Gui::Internal::PlaylistImagePadding>();
-    m_settings->reset<Settings::Gui::Internal::PlaylistImagePaddingTop>();
+    m_settings->reset<Settings::Core::AddFoldersIgnorePlaylists>();
+    m_settings->reset<Settings::Core::PlaylistPreventDuplicates>();
+    m_settings->reset<Settings::Gui::PlaylistIntegratedSearch>();
+    m_settings->reset<Settings::Gui::PlaylistSearchMode>();
+    m_settings->reset<Settings::Gui::PlaylistSearchScript>();
 }
 
-void PlaylistGeneralPageWidget::browseExportPath()
+void PlaylistGeneralPageWidget::updateStartPlaybackState() const
 {
-    const QString path = !m_autoExportPath->text().isEmpty() ? m_autoExportPath->text() : Core::playlistsPath();
-    const QString dir
-        = QFileDialog::getExistingDirectory(this, tr("Select Directory"), path, QFileDialog::DontResolveSymlinks);
-    if(!dir.isEmpty()) {
-        m_autoExportPath->setText(dir);
-    }
+    const auto supportsImmediatePlayback = [](const QComboBox* box) {
+        const int action = box->currentData().toInt();
+        return action == static_cast<int>(TrackAction::QueueNext)
+            || action == static_cast<int>(TrackAction::SendToQueue);
+    };
+    m_startPlaybackOnSend->setEnabled(supportsImmediatePlayback(m_doubleClick)
+                                      || supportsImmediatePlayback(m_middleClick));
 }
 
-PlaylistGeneralPage::PlaylistGeneralPage(const QStringList& playlistExtensions, SettingsManager* settings,
-                                         QObject* parent)
+PlaylistGeneralPage::PlaylistGeneralPage(SettingsManager* settings, QObject* parent)
     : SettingsPage{settings->settingsDialog(), parent}
 {
     setId(Constants::Page::PlaylistGeneral);
     setName(tr("General"));
     setCategory({tr("Playlist")});
-    setWidgetCreator(
-        [playlistExtensions, settings] { return new PlaylistGeneralPageWidget(playlistExtensions, settings); });
+    setWidgetCreator([settings] { return new PlaylistGeneralPageWidget(settings); });
 }
 } // namespace Fooyin
 

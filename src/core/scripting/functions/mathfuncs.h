@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ QString div(const QStringList& vec);
 QString mod(const QStringList& vec);
 QString min(const QStringList& vec);
 QString max(const QStringList& vec);
+QString select(const QStringList& vec);
 QString rand(const QStringList& vec);
 QString round(const QStringList& vec);
 } // namespace Fooyin::Scripting

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,18 +20,48 @@
 #include <gui/widgets/expandingcombobox.h>
 
 #include <QAbstractItemView>
+#include <QEvent>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 ExpandingComboBox::ExpandingComboBox(QWidget* parent)
     : QComboBox{parent}
+    , m_resizeToCurrentEnabled{true}
 {
     QObject::connect(this, &QComboBox::currentIndexChanged, this, &ExpandingComboBox::resizeToFitCurrent);
 }
 
+bool ExpandingComboBox::resizeToCurrentEnabled() const
+{
+    return m_resizeToCurrentEnabled;
+}
+
+void ExpandingComboBox::setResizeToCurrentEnabled(bool enabled)
+{
+    m_resizeToCurrentEnabled = enabled;
+    if(enabled) {
+        resizeToFitCurrent();
+    }
+    else {
+        setMinimumSize(0, 0);
+    }
+}
+
+void ExpandingComboBox::invalidateSizeHint()
+{
+    // QComboBox doesn't invalidate its cached minimum size hint when item text changes
+    QEvent styleChange{QEvent::StyleChange};
+    changeEvent(&styleChange);
+    updateGeometry();
+}
+
 void ExpandingComboBox::resizeToFitCurrent()
 {
+    if(!m_resizeToCurrentEnabled) {
+        return;
+    }
+
     const QFontMetrics fontMetrics{font()};
 
     int maxWidth{0};

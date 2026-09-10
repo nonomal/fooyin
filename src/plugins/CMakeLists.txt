@@ -1,29 +1,185 @@
+include(FooyinPluginSelection)
+
+set(FOOYIN_KNOWN_PLUGINS
+    alsa
+    cdda
+    discord
+    equaliser
+    fileops
+    filters
+    gme
+    globalhotkeys
+    libarchive
+    lyrics
+    mediacontrol
+    mpris
+    notify
+    oscilloscope
+    nowplaying
+    openmpt
+    pipewire
+    pulseaudio
+    quicktagger
+    projectm
+    rawaudio
+    radiobrowser
+    rgscanner
+    scrobbler
+    sdl
+    sleepinhibitor
+    sndfile
+    spectrum
+    soundtouch
+    spectrogram
+    soxresampler
+    tageditor
+    thumbnailtoolbar
+    vumeter
+    wasapi
+    wavebar
+)
+
+set(FOOYIN_DEFAULT_PLUGINS
+    discord
+    equaliser
+    fileops
+    filters
+    gme
+    globalhotkeys
+    libarchive
+    lyrics
+    oscilloscope
+    openmpt
+    pipewire
+    quicktagger
+    projectm
+    rawaudio
+    radiobrowser
+    rgscanner
+    scrobbler
+    sdl
+    sleepinhibitor
+    sndfile
+    spectrogram
+    spectrum
+    soundtouch
+    soxresampler
+    tageditor
+    vumeter
+    wavebar
+)
+
 if(BUILD_ALSA)
-    add_subdirectory(alsa)
+    list(APPEND FOOYIN_DEFAULT_PLUGINS alsa)
 endif()
 
 if(UNIX AND NOT APPLE)
-    add_subdirectory(mpris)
+    list(
+        APPEND
+        FOOYIN_DEFAULT_PLUGINS
+        cdda
+        mpris
+        notify
+        pulseaudio
+    )
 endif()
 
-add_subdirectory(discord)
-add_subdirectory(fileops)
-add_subdirectory(filters)
-add_subdirectory(gme)
-add_subdirectory(libarchive)
-add_subdirectory(lyrics)
-add_subdirectory(openmpt)
-add_subdirectory(pipewire)
-add_subdirectory(rawaudio)
-add_subdirectory(rgscanner)
-add_subdirectory(sdl)
-add_subdirectory(scrobbler)
-add_subdirectory(sndfile)
-add_subdirectory(tageditor)
-add_subdirectory(vumeter)
-add_subdirectory(wavebar)
+if(WIN32)
+    list(
+        APPEND
+        FOOYIN_DEFAULT_PLUGINS
+        wasapi
+        mediacontrol
+        thumbnailtoolbar
+    )
+endif()
+
+if(APPLE)
+    list(APPEND FOOYIN_DEFAULT_PLUGINS nowplaying)
+endif()
+
+fooyin_resolve_plugin_selection(
+    OUT_VAR
+    FOOYIN_RESOLVED_PLUGINS
+    SELECTION
+    "${PLUGIN_SELECTION}"
+    KNOWN
+    ${FOOYIN_KNOWN_PLUGINS}
+    DEFAULT
+    ${FOOYIN_DEFAULT_PLUGINS}
+)
+
+if(BUILD_ALSA)
+    fooyin_add_selected_plugin(alsa)
+elseif("alsa" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+    message(STATUS "BUILD_ALSA=OFF; skipping alsa plugin.")
+endif()
+
+if(UNIX AND NOT APPLE)
+    fooyin_add_selected_plugin(cdda)
+    fooyin_add_selected_plugin(mpris)
+    fooyin_add_selected_plugin(notify)
+else()
+    if("cdda" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "cdda plugin is only available on Unix platforms other than macOS; skipping.")
+    endif()
+    if("mpris" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "mpris plugin is only available on Unix platforms other than macOS; skipping.")
+    endif()
+    if("notify" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "notify plugin is only available on Unix platforms other than macOS; skipping.")
+    endif()
+endif()
+
+fooyin_add_selected_plugin(discord)
+fooyin_add_selected_plugin(equaliser)
+fooyin_add_selected_plugin(fileops)
+fooyin_add_selected_plugin(filters)
+fooyin_add_selected_plugin(gme)
+fooyin_add_selected_plugin(globalhotkeys)
+fooyin_add_selected_plugin(libarchive)
+fooyin_add_selected_plugin(lyrics)
+fooyin_add_selected_plugin(oscilloscope)
+fooyin_add_selected_plugin(openmpt)
+fooyin_add_selected_plugin(pipewire)
+fooyin_add_selected_plugin(pulseaudio)
+fooyin_add_selected_plugin(quicktagger)
+fooyin_add_selected_plugin(projectm)
+fooyin_add_selected_plugin(rawaudio)
+fooyin_add_selected_plugin(radiobrowser)
+fooyin_add_selected_plugin(rgscanner)
+fooyin_add_selected_plugin(scrobbler)
+fooyin_add_selected_plugin(sdl)
+fooyin_add_selected_plugin(sleepinhibitor)
+fooyin_add_selected_plugin(sndfile)
+fooyin_add_selected_plugin(spectrum)
+fooyin_add_selected_plugin(spectrogram)
+fooyin_add_selected_plugin(soundtouch)
+fooyin_add_selected_plugin(soxresampler)
+fooyin_add_selected_plugin(tageditor)
+fooyin_add_selected_plugin(vumeter)
+fooyin_add_selected_plugin(wavebar)
 
 if(WIN32)
-    add_subdirectory(mediacontrol)
-    add_subdirectory(thumbnailtoolbar)
+    fooyin_add_selected_plugin(wasapi)
+    fooyin_add_selected_plugin(mediacontrol)
+    fooyin_add_selected_plugin(thumbnailtoolbar)
+else()
+    if("wasapi" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "wasapi plugin is only available on Windows; skipping.")
+    endif()
+    if("mediacontrol" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "mediacontrol plugin is only available on Windows; skipping.")
+    endif()
+    if("thumbnailtoolbar" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "thumbnailtoolbar plugin is only available on Windows; skipping.")
+    endif()
+endif()
+
+if(APPLE)
+    fooyin_add_selected_plugin(nowplaying)
+else()
+    if("nowplaying" IN_LIST FOOYIN_RESOLVED_PLUGINS)
+        message(STATUS "nowplaying plugin is only available on macOS; skipping.")
+    endif()
 endif()

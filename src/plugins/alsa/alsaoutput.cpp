@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,13 +26,20 @@
 #include <QDebug>
 #include <QLoggingCategory>
 
+#include <algorithm>
+#include <cerrno>
+#include <limits>
+#include <optional>
 #include <ranges>
+#include <utility>
 
 Q_LOGGING_CATEGORY(ALSA, "fy.alsa")
 
 using namespace Qt::StringLiterals;
 
 namespace {
+using ChannelPosition = Fooyin::AudioFormat::ChannelPosition;
+
 snd_pcm_format_t findAlsaFormat(Fooyin::SampleFormat format)
 {
     switch(format) {
@@ -40,7 +47,7 @@ snd_pcm_format_t findAlsaFormat(Fooyin::SampleFormat format)
             return SND_PCM_FORMAT_U8;
         case(Fooyin::SampleFormat::S16):
             return SND_PCM_FORMAT_S16;
-        case(Fooyin::SampleFormat::S24):
+        case(Fooyin::SampleFormat::S24In32):
         case(Fooyin::SampleFormat::S32):
             return SND_PCM_FORMAT_S32;
         case(Fooyin::SampleFormat::F32):
@@ -153,6 +160,92 @@ struct CtlHandleDeleter
     }
 };
 using CtlHandleUPtr = std::unique_ptr<snd_ctl_t, CtlHandleDeleter>;
+
+struct ChmapQueryList
+{
+    snd_pcm_chmap_query_t** queries{nullptr};
+
+    ~ChmapQueryList()
+    {
+        if(queries) {
+            snd_pcm_free_chmaps(queries);
+        }
+    }
+};
+
+ChannelPosition channelPositionFromAlsa(unsigned int pos)
+{
+    switch(pos) {
+        case SND_CHMAP_MONO:
+            return ChannelPosition::FrontCenter;
+        case SND_CHMAP_FL:
+            return ChannelPosition::FrontLeft;
+        case SND_CHMAP_FR:
+            return ChannelPosition::FrontRight;
+        case SND_CHMAP_FC:
+            return ChannelPosition::FrontCenter;
+        case SND_CHMAP_LFE:
+            return ChannelPosition::LFE;
+        case SND_CHMAP_RL:
+            return ChannelPosition::BackLeft;
+        case SND_CHMAP_RR:
+            return ChannelPosition::BackRight;
+        case SND_CHMAP_SL:
+            return ChannelPosition::SideLeft;
+        case SND_CHMAP_SR:
+            return ChannelPosition::SideRight;
+        case SND_CHMAP_RC:
+            return ChannelPosition::BackCenter;
+        case SND_CHMAP_FLC:
+            return ChannelPosition::FrontLeftOfCenter;
+        case SND_CHMAP_FRC:
+            return ChannelPosition::FrontRightOfCenter;
+#ifdef SND_CHMAP_TC
+        case SND_CHMAP_TC:
+            return ChannelPosition::TopCenter;
+#endif
+#ifdef SND_CHMAP_TFL
+        case SND_CHMAP_TFL:
+            return ChannelPosition::TopFrontLeft;
+#endif
+#ifdef SND_CHMAP_TFC
+        case SND_CHMAP_TFC:
+            return ChannelPosition::TopFrontCenter;
+#endif
+#ifdef SND_CHMAP_TFR
+        case SND_CHMAP_TFR:
+            return ChannelPosition::TopFrontRight;
+#endif
+#ifdef SND_CHMAP_TRL
+        case SND_CHMAP_TRL:
+            return ChannelPosition::TopBackLeft;
+#endif
+#ifdef SND_CHMAP_TRC
+        case SND_CHMAP_TRC:
+            return ChannelPosition::TopBackCenter;
+#endif
+#ifdef SND_CHMAP_TRR
+        case SND_CHMAP_TRR:
+            return ChannelPosition::TopBackRight;
+#endif
+        default:
+            return ChannelPosition::UnknownPosition;
+    }
+}
+
+Fooyin::AudioFormat::ChannelLayout channelLayoutFromAlsaMap(const snd_pcm_chmap_t& map)
+{
+    Fooyin::AudioFormat::ChannelLayout layout;
+    if(map.channels == 0) {
+        return layout;
+    }
+
+    layout.reserve(static_cast<size_t>(map.channels));
+    for(unsigned i = 0; i < map.channels; ++i) {
+        layout.push_back(channelPositionFromAlsa(map.pos[i]));
+    }
+    return layout;
+}
 } // namespace
 
 namespace Fooyin::Alsa {
@@ -160,8 +253,8 @@ AlsaOutput::AlsaOutput()
     : m_initialised{false}
     , m_pausable{true}
     , m_started{false}
+    , m_reinitRequested{false}
     , m_device{u"default"_s}
-    , m_volume{1.0}
     , m_bufferSize{8192}
     , m_periodSize{1024}
 { }
@@ -173,7 +266,8 @@ AlsaOutput::~AlsaOutput()
 
 bool AlsaOutput::init(const AudioFormat& format)
 {
-    m_format = format;
+    m_reinitRequested = false;
+    m_format          = format;
 
     if(!initAlsa()) {
         uninit();
@@ -192,8 +286,10 @@ void AlsaOutput::uninit()
 
 void AlsaOutput::reset()
 {
-    checkError(snd_pcm_drop(m_pcmHandle.get()), "ALSA drop error");
-    checkError(snd_pcm_prepare(m_pcmHandle.get()), "ALSA prepare error");
+    if(m_pcmHandle) {
+        checkError(snd_pcm_drop(m_pcmHandle.get()), "ALSA drop error");
+        checkError(snd_pcm_prepare(m_pcmHandle.get()), "ALSA prepare error");
+    }
 
     m_started = false;
     recoverState();
@@ -244,26 +340,56 @@ OutputDevices AlsaOutput::getAllDevices(bool /*isCurrentOutput*/)
     return devices;
 }
 
-int AlsaOutput::write(const AudioBuffer& buffer)
+int AlsaOutput::write(const std::span<const std::byte> data, const int frameCount)
 {
     if(!m_pcmHandle || !recoverState()) {
         return 0;
     }
 
-    const int frameCount = buffer.frameCount();
-
-    AudioBuffer adjustedBuff{buffer};
-    adjustedBuff.scale(m_volume);
-
-    snd_pcm_sframes_t err{0};
-    err = snd_pcm_writei(m_pcmHandle.get(), adjustedBuff.constData().data(), frameCount);
-    if(checkError(static_cast<int>(err), "Write error")) {
+    const int bytesPerFrame = m_format.bytesPerFrame();
+    if(frameCount <= 0 || bytesPerFrame <= 0) {
         return 0;
     }
-    if(err != frameCount) {
-        qCWarning(ALSA) << "Unexpected partial write";
+
+    const size_t availableFrames = data.size() / static_cast<size_t>(bytesPerFrame);
+    const int framesToWrite      = std::min(frameCount, static_cast<int>(availableFrames));
+    if(framesToWrite <= 0) {
+        return 0;
     }
-    return static_cast<int>(err);
+
+    int framesRemaining = framesToWrite;
+    int framesWritten   = 0;
+    int eagainRetries   = 0;
+
+    while(framesRemaining > 0) {
+        const auto* ptr             = data.data() + static_cast<size_t>(framesWritten * bytesPerFrame);
+        const snd_pcm_sframes_t err = snd_pcm_writei(m_pcmHandle.get(), ptr, framesRemaining);
+
+        if(err == -EAGAIN) {
+            if(eagainRetries++ > 4) {
+                break;
+            }
+            snd_pcm_wait(m_pcmHandle.get(), 10);
+            continue;
+        }
+
+        if(checkError(static_cast<int>(err), "Write error")) {
+            return framesWritten;
+        }
+
+        if(err <= 0) {
+            break;
+        }
+
+        framesWritten += static_cast<int>(err);
+        framesRemaining -= static_cast<int>(err);
+    }
+
+    if(framesWritten != framesToWrite) {
+        qCDebug(ALSA) << "Partial write:" << framesWritten << "/" << framesToWrite;
+    }
+
+    return framesWritten;
 }
 
 void AlsaOutput::setPaused(bool pause)
@@ -272,7 +398,7 @@ void AlsaOutput::setPaused(bool pause)
         return;
     }
 
-    if(!pause && !recoverState()) {
+    if(!recoverState()) {
         return;
     }
 
@@ -285,9 +411,9 @@ void AlsaOutput::setPaused(bool pause)
     }
 }
 
-void AlsaOutput::setVolume(double volume)
+bool AlsaOutput::supportsVolumeControl() const
 {
-    m_volume = volume;
+    return false;
 }
 
 void AlsaOutput::setDevice(const QString& device)
@@ -295,6 +421,70 @@ void AlsaOutput::setDevice(const QString& device)
     if(!device.isEmpty()) {
         m_device = device;
     }
+}
+
+AudioFormat AlsaOutput::negotiateFormat(const AudioFormat& requested) const
+{
+    if(!requested.isValid() || requested.channelCount() <= 0) {
+        return requested;
+    }
+
+    snd_pcm_t* rawHandle{nullptr};
+    if(snd_pcm_open(&rawHandle, m_device.toLocal8Bit().constData(), SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) < 0) {
+        return requested;
+    }
+    const PcmHandleUPtr handle{rawHandle, PcmHandleDeleter()};
+
+    ChmapQueryList maps{snd_pcm_query_chmaps(handle.get())};
+    if(!maps.queries) {
+        return requested;
+    }
+
+    int bestScore{std::numeric_limits<int>::min()};
+    int bestKnown{std::numeric_limits<int>::min()};
+    std::optional<AudioFormat::ChannelLayout> bestLayout;
+
+    for(int i = 0; maps.queries[i] != nullptr; ++i) {
+        const auto* query = maps.queries[i];
+        if(!query || static_cast<int>(query->map.channels) != requested.channelCount()) {
+            continue;
+        }
+
+        auto layout = channelLayoutFromAlsaMap(query->map);
+        if(static_cast<int>(layout.size()) != requested.channelCount()) {
+            continue;
+        }
+
+        int score = 0;
+        int known = 0;
+        for(int ch = 0; ch < requested.channelCount(); ++ch) {
+            const auto candidate = layout[static_cast<size_t>(ch)];
+            if(candidate != ChannelPosition::UnknownPosition) {
+                ++known;
+            }
+
+            if(requested.hasChannelLayout()) {
+                const auto requestedPos = requested.channelPosition(ch);
+                if(requestedPos == candidate) {
+                    ++score;
+                }
+            }
+        }
+
+        if(score > bestScore || (score == bestScore && known > bestKnown)) {
+            bestScore  = score;
+            bestKnown  = known;
+            bestLayout = std::move(layout);
+        }
+    }
+
+    if(!bestLayout) {
+        return requested;
+    }
+
+    AudioFormat negotiated = requested;
+    negotiated.setChannelLayout(*bestLayout);
+    return negotiated;
 }
 
 QString AlsaOutput::error() const
@@ -312,7 +502,8 @@ void AlsaOutput::resetAlsa()
     if(m_pcmHandle) {
         m_pcmHandle.reset();
     }
-    m_started = false;
+    m_started         = false;
+    m_reinitRequested = false;
     m_error.clear();
 }
 
@@ -458,7 +649,7 @@ bool AlsaOutput::checkError(int error, const char* message)
     if(error < 0) {
         m_error = QString::fromUtf8(message);
         qCWarning(ALSA) << message << ":" << snd_strerror(error);
-        emit stateChanged(State::Error);
+        Q_EMIT stateChanged(State::Error);
         return true;
     }
     return false;
@@ -584,6 +775,11 @@ bool AlsaOutput::attemptRecovery(snd_pcm_status_t* status)
     bool autoRecoverAttempted{false};
     snd_pcm_state_t pcmst{SND_PCM_STATE_DISCONNECTED};
 
+    const auto requestReinit = [this]() {
+        m_reinitRequested = true;
+        QMetaObject::invokeMethod(this, [this]() { Q_EMIT this->stateChanged(State::Disconnected); });
+    };
+
     // Give ALSA a number of chances to recover
     for(int n{0}; n < 5; ++n) {
         if(!m_pcmHandle) {
@@ -613,7 +809,13 @@ bool AlsaOutput::attemptRecovery(snd_pcm_status_t* status)
 
         if(pcmst == SND_PCM_STATE_PREPARED) {
             if(m_started) {
-                snd_pcm_start(m_pcmHandle.get());
+                err = snd_pcm_start(m_pcmHandle.get());
+                if(err < 0) {
+                    qCWarning(ALSA) << "Could not restart prepared device:" << snd_strerror(err)
+                                    << "- forcing output reinit";
+                    requestReinit();
+                    return false;
+                }
             }
             return true;
         }
@@ -635,15 +837,23 @@ bool AlsaOutput::attemptRecovery(snd_pcm_status_t* status)
                 if(err == -ENOSYS) {
                     qCWarning(ALSA) << "Resume not supported - trying prepare…";
                     err = snd_pcm_prepare(m_pcmHandle.get());
+                    if(err < 0) {
+                        requestReinit();
+                        return false;
+                    }
                 }
-                checkError(err, "Could not be resumed");
+                if(err < 0) {
+                    qCWarning(ALSA) << "Resume failed:" << snd_strerror(err) << "- forcing output reinit";
+                    requestReinit();
+                    return false;
+                }
                 continue;
             // Device lost
             case(SND_PCM_STATE_DISCONNECTED):
             case(SND_PCM_STATE_OPEN):
             default:
-                qCWarning(ALSA) << "Device lost - stopping playback";
-                QMetaObject::invokeMethod(this, [this]() { emit this->stateChanged(State::Disconnected); });
+                qCWarning(ALSA) << "Device lost - forcing output reinit";
+                requestReinit();
                 return false;
         }
     }
@@ -662,17 +872,26 @@ bool AlsaOutput::recoverState(OutputState* state)
     const bool recovered = attemptRecovery(status);
 
     if(!recovered) {
-        qCWarning(ALSA) << "Could not recover";
+        if(m_reinitRequested) {
+            qCInfo(ALSA) << "Recovery handed off to output reinit";
+            m_reinitRequested = false;
+        }
+        else {
+            qCWarning(ALSA) << "Could not recover";
+        }
     }
 
-    if(state) {
-        const auto delay   = snd_pcm_status_get_delay(status);
-        state->delay       = static_cast<double>(std::max(delay, 0L)) / static_cast<double>(m_format.sampleRate());
-        state->freeSamples = static_cast<int>(snd_pcm_status_get_avail(status));
-        state->freeSamples = std::clamp(state->freeSamples, 0, static_cast<int>(m_bufferSize));
+    if(state && recovered) {
+        const auto delay  = snd_pcm_status_get_delay(status);
+        state->delay      = static_cast<double>(std::max(delay, 0L)) / static_cast<double>(m_format.sampleRate());
+        state->freeFrames = static_cast<int>(snd_pcm_status_get_avail(status));
+        state->freeFrames = std::clamp(state->freeFrames, 0, static_cast<int>(m_bufferSize));
         // Align to period size
-        state->freeSamples   = static_cast<int>(state->freeSamples / m_periodSize * m_periodSize);
-        state->queuedSamples = static_cast<int>(m_bufferSize) - state->freeSamples;
+        state->freeFrames   = static_cast<int>(state->freeFrames / m_periodSize * m_periodSize);
+        state->queuedFrames = static_cast<int>(m_bufferSize) - state->freeFrames;
+    }
+    else if(state) {
+        *state = {};
     }
 
     return recovered;

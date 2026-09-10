@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,9 +21,13 @@
 
 #include <gui/fywidget.h>
 
+#include <functional>
+
 namespace Fooyin {
+class EngineController;
 class SettingsManager;
 class PlayerController;
+class PlaylistController;
 class PlaylistHandler;
 class StatusWidgetPrivate;
 class TrackSelectionController;
@@ -33,8 +37,9 @@ class StatusWidget : public FyWidget
     Q_OBJECT
 
 public:
-    StatusWidget(PlayerController* playerController, PlaylistHandler* playlistHandler,
-                 TrackSelectionController* selectionController, SettingsManager* settings, QWidget* parent = nullptr);
+    StatusWidget(EngineController* engine, PlayerController* playerController, PlaylistHandler* playlistHandler,
+                 PlaylistController* playlistController, TrackSelectionController* selectionController,
+                 SettingsManager* settings, QWidget* parent = nullptr);
     ~StatusWidget() override;
 
     [[nodiscard]] QString name() const override;
@@ -42,20 +47,23 @@ public:
 
     static QString defaultPlayingScript();
     static QString defaultSelectionScript();
+    static QString defaultPlaylistScript();
 
     void showMessage(const QString& message);
     void showTempMessage(const QString& message);
     void showTempMessage(const QString& message, int timeout);
     void showStatusTip(const QString& message);
+    void setScanProgress(const QString& message, std::function<void()> cancel = {});
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
-signals:
+Q_SIGNALS:
     void clicked();
 
 protected:
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void timerEvent(QTimerEvent* event) override;
 
 private:

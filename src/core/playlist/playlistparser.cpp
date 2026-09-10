@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,17 +19,35 @@
 
 #include <core/playlist/playlistparser.h>
 
+#include <core/coresettings.h>
 #include <utils/stringutils.h>
 
+#include <QFileInfo>
 #include <QStringDecoder>
 #include <QUrl>
 
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
-PlaylistParser::PlaylistParser(std::shared_ptr<AudioLoader> audioLoader)
-    : m_audioLoader{std::move(audioLoader)}
-{ }
+namespace {
+Utils::DetectEncodingOptions detectEncodingOptions()
+{
+    const FySettings settings;
+    return {.preferredFallbackEncoding
+            = settings.value(QString::fromLatin1(Utils::PreferredFallbackEncodingSetting)).toString().toLatin1()};
+}
+} // namespace
+
+size_t PlaylistParser::countEntries(QIODevice* /*device*/, const QString& /*filepath*/, const QDir& /*dir*/) const
+{
+    return 0;
+}
+
+bool PlaylistParser::canParse(const QByteArray& /*data*/, const QString& /*contentType*/, const QUrl& url) const
+{
+    const QString extension = QFileInfo{url.path()}.suffix().toLower();
+    return !extension.isEmpty() && supportedExtensions().contains(extension, Qt::CaseInsensitive);
+}
 
 void Fooyin::PlaylistParser::savePlaylist(QIODevice* /*device*/, const QString& /*extension*/,
                                           const TrackList& /*tracks*/, const QDir& /*dir*/, PathType /*type*/,
@@ -69,7 +87,7 @@ QByteArray PlaylistParser::toUtf8(QIODevice* file)
         toUtf16 = QStringDecoder{encoding.value()};
     }
     else {
-        const auto encodingName = Utils::detectEncoding(data);
+        const auto encodingName = Utils::detectEncoding(data, detectEncodingOptions());
         if(encodingName.isEmpty()) {
             return {};
         }

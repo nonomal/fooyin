@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,17 +33,20 @@ Slider::Slider(Qt::Orientation type, QWidget* parent)
 void Slider::mousePressEvent(QMouseEvent* e)
 {
     Qt::MouseButton button = e->button();
-    if(button == Qt::LeftButton) {
-        const int absolute = style()->styleHint(QStyle::SH_Slider_AbsoluteSetButtons);
-        if(Qt::LeftButton & absolute) {
-            button = Qt::LeftButton;
-        }
-        else if(Qt::MiddleButton & absolute) {
-            button = Qt::MiddleButton;
-        }
-        else if(Qt::RightButton & absolute) {
-            button = Qt::RightButton;
-        }
+    if(button != Qt::LeftButton) {
+        e->ignore();
+        return;
+    }
+
+    const int absolute = style()->styleHint(QStyle::SH_Slider_AbsoluteSetButtons);
+    if(Qt::LeftButton & absolute) {
+        button = Qt::LeftButton;
+    }
+    else if(Qt::MiddleButton & absolute) {
+        button = Qt::MiddleButton;
+    }
+    else if(Qt::RightButton & absolute) {
+        button = Qt::RightButton;
     }
 
     QMouseEvent event(e->type(), e->position(), e->globalPosition(), button, button, e->modifiers());

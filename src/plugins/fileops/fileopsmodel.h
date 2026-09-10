@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +25,10 @@
 #include <QAbstractItemModel>
 #include <QThread>
 
+#include <memory>
+
 namespace Fooyin {
+class AudioLoader;
 class MusicLibrary;
 
 namespace FileOps {
@@ -36,12 +39,19 @@ class FileOpsModel : public QAbstractItemModel
     Q_OBJECT
 
 public:
-    FileOpsModel(MusicLibrary* library, TrackList tracks, SettingsManager* settings, QObject* parent = nullptr);
+    FileOpsModel(MusicLibrary* library, std::shared_ptr<AudioLoader> audioLoader, TrackList tracks,
+                 SettingsManager* settings, QObject* parent = nullptr);
     ~FileOpsModel() override;
 
     void simulate(const FileOpPreset& preset);
     void run();
     void stop();
+
+    [[nodiscard]] int pendingCount() const;
+    [[nodiscard]] int succeededCount() const;
+    [[nodiscard]] int failedCount() const;
+    [[nodiscard]] int skippedCount() const;
+    [[nodiscard]] int cancelledCount() const;
 
     [[nodiscard]] Qt::ItemFlags flags(const QModelIndex& index) const override;
     [[nodiscard]] QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
@@ -51,18 +61,22 @@ public:
     [[nodiscard]] int columnCount(const QModelIndex& parent) const override;
     [[nodiscard]] int rowCount(const QModelIndex& parent) const override;
 
-signals:
+Q_SIGNALS:
     void simulated();
     void finished();
 
 private:
     void populate(const FileOperations& operations);
-    void operationFinished(const FileOpsItem& operation);
+    void operationCompleted(const FileOpResult& result);
+    void workerFinished();
     QString operationToString(Operation op) const;
+    static QString resultToString(const FileOpResult& result);
 
     QThread m_workerThread;
     FileOpsWorker m_worker;
     FileOperations m_operations;
+    std::deque<FileOpResult> m_results;
+    int m_succeededCount;
 };
 } // namespace FileOps
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,12 +24,14 @@
 #include "lyricssettings.h"
 
 #include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/scriptlineedit.h>
 #include <utils/settings/settingsmanager.h>
 #include <utils/utils.h>
 
 #include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -74,6 +76,8 @@ private:
 
     QCheckBox* m_collapse;
     QCheckBox* m_metadata;
+
+    QComboBox* m_conflictPolicy;
 };
 
 LyricsSavingPageWidget::LyricsSavingPageWidget(SettingsManager* settings)
@@ -92,6 +96,7 @@ LyricsSavingPageWidget::LyricsSavingPageWidget(SettingsManager* settings)
     , m_filename{new ScriptLineEdit(this)}
     , m_collapse{new QCheckBox(tr("Collapse duplicate lines"), this)}
     , m_metadata{new QCheckBox(tr("Save metadata"), this)}
+    , m_conflictPolicy{new QComboBox(this)}
 {
     auto* schemeGroup  = new QGroupBox(tr("Save Scheme"), this);
     auto* schemeLayout = new QGridLayout(schemeGroup);
@@ -141,6 +146,21 @@ LyricsSavingPageWidget::LyricsSavingPageWidget(SettingsManager* settings)
     formatLayout->addWidget(m_collapse, row++, 0);
     formatLayout->addWidget(m_metadata, row++, 0);
 
+    auto* optionsGroup  = new QGroupBox(tr("Save Options"), this);
+    auto* optionsLayout = new QGridLayout(optionsGroup);
+
+    m_conflictPolicy->addItem(tr("Keep Original"), static_cast<int>(SaveConflictPolicy::KeepOriginal));
+    m_conflictPolicy->addItem(tr("Remove original"), static_cast<int>(SaveConflictPolicy::RemoveOriginal));
+    m_conflictPolicy->setToolTip(
+        tr("Determines what happens if lyrics are saved to a different location (file ↔ tag).\n"
+           "Keep original: keeps the previous version of the lyrics in its original location.\n"
+           "Remove original: deletes the previous file or tag after saving."));
+
+    row = 0;
+    optionsLayout->addWidget(new QLabel(tr("Conflict policy") + u":"_s), row, 0);
+    optionsLayout->addWidget(m_conflictPolicy, row++, 1);
+    optionsLayout->setColumnStretch(optionsLayout->columnCount(), 1);
+
     auto* layout = new QGridLayout(this);
 
     row = 0;
@@ -149,9 +169,11 @@ LyricsSavingPageWidget::LyricsSavingPageWidget(SettingsManager* settings)
     layout->addWidget(methodGroup, row++, 0, 1, 2);
     layout->addWidget(locationGroup, row++, 0, 1, 2);
     layout->addWidget(formatGroup, row++, 0, 1, 2);
+    layout->addWidget(optionsGroup, row++, 0, 1, 2);
     layout->setRowStretch(layout->rowCount(), 1);
 
-    auto* browseAction = new QAction(Utils::iconFromTheme(::Fooyin::Constants::Icons::Options), {}, this);
+    auto* browseAction = new QAction(this);
+    Gui::setThemeIcon(browseAction, ::Fooyin::Constants::Icons::Options);
     QObject::connect(browseAction, &QAction::triggered, this, &LyricsSavingPageWidget::browseDestination);
     m_path->addAction(browseAction, QLineEdit::TrailingPosition);
 
@@ -175,29 +197,35 @@ LyricsSavingPageWidget::LyricsSavingPageWidget(SettingsManager* settings)
 
 void LyricsSavingPageWidget::load()
 {
-    const auto saveScheme = static_cast<SaveScheme>(m_settings->value<Settings::Lyrics::SaveScheme>());
+    const auto saveScheme = static_cast<SaveScheme>(
+        m_settings->fileValue(Settings::SaveScheme, static_cast<int>(SaveScheme::Manual)).toInt());
     m_manual->setChecked(saveScheme == SaveScheme::Manual);
     m_autosave->setChecked(saveScheme == SaveScheme::Autosave);
     m_autosavePeriod->setChecked(saveScheme == SaveScheme::AutosavePeriod);
 
-    const auto saveMethod = static_cast<SaveMethod>(m_settings->value<Settings::Lyrics::SaveMethod>());
+    const auto saveMethod = static_cast<SaveMethod>(
+        m_settings->fileValue(Settings::SaveMethod, static_cast<int>(SaveMethod::Directory)).toInt());
     m_tag->setChecked(saveMethod == SaveMethod::Tag);
     m_directory->setChecked(saveMethod == SaveMethod::Directory);
 
-    const auto savePrefer = static_cast<SavePrefer>(m_settings->value<Settings::Lyrics::SavePrefer>());
+    const auto savePrefer = static_cast<SavePrefer>(
+        m_settings->fileValue(Settings::SavePrefer, static_cast<int>(SavePrefer::None)).toInt());
     m_noPreference->setChecked(savePrefer == SavePrefer::None);
     m_saveSynced->setChecked(savePrefer == SavePrefer::Synced);
     m_saveUnsynced->setChecked(savePrefer == SavePrefer::Unsynced);
 
-    m_syncedTag->setText(m_settings->value<Settings::Lyrics::SaveSyncedTag>());
-    m_unyncedTag->setText(m_settings->value<Settings::Lyrics::SaveUnsyncedTag>());
+    m_syncedTag->setText(m_settings->fileValue(Settings::SaveSyncedTag, u"LYRICS"_s).toString());
+    m_unyncedTag->setText(m_settings->fileValue(Settings::SaveUnsyncedTag, u"UNSYNCED LYRICS"_s).toString());
 
-    m_path->setText(m_settings->value<Settings::Lyrics::SaveDir>());
-    m_filename->setText(m_settings->value<Settings::Lyrics::SaveFilename>());
+    m_path->setText(m_settings->fileValue(Settings::SaveDir, u"%path%"_s).toString());
+    m_filename->setText(m_settings->fileValue(Settings::SaveFilename, u"%filename%"_s).toString());
 
-    const auto opts = static_cast<LyricsSaver::SaveOptions>(m_settings->value<Settings::Lyrics::SaveOptions>());
+    const auto opts = static_cast<LyricsSaver::SaveOptions>(m_settings->fileValue(Settings::SaveOptions, 0).toInt());
     m_collapse->setChecked(opts & LyricsSaver::Collapse);
     m_metadata->setChecked(opts & LyricsSaver::Metadata);
+
+    const auto policy = m_settings->fileValue(Settings::SaveConflict, 0).toInt();
+    m_conflictPolicy->setCurrentIndex(m_conflictPolicy->findData(policy));
 }
 
 void LyricsSavingPageWidget::apply()
@@ -212,16 +240,16 @@ void LyricsSavingPageWidget::apply()
     else {
         saveScheme = SaveScheme::AutosavePeriod;
     }
-    m_settings->set<Settings::Lyrics::SaveScheme>(static_cast<int>(saveScheme));
+    m_settings->fileSet(Settings::SaveScheme, static_cast<int>(saveScheme));
 
-    SaveMethod saveMethod{SaveMethod::Tag};
+    SaveMethod saveMethod;
     if(m_tag->isChecked()) {
         saveMethod = SaveMethod::Tag;
     }
     else {
         saveMethod = SaveMethod::Directory;
     }
-    m_settings->set<Settings::Lyrics::SaveMethod>(static_cast<int>(saveMethod));
+    m_settings->fileSet(Settings::SaveMethod, static_cast<int>(saveMethod));
 
     SavePrefer savePrefer{SavePrefer::None};
     if(m_noPreference->isChecked()) {
@@ -233,13 +261,13 @@ void LyricsSavingPageWidget::apply()
     else {
         savePrefer = SavePrefer::Unsynced;
     }
-    m_settings->set<Settings::Lyrics::SavePrefer>(static_cast<int>(savePrefer));
+    m_settings->fileSet(Settings::SavePrefer, static_cast<int>(savePrefer));
 
-    m_settings->set<Settings::Lyrics::SaveSyncedTag>(m_syncedTag->text());
-    m_settings->set<Settings::Lyrics::SaveUnsyncedTag>(m_unyncedTag->text());
+    m_settings->fileSet(Settings::SaveSyncedTag, m_syncedTag->text());
+    m_settings->fileSet(Settings::SaveUnsyncedTag, m_unyncedTag->text());
 
-    m_settings->set<Settings::Lyrics::SaveDir>(m_path->text());
-    m_settings->set<Settings::Lyrics::SaveFilename>(m_filename->text());
+    m_settings->fileSet(Settings::SaveDir, m_path->text());
+    m_settings->fileSet(Settings::SaveFilename, m_filename->text());
 
     LyricsSaver::SaveOptions opts;
     if(m_collapse->isChecked()) {
@@ -248,19 +276,24 @@ void LyricsSavingPageWidget::apply()
     if(m_metadata->isChecked()) {
         opts |= LyricsSaver::Metadata;
     }
-    m_settings->set<Settings::Lyrics::SaveOptions>(static_cast<int>(opts));
+    m_settings->fileSet(Settings::SaveOptions, static_cast<int>(opts));
+
+    const auto policy = m_conflictPolicy->currentData().toInt();
+    m_settings->fileSet(Settings::SaveConflict, policy);
 }
 
 void LyricsSavingPageWidget::reset()
 {
-    m_settings->reset<Settings::Lyrics::SaveScheme>();
-    m_settings->reset<Settings::Lyrics::SaveMethod>();
-    m_settings->reset<Settings::Lyrics::SavePrefer>();
-    m_settings->reset<Settings::Lyrics::SaveSyncedTag>();
-    m_settings->reset<Settings::Lyrics::SaveUnsyncedTag>();
-    m_settings->reset<Settings::Lyrics::SaveDir>();
-    m_settings->reset<Settings::Lyrics::SaveFilename>();
-    m_settings->reset<Settings::Lyrics::SaveOptions>();
+    m_settings->fileRemove(Settings::SaveScheme);
+    m_settings->fileRemove(Settings::SaveMethod);
+    m_settings->fileRemove(Settings::SavePrefer);
+    m_settings->fileRemove(Settings::SaveSyncedTag);
+    m_settings->fileRemove(Settings::SaveUnsyncedTag);
+    m_settings->fileRemove(Settings::SaveDir);
+    m_settings->fileRemove(Settings::SaveFilename);
+    m_settings->fileRemove(Settings::SaveOptions);
+    m_settings->fileRemove(Settings::SaveConflict);
+    load();
 }
 
 void LyricsSavingPageWidget::browseDestination() const
@@ -278,7 +311,8 @@ LyricsSavingPage::LyricsSavingPage(SettingsManager* settings, QObject* parent)
 {
     setId(Constants::Page::LyricsSaving);
     setName(tr("Saving"));
-    setCategory({tr("Lyrics")});
+    setCategory({tr("Lyrics"), tr("Saving")});
+    setRelativePosition(SettingsPageRelativePosition::After, ::Fooyin::Constants::Page::PlaylistGeneral);
     setWidgetCreator([settings] { return new LyricsSavingPageWidget(settings); });
 }
 } // namespace Fooyin::Lyrics

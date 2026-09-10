@@ -5,6 +5,8 @@ create_fooyin_plugin_internal(
             Qt6::Network
     SOURCES customservicedialog.cpp
             customservicedialog.h
+            lovedcache.cpp
+            lovedcache.h
             scrobbler.cpp
             scrobbler.h
             scrobblerauthsession.cpp
@@ -15,16 +17,16 @@ create_fooyin_plugin_internal(
             scrobblerplugin.h
             scrobblertoggle.cpp
             scrobblertoggle.h
-            services/servicedetails.cpp
-            services/servicedetails.h
             services/lastfmservice.cpp
             services/lastfmservice.h
-            services/librefmservice.h
             services/librefmservice.cpp
+            services/librefmservice.h
             services/listenbrainzservice.cpp
             services/listenbrainzservice.h
             services/scrobblerservice.cpp
             services/scrobblerservice.h
+            services/servicedetails.cpp
+            services/servicedetails.h
             settings/scrobblerpage.cpp
             settings/scrobblerpage.h
             settings/scrobblerservicespage.cpp

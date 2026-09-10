@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2025, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2025, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "internalguisettings.h"
 
 #include <gui/guiconstants.h>
+#include <gui/widgets/scriptlineedit.h>
 #include <gui/widgets/slidereditor.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -29,8 +30,6 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
-#include <QLineEdit>
-#include <QPlainTextEdit>
 #include <QSpinBox>
 
 using namespace Qt::StringLiterals;
@@ -52,9 +51,9 @@ private:
 
     QCheckBox* m_autoSearch;
 
-    QLineEdit* m_titleParam;
-    QLineEdit* m_artistParam;
-    QLineEdit* m_albumParam;
+    ScriptLineEdit* m_titleParam;
+    ScriptLineEdit* m_artistParam;
+    ScriptLineEdit* m_albumParam;
     SliderEditor* m_matchThreshold;
     QSpinBox* m_finderThumbSize;
 };
@@ -62,9 +61,9 @@ private:
 ArtworkSearchingPageWidget::ArtworkSearchingPageWidget(SettingsManager* settings)
     : m_settings{settings}
     , m_autoSearch{new QCheckBox(tr("Automatically search for missing artwork on starting playback"), this)}
-    , m_titleParam{new QLineEdit(this)}
-    , m_artistParam{new QLineEdit(this)}
-    , m_albumParam{new QLineEdit(this)}
+    , m_titleParam{new ScriptLineEdit(this)}
+    , m_artistParam{new ScriptLineEdit(this)}
+    , m_albumParam{new ScriptLineEdit(this)}
     , m_matchThreshold{new SliderEditor(tr("Minimum match threshold"), this)}
     , m_finderThumbSize{new QSpinBox(this)}
 {
@@ -86,7 +85,7 @@ ArtworkSearchingPageWidget::ArtworkSearchingPageWidget(SettingsManager* settings
 
     m_finderThumbSize->setMinimum(10);
     m_finderThumbSize->setMaximum(1000);
-    m_finderThumbSize->setSuffix(u"px"_s);
+    m_finderThumbSize->setSuffix(u" px"_s);
 
     const auto thumbTooltip = tr("Size of thumbnails in Artwork Finder when searching for artwork");
 

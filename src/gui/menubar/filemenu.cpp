@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,14 +20,12 @@
 #include "filemenu.h"
 
 #include "core/application.h"
-#include "gui/guiconstants.h"
 
+#include <gui/guiconstants.h>
+#include <gui/iconloader.h>
 #include <utils/actions/actioncontainer.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/actions/command.h>
-#include <utils/settings/settingsdialogcontroller.h>
-#include <utils/settings/settingsmanager.h>
-#include <utils/utils.h>
 
 #include <QAction>
 #include <QApplication>
@@ -35,10 +33,9 @@
 using namespace Qt::StringLiterals;
 
 namespace Fooyin {
-FileMenu::FileMenu(ActionManager* actionManager, SettingsManager* settings, QObject* parent)
+FileMenu::FileMenu(ActionManager* actionManager, QObject* parent)
     : QObject{parent}
     , m_actionManager{actionManager}
-    , m_settings{settings}
 {
     auto* fileMenu = m_actionManager->actionContainer(Constants::Menus::File);
 
@@ -57,6 +54,13 @@ FileMenu::FileMenu(ActionManager* actionManager, SettingsManager* settings, QObj
     addFoldersCommand->setCategories(fileCategory);
     fileMenu->addAction(addFoldersCommand, Actions::Groups::One);
     QObject::connect(addFolders, &QAction::triggered, this, &FileMenu::requestAddFolders);
+
+    auto* addStreamUrl = new QAction(tr("Add stream &URL…"), this);
+    addStreamUrl->setStatusTip(tr("Add the specified stream URL to the current playlist"));
+    auto* addStreamUrlCommand = m_actionManager->registerAction(addStreamUrl, Constants::Actions::AddStreamUrl);
+    addStreamUrlCommand->setCategories(fileCategory);
+    fileMenu->addAction(addStreamUrlCommand, Actions::Groups::One);
+    QObject::connect(addStreamUrl, &QAction::triggered, this, &FileMenu::requestAddStreamUrl);
 
     fileMenu->addSeparator();
 
@@ -99,8 +103,9 @@ FileMenu::FileMenu(ActionManager* actionManager, SettingsManager* settings, QObj
 
     fileMenu->addSeparator();
 
-    auto* quit = new QAction(Utils::iconFromTheme(Constants::Icons::Quit), tr("&Quit"), this);
-    quit->setStatusTip(tr("Quit %1").arg(u"fooyin"_s));
+    auto* quit = new QAction(tr("&Quit"), this);
+    Gui::setThemeIcon(quit, Constants::Icons::Quit);
+    quit->setStatusTip(tr("Quit fooyin"));
     auto* quitCommand = m_actionManager->registerAction(quit, Constants::Actions::Exit);
     quitCommand->setCategories(fileCategory);
     quitCommand->setDefaultShortcut(QKeySequence::Quit);

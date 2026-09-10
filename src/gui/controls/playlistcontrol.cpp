@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include <core/player/playercontroller.h>
 #include <gui/guiconstants.h>
 #include <gui/guisettings.h>
+#include <gui/iconloader.h>
 #include <gui/widgets/toolbutton.h>
 #include <utils/actions/actionmanager.h>
 #include <utils/settings/settingsmanager.h>
@@ -39,10 +40,8 @@ namespace Fooyin {
 PlaylistControl::PlaylistControl(PlayerController* playerController, SettingsManager* settings, QWidget* parent)
     : FyWidget{parent}
     , m_playerController{playerController}
-    , m_settings{settings}
-    , m_repeat{new ToolButton(this)}
-    , m_shuffle{new ToolButton(this)}
-    , m_iconColour{palette().highlight().color()}
+    , m_repeat{new ToolButton(settings, this)}
+    , m_shuffle{new ToolButton(settings, this)}
 
 {
     auto* layout = new QHBoxLayout(this);
@@ -66,12 +65,11 @@ PlaylistControl::PlaylistControl(PlayerController* playerController, SettingsMan
     setMode(playerController->playMode());
 
     setupMenus();
-    updateButtonStyle();
 
     QObject::connect(playerController, &PlayerController::playModeChanged, this, &PlaylistControl::setMode);
 
     settings->subscribe<Settings::Gui::IconTheme>(this, [this]() { setMode(m_playerController->playMode()); });
-    settings->subscribe<Settings::Gui::ToolButtonStyle>(this, &PlaylistControl::updateButtonStyle);
+    settings->subscribe<Settings::Gui::ResolvedAppStyle>(this, [this]() { setMode(m_playerController->playMode()); });
 }
 
 QString PlaylistControl::name() const
@@ -82,18 +80,6 @@ QString PlaylistControl::name() const
 QString PlaylistControl::layoutName() const
 {
     return u"PlaylistControls"_s;
-}
-
-void PlaylistControl::updateButtonStyle() const
-{
-    const auto options
-        = static_cast<Settings::Gui::ToolButtonOptions>(m_settings->value<Settings::Gui::ToolButtonStyle>());
-
-    m_repeat->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_repeat->setAutoRaise(!(options & Settings::Gui::Raise));
-
-    m_shuffle->setStretchEnabled(options & Settings::Gui::Stretch);
-    m_shuffle->setAutoRaise(!(options & Settings::Gui::Raise));
 }
 
 void PlaylistControl::setupMenus()
@@ -212,23 +198,28 @@ void PlaylistControl::setMode(Playlist::PlayModes mode) const
 {
     if(mode & (Playlist::RepeatPlaylist | Playlist::RepeatAlbum)) {
         m_repeat->setIcon(
-            Utils::changePixmapColour(Utils::iconFromTheme(Constants::Icons::Repeat).pixmap({128, 128}), m_iconColour));
+            Utils::changePixmapColour(Gui::iconFromTheme(Constants::Icons::Repeat).pixmap({128, 128}), iconColour()));
     }
     else if(mode & Playlist::RepeatTrack) {
         m_repeat->setIcon(Utils::changePixmapColour(
-            Utils::iconFromTheme(Constants::Icons::RepeatTrack).pixmap({128, 128}), m_iconColour));
+            Gui::iconFromTheme(Constants::Icons::RepeatTrack).pixmap({128, 128}), iconColour()));
     }
     else {
-        m_repeat->setIcon(Utils::iconFromTheme(Constants::Icons::Repeat));
+        m_repeat->setIcon(Gui::iconFromTheme(Constants::Icons::Repeat));
     }
 
     if(mode & (Playlist::ShuffleTracks | Playlist::ShuffleAlbums | Playlist::Random)) {
-        m_shuffle->setIcon(Utils::changePixmapColour(Utils::iconFromTheme(Constants::Icons::Shuffle).pixmap({128, 128}),
-                                                     m_iconColour));
+        m_shuffle->setIcon(
+            Utils::changePixmapColour(Gui::iconFromTheme(Constants::Icons::Shuffle).pixmap({128, 128}), iconColour()));
     }
     else {
-        m_shuffle->setIcon(Utils::iconFromTheme(Constants::Icons::Shuffle));
+        m_shuffle->setIcon(Gui::iconFromTheme(Constants::Icons::Shuffle));
     }
+}
+
+QColor PlaylistControl::iconColour() const
+{
+    return palette().color(QPalette::Active, QPalette::Highlight);
 }
 } // namespace Fooyin
 

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,9 +38,12 @@ ElapsedProgressDialog::ElapsedProgressDialog(const QString& labelText, const QSt
     : QDialog{parent}
     , m_text{new QTextEdit(this)}
     , m_progressBar{new QProgressBar(this)}
+    , m_progressMinimum{minimum}
+    , m_progressMaximum{maximum}
     , m_isStarting{false}
     , m_isFinished{false}
     , m_wasCancelled{false}
+    , m_isBusy{false}
     , m_minDuration{0}
     , m_updateTimer{new QTimer(this)}
     , m_elapsedLabel{new QLabel(this)}
@@ -70,7 +73,7 @@ ElapsedProgressDialog::ElapsedProgressDialog(const QString& labelText, const QSt
         m_wasCancelled = true;
         m_updateTimer->stop();
         hide();
-        emit cancelled();
+        Q_EMIT cancelled();
     });
 }
 
@@ -79,24 +82,54 @@ int ElapsedProgressDialog::value() const
     return m_progressBar->value();
 }
 
+void ElapsedProgressDialog::ensureStarted()
+{
+    if(std::exchange(m_isStarting, true)) {
+        return;
+    }
+
+    QTimer::singleShot(m_minDuration, this, [this]() {
+        if(!m_isFinished && !m_wasCancelled) {
+            m_updateTimer->start();
+            updateStatus();
+            show();
+        }
+    });
+}
+
 void ElapsedProgressDialog::setValue(int value)
 {
+    if(m_isBusy) {
+        setBusy(false);
+    }
+
     m_progressBar->setValue(value);
 
-    if(!m_isStarting) {
-        m_isStarting = true;
-        QTimer::singleShot(m_minDuration, this, [this]() {
-            if(!m_isFinished && !m_wasCancelled) {
-                m_updateTimer->start();
-                updateStatus();
-                show();
-            }
-        });
-    }
-    else if(value == m_progressBar->maximum()) {
+    if(value >= m_progressBar->maximum()) {
         m_isFinished = true;
         m_updateTimer->stop();
         hide();
+        return;
+    }
+
+    ensureStarted();
+}
+
+void ElapsedProgressDialog::setBusy(bool busy)
+{
+    if(std::exchange(m_isBusy, busy) == busy) {
+        return;
+    }
+
+    if(m_isBusy) {
+        ensureStarted();
+        m_progressBar->setRange(0, 0);
+    }
+    else {
+        m_progressBar->setRange(m_progressMinimum, m_progressMaximum);
+        if(m_progressBar->value() <= 0) {
+            m_progressBar->setValue(m_progressMinimum);
+        }
     }
 }
 
@@ -137,16 +170,14 @@ QSize ElapsedProgressDialog::sizeHint() const
 
 void ElapsedProgressDialog::updateStatus()
 {
-    m_elapsedLabel->setText(tr("Time elapsed") + ": "_L1 + Utils::msToString(m_elapsedTimer.elapsed(), false));
+    m_elapsedLabel->setText(tr("Time elapsed: %1").arg(Utils::msToString(m_elapsedTimer.elapsed(), false)));
 
     const int current = m_progressBar->value();
     const int max     = m_progressBar->maximum();
     const int min     = m_progressBar->minimum();
 
-    const QString remainingText = tr("Estimated") + ": "_L1;
-
-    if(current <= min) {
-        m_remainingLabel->setText(remainingText + tr("Calculating…"));
+    if(m_isBusy || max <= min || current <= min) {
+        m_remainingLabel->setText(tr("Estimated: %1").arg(tr("Calculating…")));
         return;
     }
 
@@ -157,6 +188,6 @@ void ElapsedProgressDialog::updateStatus()
     const double remainingSecs = remaining / (current / elapsedSecs);
     const auto remainingMs     = static_cast<std::chrono::milliseconds>(static_cast<int>(remainingSecs * 1000));
 
-    m_remainingLabel->setText(remainingText + Utils::msToString(remainingMs, false));
+    m_remainingLabel->setText(tr("Estimated: %1").arg(Utils::msToString(remainingMs, false)));
 }
 } // namespace Fooyin

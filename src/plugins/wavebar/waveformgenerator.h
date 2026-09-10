@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,12 +22,12 @@
 #include "wavebardatabase.h"
 
 #include <core/engine/audioinput.h>
+#include <core/engine/audioloader.h>
 #include <core/track.h>
 #include <utils/database/dbconnectionhandler.h>
 #include <utils/database/dbconnectionpool.h>
 #include <utils/worker.h>
 
-#include <QFile>
 #include <QLoggingCategory>
 
 Q_DECLARE_LOGGING_CATEGORY(WAVEBAR)
@@ -44,21 +44,19 @@ public:
     explicit WaveformGenerator(std::shared_ptr<AudioLoader> audioLoader, DbConnectionPoolPtr dbPool,
                                QObject* parent = nullptr);
 
-signals:
+Q_SIGNALS:
     void generatingWaveform();
     void waveformGenerated(const Fooyin::Track& track, const Fooyin::WaveBar::WaveformData<float>& data);
 
-public slots:
+public Q_SLOTS:
     void initialiseThread() override;
     void generate(const Fooyin::Track& track, int samplesPerChannel, bool render, bool update = false);
 
 private:
     QString setup(const Track& track, int samplesPerChannel);
-    void processBuffer(const AudioBuffer& buffer);
 
     std::shared_ptr<AudioLoader> m_audioLoader;
-    std::unique_ptr<QIODevice> m_file;
-    std::unique_ptr<AudioDecoder> m_decoder;
+    LoadedDecoder m_loadedDecoder;
     DbConnectionPoolPtr m_dbPool;
     std::unique_ptr<DbConnectionHandler> m_dbHandler;
     WaveBarDatabase m_waveDb;
@@ -66,7 +64,6 @@ private:
     Track m_track;
     AudioFormat m_format;
     AudioFormat m_requiredFormat;
-    int m_samplesPerChannel;
     WaveformData<float> m_data;
 };
 } // namespace WaveBar

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,30 +19,29 @@
 
 #pragma once
 
-#include "internalguisettings.h"
-
+#include <gui/fywidget.h>
 #include <gui/propertiesdialog.h>
 
-#include <QBasicTimer>
-#include <QWidget>
+class QJsonObject;
 
 namespace Fooyin {
+class ActionManager;
 class Application;
-class InfoFilterModel;
-class InfoModel;
-class InfoView;
+class InfoPanel;
 class LibraryManager;
-class PlayerController;
+class SelectionInfoFieldRegistry;
 class SettingsManager;
 class TrackSelectionController;
 
-class InfoWidget : public PropertiesTabWidget
+class InfoWidget : public FyWidget
 {
     Q_OBJECT
 
 public:
-    InfoWidget(const TrackList& tracks, LibraryManager* libraryManager, QWidget* parent = nullptr);
-    InfoWidget(Application* app, TrackSelectionController* selectionController, QWidget* parent = nullptr);
+    InfoWidget(const TrackList& tracks, LibraryManager* libraryManager, ActionManager* actionManager,
+               SettingsManager* settings, SelectionInfoFieldRegistry* fieldRegistry, QWidget* parent = nullptr);
+    InfoWidget(Application* app, ActionManager* actionManager, TrackSelectionController* selectionController,
+               SelectionInfoFieldRegistry* fieldRegistry, QWidget* parent = nullptr);
     ~InfoWidget() override;
 
     [[nodiscard]] QString name() const override;
@@ -51,30 +50,23 @@ public:
     void loadLayoutData(const QJsonObject& layout) override;
     void finalise() override;
 
+private:
+    InfoPanel* m_panel;
+};
+
+class InfoPropertiesTab : public PropertiesTabWidget
+{
+    Q_OBJECT
+
+public:
+    InfoPropertiesTab(const TrackList& tracks, LibraryManager* libraryManager, ActionManager* actionManager,
+                      SettingsManager* settings, SelectionInfoFieldRegistry* fieldRegistry, QWidget* parent = nullptr);
+    ~InfoPropertiesTab() override;
+
+    void updateTracks(const TrackList& tracks) override;
     [[nodiscard]] bool canApply() const override;
 
-protected:
-    void contextMenuEvent(QContextMenuEvent* event) override;
-    void timerEvent(QTimerEvent* event) override;
-
 private:
-    void resetModel();
-    void resetView();
-
-    TrackSelectionController* m_selectionController;
-    PlayerController* m_playerController;
-    SettingsManager* m_settings;
-
-    InfoView* m_view;
-    InfoFilterModel* m_proxyModel;
-    InfoModel* m_model;
-    QBasicTimer m_resetTimer;
-    SelectionDisplay m_displayOption;
-    int m_scrollPos;
-
-    bool m_showHeader;
-    bool m_showVerticalScrollbar;
-    bool m_showHorizontalScrollbar;
-    bool m_alternatingColours;
+    InfoPanel* m_panel;
 };
 } // namespace Fooyin

@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,8 +22,6 @@
 #include <core/track.h>
 #include <utils/settings/settingsmanager.h>
 
-#include <utility>
-
 namespace Fooyin::WaveBar {
 WaveformBuilder::WaveformBuilder(std::shared_ptr<AudioLoader> decoderProvider, DbConnectionPoolPtr dbPool,
                                  SettingsManager* settings, QObject* parent)
@@ -32,6 +30,12 @@ WaveformBuilder::WaveformBuilder(std::shared_ptr<AudioLoader> decoderProvider, D
     , m_generator{std::move(decoderProvider), std::move(dbPool)}
     , m_width{0}
     , m_samplesPerChannel{settings->value<Settings::WaveBar::NumSamples>()}
+    , m_sampleWidth{1}
+    , m_supersampleFactor{1}
+    , m_downmix{false}
+    , m_peakDisplayMode{PeakDisplayMode::Maximum}
+    , m_normaliseToPeak{false}
+    , m_decibelScale{false}
     , m_rescale{false}
 {
     updateRescaler();
@@ -41,7 +45,7 @@ WaveformBuilder::WaveformBuilder(std::shared_ptr<AudioLoader> decoderProvider, D
 
     QObject::connect(&m_generator, &WaveformGenerator::generatingWaveform, this, &WaveformBuilder::generatingWaveform);
     QObject::connect(&m_generator, &WaveformGenerator::waveformGenerated, this,
-                     [this](const Fooyin::Track& track, const auto& /*data*/) { emit waveformGenerated(track); });
+                     [this](const Fooyin::Track& track, const auto& /*data*/) { Q_EMIT waveformGenerated(track); });
     QObject::connect(&m_generator, &WaveformGenerator::waveformGenerated, &m_rescaler,
                      [this](const Track& /*track*/, const auto& data) {
                          if(m_rescale) {
@@ -50,9 +54,6 @@ WaveformBuilder::WaveformBuilder(std::shared_ptr<AudioLoader> decoderProvider, D
                      });
     QObject::connect(&m_rescaler, &WaveformRescaler::waveformRescaled, this, &WaveformBuilder::waveformRescaled);
 
-    m_settings->subscribe<Settings::WaveBar::BarWidth>(this, &WaveformBuilder::updateRescaler);
-    m_settings->subscribe<Settings::WaveBar::BarGap>(this, &WaveformBuilder::updateRescaler);
-    m_settings->subscribe<Settings::WaveBar::Downmix>(this, &WaveformBuilder::updateRescaler);
     m_settings->subscribe<Settings::WaveBar::NumSamples>(this, [this](const int num) { m_samplesPerChannel = num; });
 
     m_generatorThread.start();
@@ -98,13 +99,60 @@ void WaveformBuilder::rescale(const int width)
     }
 }
 
+void WaveformBuilder::setSampleWidth(int width)
+{
+    const int validatedWidth = std::max(1, width);
+    if(std::exchange(m_sampleWidth, validatedWidth) != validatedWidth) {
+        updateRescaler();
+    }
+}
+
+void WaveformBuilder::setDownmix(DownmixOption option)
+{
+    if(std::exchange(m_downmix, option) != option) {
+        updateRescaler();
+    }
+}
+
+void WaveformBuilder::setSupersampleFactor(int factor)
+{
+    factor = std::max(1, factor);
+    if(std::exchange(m_supersampleFactor, factor) != factor) {
+        updateRescaler();
+    }
+}
+
+void WaveformBuilder::setPeakDisplayMode(PeakDisplayMode mode)
+{
+    if(std::exchange(m_peakDisplayMode, mode) != mode) {
+        updateRescaler();
+    }
+}
+
+void WaveformBuilder::setNormaliseToPeak(bool normalise)
+{
+    if(std::exchange(m_normaliseToPeak, normalise) != normalise) {
+        updateRescaler();
+    }
+}
+
+void WaveformBuilder::setDecibelScale(bool decibelScale)
+{
+    if(std::exchange(m_decibelScale, decibelScale) != decibelScale) {
+        updateRescaler();
+    }
+}
+
 void WaveformBuilder::updateRescaler()
 {
     m_rescaler.stopThread();
     QMetaObject::invokeMethod(&m_rescaler, [this]() {
-        m_rescaler.changeSampleWidth(m_settings->value<Settings::WaveBar::BarWidth>()
-                                     + m_settings->value<Settings::WaveBar::BarGap>());
-        m_rescaler.changeDownmix(static_cast<DownmixOption>(m_settings->value<Settings::WaveBar::Downmix>()));
+        m_rescaler.changeSampleWidth(m_sampleWidth);
+        m_rescaler.changeDownmix(m_downmix);
+        m_rescaler.changeSupersampleFactor(m_supersampleFactor);
+        m_rescaler.changePeakDisplayMode(m_peakDisplayMode);
+        m_rescaler.changeNormaliseToPeak(m_normaliseToPeak);
+        m_rescaler.changeDecibelScale(m_decibelScale);
     });
 }
 } // namespace Fooyin::WaveBar

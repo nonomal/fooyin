@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,6 +22,7 @@
 #include "settings/scrobblersettings.h"
 
 #include <core/network/networkaccessmanager.h>
+#include <core/scripting/trackqueryfilter.h>
 #include <utils/fypaths.h>
 #include <utils/settings/settingsmanager.h>
 
@@ -45,11 +46,14 @@ using namespace Qt::StringLiterals;
 
 constexpr auto MinScrobbleDelay        = 5000;
 constexpr auto MinScrobbleDelayOnError = 30000;
+constexpr auto MinLovedDelay           = 500;
+constexpr auto MinLovedDelayOnError    = 30000;
 
 namespace {
 bool canBeScrobbled(const Fooyin::Track& track)
 {
-    return track.isValid() && !track.artists().empty() && !track.title().isEmpty() && track.duration() >= 30000;
+    return track.isValid() && !track.isRemote() && track.hasArtists() && !track.title().isEmpty()
+        && track.duration() >= 30000;
 }
 } // namespace
 
@@ -59,14 +63,16 @@ ScrobblerService::ScrobblerService(ServiceDetails details, NetworkAccessManager*
     : QObject{parent}
     , m_network{network}
     , m_settings{settings}
-    , m_scriptParser{new ScriptRegistry()}
     , m_details{std::move(details)}
     , m_authSession{nullptr}
     , m_cache{nullptr}
+    , m_lovedCache{nullptr}
     , m_submitError{false}
+    , m_lovedSubmitError{false}
     , m_timestamp{0}
     , m_scrobbled{false}
     , m_submitted{false}
+    , m_lovedSubmitted{false}
 { }
 
 ScrobblerService::~ScrobblerService()
@@ -109,6 +115,16 @@ bool ScrobblerService::isAuthenticated() const
     return true;
 }
 
+bool ScrobblerService::supportsLoved() const
+{
+    return false;
+}
+
+bool ScrobblerService::supportsTrackStatsSync() const
+{
+    return false;
+}
+
 bool ScrobblerService::isCustom() const
 {
     return m_details.isCustom();
@@ -121,16 +137,44 @@ ServiceDetails ScrobblerService::details() const
 
 void ScrobblerService::updateDetails(const ServiceDetails& details)
 {
+    const bool wasActive          = isEnabled() && isAuthenticated();
+    const bool wasSubmittingLoved = m_details.submitLoved;
+
     if(isCustom() && details.name != m_details.name) {
         deleteSession();
     }
     m_details = details;
+
+    const bool isActive = isEnabled() && isAuthenticated();
+    if(!isActive) {
+        if(m_submitTimer.isActive()) {
+            m_submitTimer.stop();
+        }
+        if(m_lovedSubmitTimer.isActive()) {
+            m_lovedSubmitTimer.stop();
+        }
+        if(!m_replies.empty() || m_authSession || m_submitted) {
+            deleteAll();
+            setSubmitted(false);
+            m_lovedSubmitted = false;
+        }
+    }
+    else if(!wasActive) {
+        doDelayedSubmit();
+        doDelayedLovedSubmit();
+    }
+    else if(details.submitLoved && !wasSubmittingLoved) {
+        doDelayedLovedSubmit();
+    }
 }
 
 void ScrobblerService::initialise()
 {
     if(!m_cache) {
         m_cache = new ScrobblerCache(Utils::cachePath() + "/"_L1 + name().toLower() + ".cache"_L1, m_settings, this);
+    }
+    if(!m_lovedCache) {
+        m_lovedCache = new LovedCache(Utils::cachePath() + "/"_L1 + name().toLower() + ".loved.cache"_L1, this);
     }
 }
 
@@ -148,7 +192,7 @@ void ScrobblerService::authenticate()
     QUrl url{authUrl()};
     url.setQuery(query);
 
-    const QString messageTitle = tr("%1 Authentication").arg(name());
+    const QString messageTitle = tr("Authentication");
     const QString messageSubtitle
         = tr("Open url in web browser?") + u"<br /><br /><a href=\"%1\">%1</a><br />"_s.arg(url.toString());
 
@@ -176,9 +220,9 @@ void ScrobblerService::authenticate()
     });
     QObject::connect(message, &QMessageBox::finished, this, [this, url](const int result) {
         switch(result) {
-            case(QMessageBox::Cancel):
+            case QMessageBox::Cancel:
                 cleanupAuth();
-                emit authenticationFinished(false);
+                Q_EMIT authenticationFinished(false);
             default:
                 break;
         }
@@ -200,26 +244,59 @@ void ScrobblerService::saveCache()
     if(m_cache) {
         m_cache->writeCache();
     }
+    if(m_lovedCache) {
+        m_lovedCache->writeCache();
+    }
 }
 
-void ScrobblerService::updateNowPlaying(const Track& track)
+void ScrobblerService::resumePendingSubmissions()
+{
+    if(!m_cache || !m_lovedCache) {
+        return;
+    }
+
+    const int pendingCount = m_cache->count();
+    if(!isEnabled()) {
+        qCDebug(SCROBBLER) << "Pending scrobbles will not resume for disabled service" << name() << "count"
+                           << pendingCount;
+        return;
+    }
+
+    if(!isAuthenticated()) {
+        qCDebug(SCROBBLER) << "Pending scrobbles will not resume until authentication succeeds for" << name() << "count"
+                           << pendingCount;
+        return;
+    }
+
+    if(pendingCount > 0) {
+        qCDebug(SCROBBLER) << "Resuming pending scrobbles for" << name() << "count" << pendingCount;
+        doDelayedSubmit();
+    }
+    doDelayedLovedSubmit();
+}
+
+void ScrobblerService::restartScrobbleSession(const Track& track)
 {
     m_currentTrack = track;
     m_timestamp    = static_cast<uint64_t>(QDateTime::currentSecsSinceEpoch());
     m_scrobbled    = false;
+}
 
-    if(!settings()->value<Settings::Scrobbler::ScrobblingEnabled>()) {
+void ScrobblerService::updateNowPlaying(const Track& track)
+{
+    restartScrobbleSession(track);
+
+    if(!shouldUpdateNowPlaying(track)) {
         return;
     }
 
-    if(!isAuthenticated() || !canBeScrobbled(track)) {
-        return;
-    }
+    updateNowPlaying();
+}
 
-    if(m_settings->value<Settings::Scrobbler::EnableScrobbleFilter>()) {
-        if(!allowedByFilter(track)) {
-            return;
-        }
+void ScrobblerService::refreshNowPlaying()
+{
+    if(!shouldUpdateNowPlaying(m_currentTrack)) {
+        return;
     }
 
     updateNowPlaying();
@@ -232,6 +309,10 @@ void ScrobblerService::scrobble(const Track& track)
     }
 
     if(!canBeScrobbled(track)) {
+        return;
+    }
+
+    if(m_scrobbled) {
         return;
     }
 
@@ -254,6 +335,34 @@ void ScrobblerService::scrobble(const Track& track)
 
     doDelayedSubmit(true);
 }
+
+void ScrobblerService::updateLoved(const Track& track)
+{
+    if(!supportsLoved() || !m_details.submitLoved || !m_lovedCache) {
+        return;
+    }
+
+    Metadata metadata{&m_scriptParser, m_settings, track};
+    if(metadata.artist.isEmpty() || metadata.title.isEmpty()) {
+        qCWarning(SCROBBLER) << "Unable to submit Loved state without an artist and title for" << track.filepath();
+        return;
+    }
+
+    m_lovedCache->set(std::move(metadata), track.isLoved());
+    doDelayedLovedSubmit(true);
+}
+
+bool ScrobblerService::hasPendingLoved(const Track& track)
+{
+    if(!m_details.submitLoved || !m_lovedCache) {
+        return false;
+    }
+
+    const Metadata metadata{&m_scriptParser, m_settings, track};
+    return m_lovedCache->contains(metadata);
+}
+
+void ScrobblerService::fetchTrackStats(const Track& /*track*/) { }
 
 QString ScrobblerService::tokenSetting() const
 {
@@ -291,6 +400,24 @@ ScrobblerCache* ScrobblerService::cache() const
     return m_cache;
 }
 
+LovedCache* ScrobblerService::lovedCache() const
+{
+    return m_lovedCache;
+}
+
+void ScrobblerService::submitLoved(const LovedItem& /*item*/) { }
+
+void ScrobblerService::lovedUpdateFinished(const LovedItem& item, const LovedUpdateResult result)
+{
+    m_lovedSubmitted = false;
+
+    if(result != LovedUpdateResult::Retry) {
+        m_lovedCache->remove(item.key, item.revision);
+    }
+    m_lovedSubmitError = result == LovedUpdateResult::Retry;
+    doDelayedLovedSubmit();
+}
+
 SettingsManager* ScrobblerService::settings() const
 {
     return m_settings;
@@ -322,10 +449,28 @@ bool ScrobblerService::removeReply(QNetworkReply* reply)
     return true;
 }
 
+bool ScrobblerService::shouldUpdateNowPlaying(const Track& track)
+{
+    if(!settings()->value<Settings::Scrobbler::ScrobblingEnabled>()) {
+        return false;
+    }
+
+    if(!isAuthenticated() || !canBeScrobbled(track)) {
+        return false;
+    }
+
+    if(m_settings->value<Settings::Scrobbler::EnableScrobbleFilter>() && !allowedByFilter(track)) {
+        return false;
+    }
+
+    return true;
+}
+
 bool ScrobblerService::allowedByFilter(const Track& track)
 {
     const QString query = m_settings->value<Settings::Scrobbler::ScrobbleFilter>();
-    return m_scriptParser.filter(query, {track}).empty();
+    TrackQueryFilter filter;
+    return filter.filter(query, {track}).empty();
 }
 
 bool ScrobblerService::extractJsonObj(const QByteArray& data, QJsonObject* obj, QString* errorDesc)
@@ -348,13 +493,13 @@ bool ScrobblerService::extractJsonObj(const QByteArray& data, QJsonObject* obj, 
 void ScrobblerService::handleTestError(const char* error)
 {
     qCWarning(SCROBBLER) << error;
-    emit testApiFinished(false, QString::fromUtf8(error));
+    Q_EMIT testApiFinished(false, QString::fromUtf8(error));
 }
 
 void ScrobblerService::handleAuthError(const char* error)
 {
     qCWarning(SCROBBLER) << error;
-    emit authenticationFinished(false, QString::fromUtf8(error));
+    Q_EMIT authenticationFinished(false, QString::fromUtf8(error));
     cleanupAuth();
 }
 
@@ -381,7 +526,26 @@ void ScrobblerService::deleteAll()
 
 void ScrobblerService::doDelayedSubmit(bool initial)
 {
-    if(m_submitted || m_cache->count() == 0) {
+    const int pendingCount = m_cache ? m_cache->count() : 0;
+    if(m_submitted) {
+        if(pendingCount > 0) {
+            qCDebug(SCROBBLER) << "Scrobble submit already in progress for" << name() << "pending count"
+                               << pendingCount;
+        }
+        return;
+    }
+
+    if(pendingCount == 0) {
+        return;
+    }
+
+    if(!isEnabled()) {
+        return;
+    }
+
+    if(!isAuthenticated()) {
+        qCDebug(SCROBBLER) << "Pending scrobbles will not submit until authentication succeeds for" << name() << "count"
+                           << pendingCount;
         return;
     }
 
@@ -391,11 +555,33 @@ void ScrobblerService::doDelayedSubmit(bool initial)
         if(m_submitTimer.isActive()) {
             m_submitTimer.stop();
         }
+        qCDebug(SCROBBLER) << "Submitting pending scrobbles immediately for" << name() << "count" << pendingCount;
         submit();
     }
     else if(!m_submitTimer.isActive()) {
         const int delay = std::max(scrobbleDelay, m_submitError ? MinScrobbleDelayOnError : MinScrobbleDelay);
+        qCDebug(SCROBBLER) << "Scheduling scrobble submit for" << name() << "count" << pendingCount << "delayMs"
+                           << delay << "afterError" << m_submitError;
         m_submitTimer.start(delay, this);
+    }
+}
+
+void ScrobblerService::doDelayedLovedSubmit(const bool initial)
+{
+    if(m_lovedSubmitted || !m_lovedCache || m_lovedCache->count() == 0 || !m_details.submitLoved || !isEnabled()
+       || !isAuthenticated()) {
+        return;
+    }
+
+    if(initial && !m_lovedSubmitError) {
+        if(m_lovedSubmitTimer.isActive()) {
+            m_lovedSubmitTimer.stop();
+        }
+        m_lovedSubmitted = true;
+        submitLoved(*m_lovedCache->first());
+    }
+    else if(!m_lovedSubmitTimer.isActive()) {
+        m_lovedSubmitTimer.start(m_lovedSubmitError ? MinLovedDelayOnError : MinLovedDelay, this);
     }
 }
 
@@ -418,7 +604,20 @@ void ScrobblerService::timerEvent(QTimerEvent* event)
 {
     if(event->timerId() == m_submitTimer.timerId()) {
         m_submitTimer.stop();
+
+        if(!isEnabled() || !isAuthenticated()) {
+            return;
+        }
+
         submit();
+    }
+    else if(event->timerId() == m_lovedSubmitTimer.timerId()) {
+        m_lovedSubmitTimer.stop();
+
+        if(m_details.submitLoved && isEnabled() && isAuthenticated()) {
+            m_lovedSubmitted = true;
+            submitLoved(*m_lovedCache->first());
+        }
     }
     QObject::timerEvent(event);
 }

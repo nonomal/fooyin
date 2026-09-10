@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,11 +23,11 @@ using namespace Qt::StringLiterals;
 
 namespace Fooyin {
 LibraryTreeGroupRegistry::LibraryTreeGroupRegistry(SettingsManager* settings, QObject* parent)
-    : ItemRegistry{u"LibraryTree/LibraryTreeGroups"_s, settings, parent}
+    : ItemRegistry{u"LibraryTree/LibraryTreeGroups"_s, settings, u"LibraryTree/LibraryTreeGroupOverrides"_s, parent}
 {
     QObject::connect(this, &RegistryBase::itemChanged, this, [this](int id) {
         if(const auto grouping = itemById(id)) {
-            emit groupingChanged(grouping.value());
+            Q_EMIT groupingChanged(grouping.value());
         }
     });
 
@@ -36,12 +36,16 @@ LibraryTreeGroupRegistry::LibraryTreeGroupRegistry(SettingsManager* settings, QO
 
 void LibraryTreeGroupRegistry::loadDefaults()
 {
-    addDefaultItem({.id     = 0,
-                    .name   = tr("Artist/Album"),
-                    .script = u"[%albumartist%]||[%album%][ (%year%)]||[%disc%.][$num(%track%,2). ]%title%"_s});
+    addDefaultItem({.id         = 0,
+                    .name       = tr("Artist/Album"),
+                    .script     = u"[%albumartist%]||[%album%][ (%year%)]||[%disc%.][$num(%track%,2). ]%title%"_s,
+                    .sortScript = {}});
+    addDefaultItem({.id         = 1,
+                    .name       = tr("Album"),
+                    .script     = u"[%album%][ (%year%)]||[%disc%.][$num(%track%,2). ]%title%"_s,
+                    .sortScript = {}});
     addDefaultItem(
-        {.id = 1, .name = tr("Album"), .script = u"[%album%][ (%year%)]||[%disc%.][$num(%track%,2). ]%title%"_s});
-    addDefaultItem({.id = 2, .name = tr("Folder Structure"), .script = u"$replace(%relativepath%,/,||)"_s});
+        {.id = 2, .name = tr("Folder Structure"), .script = u"$replace(%relativepath%,/,||)"_s, .sortScript = {}});
 }
 } // namespace Fooyin
 

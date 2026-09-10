@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,6 +24,7 @@
 
 #include <core/coresettings.h>
 #include <core/network/networkaccessmanager.h>
+#include <core/network/networkutils.h>
 #include <utils/settings/settingsmanager.h>
 
 #include <QJsonArray>
@@ -31,6 +32,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrlQuery>
+
+#include <ranges>
 
 using namespace Qt::StringLiterals;
 
@@ -74,15 +77,79 @@ enum class ScrobbleError : uint8_t
     Deprecated             = 27,
     RateLimitExceeded      = 29,
 };
+
+QString previewReplyBody(const QByteArray& data)
+{
+    QString body = QString::fromUtf8(data).simplified();
+
+    static constexpr auto MaxPreviewLength = 512;
+    if(body.size() > MaxPreviewLength) {
+        body = body.left(MaxPreviewLength - 3) + "..."_L1;
+    }
+
+    return body;
 }
+
+QString describeReply(QNetworkReply* reply)
+{
+    return u"HTTP %1, network error %2 (%3)"_s.arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+        .arg(reply->errorString())
+        .arg(reply->error());
+}
+
+QString requestMethod(const std::map<QString, QString>& params)
+{
+    if(const auto methodIt = params.find(u"method"_s); methodIt != params.cend()) {
+        return methodIt->second;
+    }
+    return {};
+}
+
+int requestItemCount(const std::map<QString, QString>& params)
+{
+    int count = 0;
+    for(const auto& key : params | std::views::keys) {
+        if(key.startsWith(u"track["_s)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QByteArray encodeQueryKey(const QString& key)
+{
+    return QUrl::toPercentEncoding(key, "[]");
+}
+
+QByteArray encodeQueryValue(const QString& value)
+{
+    return QUrl::toPercentEncoding(value);
+}
+
+QString trackStatsKey(const Fooyin::Track& track)
+{
+    if(!track.hash().isEmpty()) {
+        return track.hash();
+    }
+    return QString::number(track.id()) + u':' + track.uniqueFilepath();
+}
+} // namespace
 
 namespace Fooyin::Scrobbler {
 LastFmService::LastFmService(ServiceDetails service, NetworkAccessManager* network, SettingsManager* settings,
                              QObject* parent)
     : ScrobblerService{std::move(service), network, settings, parent}
-    , m_apiKey{QString::fromLatin1(QByteArray::fromBase64(ApiKey))}
-    , m_secret{QString::fromLatin1(QByteArray::fromBase64(ApiSecret))}
 { }
+
+QString LastFmService::apiKey() const
+{
+    return QString::fromLatin1(QByteArray::fromBase64(ApiKey));
+}
+
+QString LastFmService::apiSecret() const
+{
+    return QString::fromLatin1(QByteArray::fromBase64(ApiSecret));
+}
 
 QUrl LastFmService::url() const
 {
@@ -109,12 +176,24 @@ bool LastFmService::isAuthenticated() const
     return !m_username.isEmpty() && !m_sessionKey.isEmpty();
 }
 
+bool LastFmService::supportsLoved() const
+{
+    return true;
+}
+
+bool LastFmService::supportsTrackStatsSync() const
+{
+    return true;
+}
+
 void LastFmService::saveSession()
 {
     FySettings settings;
     settings.beginGroup(isCustom() ? u"Scrobbler-"_s + name() : name());
 
     settings.setValue("IsEnabled", details().isEnabled);
+    settings.setValue("SubmitLoved", details().submitLoved);
+    settings.setValue("SyncPlaybackStats", details().syncPlaybackStats);
     settings.setValue("Username", m_username);
     settings.setValue("SessionKey", m_sessionKey);
 
@@ -129,8 +208,10 @@ void LastFmService::loadSession()
     if(settings.contains("IsEnabled")) {
         detailsRef().isEnabled = settings.value("IsEnabled").toBool();
     }
-    m_username   = settings.value("Username").toString();
-    m_sessionKey = settings.value("SessionKey").toString();
+    detailsRef().submitLoved       = settings.value("SubmitLoved", false).toBool();
+    detailsRef().syncPlaybackStats = settings.value("SyncPlaybackStats", false).toBool();
+    m_username                     = settings.value("Username").toString();
+    m_sessionKey                   = settings.value("SessionKey").toString();
 
     settings.endGroup();
 }
@@ -191,8 +272,6 @@ void LastFmService::submit()
         return;
     }
 
-    qCDebug(SCROBBLER) << "Submitting scrobbles (%1)"_L1.arg(name());
-
     std::map<QString, QString> params{{u"method"_s, u"track.scrobble"_s}};
 
     const CacheItemList items = cache()->items();
@@ -201,6 +280,9 @@ void LastFmService::submit()
     for(int i{0}; const auto& item : items) {
         if(item->submitted) {
             continue;
+        }
+        if(item->hasError && !sentItems.empty()) {
+            break;
         }
         item->submitted = true;
         sentItems.emplace_back(item);
@@ -221,7 +303,7 @@ void LastFmService::submit()
         if(!md.trackNum.isEmpty()) {
             params.emplace(u"trackNumber[%1]"_s.arg(i), md.trackNum);
         }
-        if(sentItems.size() >= MaxScrobblesPerRequest) {
+        if(sentItems.size() >= MaxScrobblesPerRequest || item->hasError) {
             break;
         }
         ++i;
@@ -231,6 +313,10 @@ void LastFmService::submit()
         return;
     }
 
+    qCDebug(SCROBBLER) << "Preparing scrobble request for" << name() << "count" << sentItems.size() << "pending"
+                       << items.size() << "timestamps" << sentItems.front()->timestamp << "to"
+                       << sentItems.back()->timestamp;
+
     setSubmitted(true);
 
     QNetworkReply* reply = createRequest(params);
@@ -238,9 +324,54 @@ void LastFmService::submit()
                      [this, reply, sentItems]() { scrobbleFinished(reply, sentItems); });
 }
 
+void LastFmService::submitLoved(const LovedItem& item)
+{
+    const std::map<QString, QString> params{{u"method"_s, item.loved ? u"track.love"_s : u"track.unlove"_s},
+                                            {u"artist"_s, item.metadata.artist},
+                                            {u"track"_s, item.metadata.title}};
+
+    QNetworkReply* reply = createRequest(params);
+    QObject::connect(reply, &QNetworkReply::finished, this, [this, reply, item]() { lovedFinished(reply, item); });
+}
+
+void LastFmService::fetchTrackStats(const Track& track)
+{
+    if(!isAuthenticated()) {
+        return;
+    }
+
+    const Metadata metadata{scriptParser(), settings(), track};
+    if(metadata.artist.isEmpty() || metadata.title.isEmpty()) {
+        return;
+    }
+
+    const QString key = trackStatsKey(track);
+    if(const auto reply = m_trackStatsReplies.find(key);
+       reply != m_trackStatsReplies.cend() && !reply->second.isNull()) {
+        return;
+    }
+
+    QUrl requestUrl{url()};
+    QUrlQuery query;
+    query.addQueryItem(u"api_key"_s, apiKey());
+    query.addQueryItem(u"method"_s, u"track.getInfo"_s);
+    query.addQueryItem(u"username"_s, username());
+    query.addQueryItem(u"artist"_s, metadata.artist);
+    query.addQueryItem(u"track"_s, metadata.title);
+    query.addQueryItem(u"autocorrect"_s, u"0"_s);
+    query.addQueryItem(u"format"_s, u"json"_s);
+    requestUrl.setQuery(query);
+
+    const QNetworkRequest request = makeNetworkRequest(requestUrl);
+    QNetworkReply* reply          = addReply(network()->get(request));
+    m_trackStatsReplies.insert_or_assign(key, reply);
+    QObject::connect(reply, &QNetworkReply::finished, this,
+                     [this, reply, key, track]() { trackStatsFinished(reply, key, track); });
+}
+
 void LastFmService::setupAuthQuery(ScrobblerAuthSession* session, QUrlQuery& query)
 {
-    query.addQueryItem(u"api_key"_s, m_apiKey);
+    query.addQueryItem(u"api_key"_s, apiKey());
     query.addQueryItem(u"cb"_s, session->callbackUrl());
 }
 
@@ -249,7 +380,7 @@ void LastFmService::requestAuth(const QString& token)
     QUrl reqUrl{url()};
 
     QUrlQuery urlQuery;
-    urlQuery.addQueryItem(u"api_key"_s, m_apiKey);
+    urlQuery.addQueryItem(u"api_key"_s, apiKey());
     urlQuery.addQueryItem(u"method"_s, u"auth.getSession"_s);
     urlQuery.addQueryItem(u"token"_s, token);
 
@@ -258,19 +389,17 @@ void LastFmService::requestAuth(const QString& token)
     for(const auto& [key, value] : items) {
         data += key + value;
     }
-    data += m_secret;
+    data += apiSecret();
 
     const QByteArray digest = QCryptographicHash::hash(data.toUtf8(), QCryptographicHash::Md5);
     const QString signature = QString::fromLatin1(digest.toHex()).rightJustified(32, u'0').toLower();
 
     urlQuery.addQueryItem(u"api_sig"_s, signature);
-    urlQuery.addQueryItem(QString::fromLatin1(QUrl::toPercentEncoding(u"format"_s)),
-                          QString::fromLatin1(QUrl::toPercentEncoding(u"json"_s)));
+    urlQuery.addQueryItem(u"format"_s, u"json"_s);
     reqUrl.setQuery(urlQuery);
 
-    QNetworkRequest req{reqUrl};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    QNetworkReply* reply = addReply(network()->get(req));
+    const QNetworkRequest req = makeNetworkRequest(reqUrl);
+    QNetworkReply* reply      = addReply(network()->get(req));
     QObject::connect(reply, &QNetworkReply::finished, this, [this, reply]() { authFinished(reply); });
 }
 
@@ -313,8 +442,9 @@ void LastFmService::authFinished(QNetworkReply* reply)
     m_sessionKey = obj.value("key"_L1).toString();
 
     saveSession();
+    resumePendingSubmissions();
 
-    emit authenticationFinished(true);
+    Q_EMIT authenticationFinished(true);
     cleanupAuth();
 }
 
@@ -322,14 +452,14 @@ ScrobblerService::ReplyResult LastFmService::getJsonFromReply(QNetworkReply* rep
                                                               QString* errorDesc)
 {
     ReplyResult replyResult{ReplyResult::ServerError};
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 
     if(reply->error() == QNetworkReply::NoError) {
-        if(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() == 200) {
+        if(httpStatus == 200) {
             replyResult = ReplyResult::Success;
         }
         else {
-            *errorDesc
-                = u"Received HTTP code %1"_s.arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt());
+            *errorDesc = u"Received HTTP code %1"_s.arg(httpStatus);
         }
     }
     else {
@@ -339,12 +469,22 @@ ScrobblerService::ReplyResult LastFmService::getJsonFromReply(QNetworkReply* rep
     if(reply->error() == QNetworkReply::NoError || reply->error() >= 200) {
         const QByteArray data = reply->readAll();
         int errorCode{0};
+        bool parsed{false};
 
-        if(!data.isEmpty() && extractJsonObj(data, obj, errorDesc) && obj->contains("error"_L1)
-           && obj->contains("message"_L1)) {
-            errorCode   = obj->value("error"_L1).toInt();
-            *errorDesc  = u"%1 (%2)"_s.arg(obj->value("message"_L1).toString()).arg(errorCode);
-            replyResult = ReplyResult::ApiError;
+        if(!data.isEmpty()) {
+            parsed = extractJsonObj(data, obj, errorDesc);
+            if(parsed && obj->contains("error"_L1) && obj->contains("message"_L1)) {
+                errorCode   = obj->value("error"_L1).toInt();
+                *errorDesc  = u"%1 (%2)"_s.arg(obj->value("message"_L1).toString()).arg(errorCode);
+                replyResult = ReplyResult::ApiError;
+            }
+        }
+
+        if(replyResult != ReplyResult::Success || (!data.isEmpty() && !parsed)) {
+            qCWarning(SCROBBLER) << "Last.fm reply details:" << describeReply(reply);
+            if(!data.isEmpty()) {
+                qCWarning(SCROBBLER) << "Last.fm reply body:" << previewReplyBody(data);
+            }
         }
 
         const auto lastfmError = static_cast<ScrobbleError>(errorCode);
@@ -354,6 +494,9 @@ ScrobblerService::ReplyResult LastFmService::getJsonFromReply(QNetworkReply* rep
             logout();
         }
     }
+    else if(replyResult != ReplyResult::Success) {
+        qCWarning(SCROBBLER) << "Last.fm reply details:" << describeReply(reply);
+    }
 
     return replyResult;
 }
@@ -361,36 +504,64 @@ ScrobblerService::ReplyResult LastFmService::getJsonFromReply(QNetworkReply* rep
 QNetworkReply* LastFmService::createRequest(const std::map<QString, QString>& params)
 {
     std::map<QString, QString> queryParams{
-        {u"api_key"_s, m_apiKey}, {u"sk"_s, m_sessionKey}, {u"lang"_s, QLocale{}.name().left(2).toLower()}};
+        {u"api_key"_s, apiKey()}, {u"sk"_s, m_sessionKey}, {u"lang"_s, QLocale{}.name().left(2).toLower()}};
     queryParams.insert(params.cbegin(), params.cend());
 
-    QUrlQuery queryUrl;
     QString data;
 
     for(const auto& [key, value] : std::as_const(queryParams)) {
-        queryUrl.addQueryItem(QString::fromLatin1(QUrl::toPercentEncoding(key)),
-                              QString::fromLatin1(QUrl::toPercentEncoding(value)));
         data += key + value;
     }
-    data += m_secret;
+    data += apiSecret();
 
     const QByteArray digest = QCryptographicHash::hash(data.toUtf8(), QCryptographicHash::Md5);
     const QString signature = QString::fromLatin1(digest.toHex()).rightJustified(32, u'0').toLower();
 
-    queryUrl.addQueryItem(u"api_sig"_s, QString::fromLatin1(QUrl::toPercentEncoding(signature)));
-    queryUrl.addQueryItem(u"format"_s, u"json"_s);
-
     const QUrl reqUrl{url()};
-    QNetworkRequest req{reqUrl};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    QNetworkRequest req = makeNetworkRequest(reqUrl);
     req.setHeader(QNetworkRequest::ContentTypeHeader, u"application/x-www-form-urlencoded"_s);
 
-    const QByteArray query = queryUrl.toString(QUrl::FullyEncoded).toUtf8();
+    queryParams.emplace(u"api_sig"_s, signature);
+    queryParams.emplace(u"format"_s, u"json"_s);
+    const QByteArray query = createRequestBody(queryParams);
 
     QNetworkReply* reply = addReply(network()->post(req, query));
-    qCDebug(SCROBBLER) << "Sending request" << queryUrl.toString(QUrl::FullyDecoded);
+    qCDebug(SCROBBLER) << "POST queued to network manager for" << name() << "method" << requestMethod(params) << "items"
+                       << requestItemCount(params) << "params" << queryParams.size() << "url" << reqUrl.toString()
+                       << "bodyBytes" << query.size();
 
     return reply;
+}
+
+QByteArray LastFmService::createRequestBody(const std::map<QString, QString>& params)
+{
+    QByteArray body;
+
+    for(const auto& [key, value] : params) {
+        if(!body.isEmpty()) {
+            body += '&';
+        }
+        body += encodeQueryKey(key);
+        body += '=';
+        body += encodeQueryValue(value);
+    }
+
+    return body;
+}
+
+LastFmService::ReplyErrorInfo LastFmService::getReplyErrorInfo(QNetworkReply* reply, const QJsonObject& obj)
+{
+    ReplyErrorInfo errorInfo;
+    errorInfo.httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+
+    if(obj.contains("error"_L1)) {
+        errorInfo.apiErrorCode = obj.value("error"_L1).toInt();
+    }
+    if(obj.contains("message"_L1)) {
+        errorInfo.message = obj.value("message"_L1).toString();
+    }
+
+    return errorInfo;
 }
 
 void LastFmService::updateNowPlayingFinished(QNetworkReply* reply)
@@ -422,8 +593,32 @@ void LastFmService::scrobbleFinished(QNetworkReply* reply, const CacheItemList& 
     QJsonObject obj;
     QString errorStr;
     if(getJsonFromReply(reply, &obj, &errorStr) != ReplyResult::Success) {
+        const ReplyErrorInfo errorInfo = getReplyErrorInfo(reply, obj);
+
+        if(errorInfo.apiErrorCode == static_cast<int>(ScrobbleError::InvalidMethodSignature)) {
+            if(items.size() == 1 && items.front()->hasError) {
+                qCWarning(SCROBBLER) << "Discarding cached Last.fm scrobble after repeated signature failure:"
+                                     << items.front()->metadata.artist << u"-"_s << items.front()->metadata.title
+                                     << "timestamp" << items.front()->timestamp;
+                cache()->flush(items);
+                setSubmitError(false);
+                doDelayedSubmit();
+                return;
+            }
+
+            qCWarning(SCROBBLER) << "Retrying Last.fm scrobbles individually after signature failure for batch of"
+                                 << items.size();
+            std::ranges::for_each(items, [](const auto& item) {
+                item->submitted = false;
+                item->hasError  = true;
+            });
+            setSubmitError(true);
+            doDelayedSubmit();
+            return;
+        }
+
         setSubmitError(true);
-        qCWarning(SCROBBLER) << errorStr;
+        qCWarning(SCROBBLER) << "Unable to scrobble for" << name() << "count" << items.size() << ":" << errorStr;
         std::ranges::for_each(items, [](const auto& item) { item->submitted = false; });
         doDelayedSubmit();
         return;
@@ -562,5 +757,61 @@ void LastFmService::scrobbleFinished(QNetworkReply* reply, const CacheItemList& 
     }
 
     doDelayedSubmit();
+}
+
+void LastFmService::lovedFinished(QNetworkReply* reply, const LovedItem& item)
+{
+    if(!removeReply(reply)) {
+        return;
+    }
+
+    QJsonObject object;
+    QString error;
+    const ReplyResult result = getJsonFromReply(reply, &object, &error);
+    if(result == ReplyResult::Success) {
+        lovedUpdateFinished(item, LovedUpdateResult::Success);
+        return;
+    }
+
+    const ReplyErrorInfo errorInfo = getReplyErrorInfo(reply, object);
+    const auto apiError            = static_cast<ScrobbleError>(errorInfo.apiErrorCode);
+    const bool retry               = result == ReplyResult::ServerError || apiError == ScrobbleError::OperationFailed
+                                  || apiError == ScrobbleError::ServiceOffline || apiError == ScrobbleError::TempUnavailable
+                                  || apiError == ScrobbleError::RateLimitExceeded;
+
+    qCWarning(SCROBBLER) << "Unable to update Loved state for" << name() << item.metadata.artist << u"-"_s
+                         << item.metadata.title << ':' << error;
+    lovedUpdateFinished(item, retry ? LovedUpdateResult::Retry : LovedUpdateResult::Discard);
+}
+
+void LastFmService::trackStatsFinished(QNetworkReply* reply, const QString& key, const Track& track)
+{
+    m_trackStatsReplies.erase(key);
+    if(!removeReply(reply)) {
+        return;
+    }
+
+    QJsonObject object;
+    QString error;
+    if(getJsonFromReply(reply, &object, &error) != ReplyResult::Success) {
+        qCWarning(SCROBBLER) << "Unable to fetch track statistics for" << name() << track.filepath() << ':' << error;
+        return;
+    }
+
+    const QJsonObject trackObject = object.value("track"_L1).toObject();
+    if(trackObject.isEmpty()) {
+        qCWarning(SCROBBLER) << "Track statistics response from" << name() << "is missing track data";
+        return;
+    }
+
+    RemoteTrackStats stats{.track = track, .loved = {}, .playCount = {}};
+    if(const QJsonValue loved = trackObject.value("userloved"_L1); !loved.isUndefined()) {
+        stats.loved = loved.toVariant().toInt() != 0;
+    }
+    if(const QJsonValue playCount = trackObject.value("userplaycount"_L1); !playCount.isUndefined()) {
+        stats.playCount = playCount.toVariant().toInt();
+    }
+
+    Q_EMIT trackStatsFetched(stats);
 }
 } // namespace Fooyin::Scrobbler

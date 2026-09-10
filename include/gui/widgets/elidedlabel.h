@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 
 #include "fygui_export.h"
 
+#include <gui/scripting/richtext.h>
+
 #include <QLabel>
 
 namespace Fooyin {
@@ -38,11 +40,19 @@ public:
 
     [[nodiscard]] QString text() const;
     void setText(const QString& text);
+    [[nodiscard]] const RichText& richText() const;
+    void setRichText(const RichText& text);
+
+    [[nodiscard]] bool multilineEnabled() const;
+    void setMultilineEnabled(bool enabled);
+
+    void clear();
 
     [[nodiscard]] QSize sizeHint() const override;
     [[nodiscard]] QSize minimumSizeHint() const override;
 
 protected:
+    void paintEvent(QPaintEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
 private:
@@ -50,6 +60,8 @@ private:
 
     Qt::TextElideMode m_elideMode;
     QString m_text;
+    RichText m_richText;
     bool m_isElided;
+    bool m_multilineEnabled;
 };
 } // namespace Fooyin

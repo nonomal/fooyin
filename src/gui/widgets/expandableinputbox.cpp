@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 
 #include <gui/widgets/expandableinputbox.h>
 
+#include <gui/iconloader.h>
 #include <utils/utils.h>
 
 #include <QApplication>
@@ -149,8 +150,8 @@ ExpandableInputBoxPrivate::ExpandableInputBoxPrivate(ExpandableInputBox* self_, 
     , m_attributes{attributes_}
     , m_widgetLayout{new QHBoxLayout()}
     , m_blockLayout{new QGridLayout()}
-    , m_addBlock{new QPushButton(Utils::iconFromTheme(AddIcon), {}, m_self)}
-    , m_deleteBlock{new QPushButton(Utils::iconFromTheme(RemoveIcon), {}, m_self)}
+    , m_addBlock{new QPushButton(Gui::iconFromTheme(AddIcon), {}, m_self)}
+    , m_deleteBlock{new QPushButton(Gui::iconFromTheme(RemoveIcon), {}, m_self)}
 {
     auto* layout = new QGridLayout(m_self);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -284,7 +285,7 @@ void ExpandableInputBox::deleteBlock()
     }
 
     auto* block = p->m_blocks.back();
-    emit blockDeleted(block->text());
+    Q_EMIT blockDeleted(block->text());
     std::erase(p->m_blocks, block);
     block->deleteLater();
 

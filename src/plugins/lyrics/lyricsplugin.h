@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,11 +25,15 @@
 
 namespace Fooyin {
 class FyWidget;
+class PlaylistHandler;
+class Track;
+class TrackSelectionController;
 
 namespace Lyrics {
 class LyricsFinder;
 class LyricsSaver;
 class LyricsSettings;
+struct Lyrics;
 
 class LyricsPlugin : public QObject,
                      public Plugin,
@@ -46,13 +50,21 @@ public:
     void shutdown() override;
 
 private:
+    [[nodiscard]] Track selectedTrack() const;
+    void openSearchDialog(const Track& track) const;
+    void quickSearchLyrics(const Track& track);
+    void openLyricsDialog(const Track& track, const Lyrics& lyrics);
+    void loadTrackLyricsAndOpenDialog(const Track& track);
+
     ActionManager* m_actionManager;
     PlayerController* m_playerController;
-    EngineController* m_engine;
+    PlaylistHandler* m_playlistHandler;
     std::shared_ptr<AudioLoader> m_audioLoader;
     std::shared_ptr<NetworkAccessManager> m_networkAccess;
+    TrackSelectionController* m_trackSelection;
     WidgetProvider* m_widgetProvider;
     SettingsManager* m_settings;
+
     std::unique_ptr<LyricsSettings> m_lyricsSettings;
     LyricsFinder* m_lyricsFinder;
     LyricsSaver* m_lyricsSaver;

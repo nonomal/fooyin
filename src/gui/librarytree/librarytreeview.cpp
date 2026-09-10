@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,6 +29,7 @@ namespace Fooyin {
 LibraryTreeView::LibraryTreeView(QWidget* parent)
     : QTreeView{parent}
     , m_isLoading{false}
+    , m_expandsOnSingleClick{false}
 {
     setUniformRowHeights(false);
     setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -50,26 +51,100 @@ void LibraryTreeView::setLoading(bool isLoading)
     viewport()->update();
 }
 
+void LibraryTreeView::setExpandsOnSingleClick(bool enabled)
+{
+    m_expandsOnSingleClick = enabled;
+}
+
+void LibraryTreeView::changeEvent(QEvent* event)
+{
+    switch(event->type()) {
+        case QEvent::FontChange:
+        case QEvent::PaletteChange:
+        case QEvent::StyleChange:
+            Q_EMIT displayAboutToChange();
+            break;
+        default:
+            break;
+    }
+
+    QTreeView::changeEvent(event);
+
+    switch(event->type()) {
+        case QEvent::FontChange:
+        case QEvent::PaletteChange:
+        case QEvent::StyleChange:
+            Q_EMIT displayChanged();
+            break;
+        default:
+            break;
+    }
+}
+
 void LibraryTreeView::mousePressEvent(QMouseEvent* event)
 {
-    QTreeView::mousePressEvent(event);
+    if(event->button() > Qt::MiddleButton) {
+        event->ignore();
+        return;
+    }
 
     const QModelIndex index = indexAt(event->position().toPoint());
+
+    m_singleClickToggleIndex = QPersistentModelIndex{};
 
     if(!index.isValid()) {
         clearSelection();
     }
 
     if(event->button() == Qt::MiddleButton) {
-        emit middleClicked(index);
+        Q_EMIT middleClicked(index);
+        return;
     }
+
+    if(m_expandsOnSingleClick && event->button() == Qt::LeftButton && index.isValid() && model()->hasChildren(index)
+       && event->modifiers() == Qt::NoModifier) {
+        const QRect indexRect = visualRect(index);
+        if(event->position().toPoint().x() >= indexRect.left()) {
+            m_singleClickToggleIndex = index;
+        }
+    }
+
+    QTreeView::mousePressEvent(event);
+}
+
+void LibraryTreeView::mouseReleaseEvent(QMouseEvent* event)
+{
+    QTreeView::mouseReleaseEvent(event);
+
+    if(m_expandsOnSingleClick && event->button() == Qt::LeftButton && m_singleClickToggleIndex.isValid()
+       && m_singleClickToggleIndex == indexAt(event->position().toPoint())) {
+        setExpanded(m_singleClickToggleIndex, !isExpanded(m_singleClickToggleIndex));
+    }
+
+    m_singleClickToggleIndex = QPersistentModelIndex{};
 }
 
 void LibraryTreeView::mouseDoubleClickEvent(QMouseEvent* event)
 {
-    if(event->button() == Qt::MiddleButton) {
+    if(event->button() != Qt::LeftButton) {
+        event->ignore();
         return;
     }
+
+    m_singleClickToggleIndex = QPersistentModelIndex{};
+
+    if(m_expandsOnSingleClick) {
+        const QModelIndex index = indexAt(event->position().toPoint());
+        if(index.isValid()) {
+            if(expandsOnDoubleClick() && model()->hasChildren(index)) {
+                setExpanded(index, !isExpanded(index));
+            }
+            Q_EMIT doubleClicked(index);
+        }
+        event->accept();
+        return;
+    }
+
     QTreeView::mouseDoubleClickEvent(event);
 }
 
@@ -82,7 +157,7 @@ void LibraryTreeView::wheelEvent(QWheelEvent* event)
 
     const int delta     = event->angleDelta().y();
     const int increment = (delta > 0) ? 1 : -1;
-    int newSize         = iconSize().width() + increment * 2;
+    int newSize         = iconSize().width() + (increment * 2);
     newSize             = std::clamp(newSize, 16, 1024);
     setIconSize({newSize, newSize});
 

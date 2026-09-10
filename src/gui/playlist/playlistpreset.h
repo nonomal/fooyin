@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -33,6 +33,7 @@
 namespace Fooyin {
 struct HeaderRow
 {
+    QString grouping;
     RichScript title;
     RichScript subtitle;
     RichScript sideText;
@@ -42,12 +43,7 @@ struct HeaderRow
     bool showCover{true};
     bool simple{false};
 
-    bool operator==(const HeaderRow& other) const
-    {
-        return std::tie(title, subtitle, sideText, info, rowHeight, showCover, simple)
-            == std::tie(other.title, other.subtitle, other.sideText, other.info, other.rowHeight, other.showCover,
-                        other.simple);
-    };
+    bool operator==(const HeaderRow& other) const = default;
 
     [[nodiscard]] bool isValid() const
     {
@@ -61,15 +57,13 @@ struct HeaderRow
 
 struct SubheaderRow
 {
+    QString grouping;
     RichScript leftText;
     RichScript rightText;
 
     int rowHeight{0};
 
-    bool operator==(const SubheaderRow& other) const
-    {
-        return std::tie(leftText, rightText, rowHeight) == std::tie(other.leftText, other.rightText, other.rowHeight);
-    };
+    bool operator==(const SubheaderRow& other) const = default;
 
     [[nodiscard]] bool isValid() const
     {
@@ -89,11 +83,7 @@ struct TrackRow
 
     int rowHeight{0};
 
-    bool operator==(const TrackRow& other) const
-    {
-        return std::tie(columns, leftText, rightText, rowHeight)
-            == std::tie(other.columns, other.leftText, other.rightText, other.rowHeight);
-    };
+    bool operator==(const TrackRow& other) const = default;
 
     [[nodiscard]] bool isValid() const
     {
@@ -114,11 +104,15 @@ struct PlaylistPreset
     HeaderRow header;
     SubheaderRows subHeaders;
     TrackRow track;
+    bool insetSubheadersToImageColumns{false};
+    bool showCoverBelowEverySubheader{false};
 
     bool operator==(const PlaylistPreset& other) const
     {
-        return std::tie(id, index, name, header, subHeaders, track)
-            == std::tie(other.id, other.index, other.name, other.header, other.subHeaders, other.track);
+        return std::tie(id, index, name, header, subHeaders, track, insetSubheadersToImageColumns,
+                        showCoverBelowEverySubheader)
+            == std::tie(other.id, other.index, other.name, other.header, other.subHeaders, other.track,
+                        other.insetSubheadersToImageColumns, other.showCoverBelowEverySubheader);
     };
 
     [[nodiscard]] bool isValid() const

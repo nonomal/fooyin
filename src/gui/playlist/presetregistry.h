@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,7 +35,7 @@ class PresetRegistry : public ItemRegistry<PlaylistPreset>
 public:
     explicit PresetRegistry(SettingsManager* settings, QObject* parent = nullptr);
 
-signals:
+Q_SIGNALS:
     void presetChanged(const Fooyin::PlaylistPreset& preset);
 
 protected:

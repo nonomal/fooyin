@@ -1,0 +1,59 @@
+/*
+ * Fooyin
+ * Copyright © 2026, Luke Taylor <luket@pm.me>
+ *
+ * Fooyin is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Fooyin is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Fooyin.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#pragma once
+
+#include "librarywatcher.h"
+
+#include <core/library/libraryinfo.h>
+#include <core/track.h>
+
+#include <QObject>
+
+#include <stop_token>
+#include <unordered_map>
+
+namespace Fooyin {
+class LibraryMonitor : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit LibraryMonitor(QObject* parent = nullptr);
+
+    void cancelSetup();
+
+Q_SIGNALS:
+    void statusChanged(const Fooyin::LibraryInfo& library);
+    void directoriesChanged(const Fooyin::LibraryInfo& library, const QStringList& dirs);
+    void trackFilesChanged(const Fooyin::LibraryInfo& library, const QStringList& files);
+
+public Q_SLOTS:
+    void setupWatchers(const Fooyin::LibraryInfoMap& libraries, const Fooyin::TrackList& tracks,
+                       bool monitorDirectories, bool monitorTrackFiles);
+    void shutdown();
+
+private:
+    bool addWatcher(const LibraryInfo& library, const TrackList& tracks, bool monitorTrackFiles,
+                    std::stop_token stopToken);
+
+    std::unordered_map<int, LibraryWatcher> m_watchers;
+    std::stop_source m_setupStopSource;
+};
+} // namespace Fooyin

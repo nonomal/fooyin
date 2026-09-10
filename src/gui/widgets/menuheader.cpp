@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2023, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2023, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,8 +21,18 @@
 
 #include <QApplication>
 #include <QPainter>
+#include <QStyleOptionMenuItem>
 
 using namespace Qt::StringLiterals;
+
+namespace {
+QColor headerOverlayColour(const QPalette& palette)
+{
+    QColor colour = palette.text().color();
+    colour.setAlpha(18);
+    return colour;
+}
+} // namespace
 
 namespace Fooyin {
 MenuHeader::MenuHeader(QString text, QWidget* parent)
@@ -32,10 +42,13 @@ MenuHeader::MenuHeader(QString text, QWidget* parent)
     , m_textHeight{0}
     , m_margin{0}
 {
-    const QFontMetrics fm{fontMetrics()};
+    QFont font{this->font()};
+    font.setBold(true);
+
+    const QFontMetrics fm{font};
     m_textHeight = fm.height();
     m_margin     = fm.horizontalAdvance(u"..."_s);
-    m_minWidth   = fm.boundingRect(m_text).width() + (3 * m_margin);
+    m_minWidth   = fm.horizontalAdvance(m_text) + (2 * m_margin);
 
     setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     updateGeometry();
@@ -55,19 +68,23 @@ void MenuHeader::paintEvent(QPaintEvent* /*event*/)
 {
     QPainter painter{this};
 
-    const QColor headerBackground = palette().alternateBase().color();
-    const QColor headerText       = palette().text().color();
+    QStyleOptionMenuItem option;
+    option.initFrom(this);
 
-    painter.setBrush(headerBackground);
-    painter.setPen(Qt::NoPen);
-    painter.drawRect(0, 0, width(), m_textHeight + m_margin);
+    const QRect headerRect{0, 0, width(), m_textHeight + m_margin};
+    const QColor headerBackground = option.palette.window().color();
+    const QColor headerOverlay    = headerOverlayColour(option.palette);
+    const QColor headerText       = option.palette.text().color();
+
+    painter.fillRect(headerRect, headerBackground);
+    painter.fillRect(headerRect, headerOverlay);
 
     QFont font{painter.font()};
     font.setBold(true);
     painter.setFont(font);
 
     painter.setPen(headerText);
-    painter.drawText(QRect{m_margin, 0, m_minWidth - (2 * m_margin), height()}, Qt::AlignVCenter, m_text);
+    painter.drawText(QRect{m_margin, 0, width() - (2 * m_margin), height()}, Qt::AlignVCenter, m_text);
 }
 
 MenuHeaderAction::MenuHeaderAction(const QString& text, QObject* parent)

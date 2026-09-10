@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2022, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2022, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,8 +28,11 @@
 #include <QPixmap>
 
 namespace Fooyin {
-class CoverProvider;
 class AudioLoader;
+class CoverProvider;
+class CoverRepository;
+class PixmapFadeController;
+class PlaylistHandler;
 class PlayerController;
 class SettingsManager;
 class TrackSelectionController;
@@ -39,9 +42,25 @@ class CoverWidget : public FyWidget
     Q_OBJECT
 
 public:
-    explicit CoverWidget(PlayerController* playerController, TrackSelectionController* trackSelection,
-                         std::shared_ptr<AudioLoader> audioLoader, SettingsManager* settings,
-                         QWidget* parent = nullptr);
+    struct ConfigData
+    {
+        Track::Cover coverType{Track::Cover::Front};
+        Qt::Alignment coverAlignment{Qt::AlignCenter};
+        bool keepAspectRatio{true};
+        bool fadeCoverChanges{false};
+        int fadeDurationMs{1000};
+    };
+
+    explicit CoverWidget(PlayerController* playerController, PlaylistHandler* playlistHandler,
+                         TrackSelectionController* trackSelection, std::shared_ptr<AudioLoader> audioLoader,
+                         CoverRepository* coverRepository, SettingsManager* settings, QWidget* parent = nullptr);
+
+    [[nodiscard]] ConfigData factoryConfig() const;
+    [[nodiscard]] ConfigData defaultConfig() const;
+    [[nodiscard]] const ConfigData& currentConfig() const;
+    void applyConfig(const ConfigData& config);
+    void saveDefaults(const ConfigData& config) const;
+    void clearSavedDefaults() const;
 
     void rescaleCover();
     void reloadCover();
@@ -52,34 +71,61 @@ public:
     void saveLayoutData(QJsonObject& layout) override;
     void loadLayoutData(const QJsonObject& layout) override;
 
-signals:
+Q_SIGNALS:
+    void configChanged();
     void requestArtworkSearch(const Fooyin::TrackList& tracks, Fooyin::Track::Cover type, bool quick);
     void requestArtworkRemoval(const Fooyin::TrackList& tracks, Fooyin::Track::Cover type);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
     void contextMenuEvent(QContextMenuEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void timerEvent(QTimerEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    void openConfigDialog() override;
 
 private:
+    [[nodiscard]] ConfigData configFromLayout(const QJsonObject& layout) const;
+    static void saveConfigToLayout(const ConfigData& config, QJsonObject& layout);
+
+    [[nodiscard]] bool coversMatch(const QPixmap& lhs, const QPixmap& rhs) const;
+    [[nodiscard]] QPixmap effectiveCover(const QPixmap& cover) const;
+    [[nodiscard]] QPixmap scaledCover(const QPixmap& cover) const;
+
+    [[nodiscard]] Track displayTrack() const;
+    [[nodiscard]] static bool sameDisplayTrack(const Track& lhs, const Track& rhs);
+
+    void setFadeCoverChanges(bool enabled);
+    void stopCoverFade();
+    void setCoverPixmap(const QPixmap& cover);
+    void handleSelectionChanged();
+
+    void showArtworkViewer();
     void checkTrackArtwork(const Track& track);
 
     PlayerController* m_playerController;
+    PlaylistHandler* m_playlistHandler;
     TrackSelectionController* m_trackSelection;
     std::shared_ptr<AudioLoader> m_audioLoader;
     SettingsManager* m_settings;
     CoverProvider* m_coverProvider;
 
+    ConfigData m_config;
     SelectionDisplay m_displayOption;
     Track::Cover m_coverType;
     Qt::Alignment m_coverAlignment;
     bool m_keepAspectRatio;
+
     QBasicTimer m_resizeTimer;
+
+    bool m_fadeCoverChanges;
+    PixmapFadeController* m_fadeController;
+    int m_coverRequestId;
 
     Track m_track;
     QPixmap m_cover;
     QPixmap m_scaledCover;
+    QPixmap m_previousScaledCover;
     QPixmap m_noCover;
 };
 } // namespace Fooyin

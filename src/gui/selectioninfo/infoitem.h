@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -42,6 +42,7 @@ public:
         Concat = 0,
         Average,
         Total,
+        Min,
         Max,
         Percentage
     };
@@ -55,7 +56,8 @@ public:
         ExtendedMetadata = 1 << 3,
         Other            = 1 << 4,
         ReplayGain       = 1 << 5,
-        Default          = (Metadata | Location | General | Other)
+        PlayStats        = 1 << 6,
+        Default          = (Metadata | Location | General | PlayStats | Other)
     };
     Q_DECLARE_FLAGS(Options, Option)
 
@@ -67,7 +69,8 @@ public:
     InfoItem(ItemType type, QString name, InfoItem* parent, ValueType valueType);
     InfoItem(ItemType type, QString name, InfoItem* parent, ValueType valueType, const FormatFunc& formatFunc);
 
-    InfoItem(const InfoItem& other);
+    InfoItem(const InfoItem& other)            = default;
+    InfoItem& operator=(const InfoItem& other) = default;
 
     bool operator<(const InfoItem& other) const;
 

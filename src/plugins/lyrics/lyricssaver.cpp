@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,7 +31,7 @@
 #include <QDir>
 #include <QFile>
 #include <QIODevice>
-#include <QTimer>
+#include <QTimerEvent>
 
 using namespace Qt::StringLiterals;
 
@@ -145,21 +145,18 @@ LyricsSaver::LyricsSaver(MusicLibrary* library, SettingsManager* settings, QObje
     : QObject{parent}
     , m_library{library}
     , m_settings{settings}
-    , m_autosaveTimer{nullptr}
+    , m_hasPendingAutoSave{false}
 { }
 
 void LyricsSaver::autoSaveLyrics(const Lyrics& lyrics, const Track& track)
 {
-    if(m_autosaveTimer) {
-        m_autosaveTimer->stop();
-        m_autosaveTimer->deleteLater();
-    }
+    clearAutoSaveTimer();
 
     if(track.isInArchive()) {
         return;
     }
 
-    const auto preferType = static_cast<SavePrefer>(m_settings->value<Settings::Lyrics::SavePrefer>());
+    const auto preferType = static_cast<SavePrefer>(m_settings->fileValue(Settings::SavePrefer, 0).toInt());
     if(preferType == SavePrefer::Unsynced && lyrics.type != Lyrics::Type::Unsynced) {
         return;
     }
@@ -167,97 +164,167 @@ void LyricsSaver::autoSaveLyrics(const Lyrics& lyrics, const Track& track)
         return;
     }
 
-    const auto saveToMethod = [this, lyrics, track]() {
-        const auto saveMethod = static_cast<SaveMethod>(m_settings->value<Settings::Lyrics::SaveMethod>());
-        switch(saveMethod) {
-            case(SaveMethod::Tag):
-                saveLyricsToTag(lyrics, track);
-                break;
-            case(SaveMethod::Directory):
-                saveLyricsToFile(lyrics, track);
-                break;
-        }
-    };
-
-    const auto saveScheme = static_cast<SaveScheme>(m_settings->value<Settings::Lyrics::SaveScheme>());
+    const auto saveScheme = static_cast<SaveScheme>(m_settings->fileValue(Settings::SaveScheme, 0).toInt());
 
     switch(saveScheme) {
-        case(SaveScheme::Autosave):
-            saveToMethod();
+        case SaveScheme::Autosave:
+            saveToConfiguredMethod(lyrics, track);
             break;
-        case(SaveScheme::AutosavePeriod): {
-            m_autosaveTimer = new QTimer(this);
-            m_autosaveTimer->setSingleShot(true);
-            QObject::connect(m_autosaveTimer, &QTimer::timeout, this, saveToMethod);
-            m_autosaveTimer->start(std::min(AutosaveTimer, static_cast<int>(track.duration() / 3)));
-        }
-        case(SaveScheme::Manual):
+        case SaveScheme::AutosavePeriod:
+            m_pendingAutoSaveLyrics = lyrics;
+            m_pendingAutoSaveTrack  = track;
+            m_hasPendingAutoSave    = true;
+            m_autosaveTimer.start(std::min(AutosaveTimer, static_cast<int>(track.duration() / 3)), this);
+            break;
+        case SaveScheme::Manual:
             break;
     }
 }
 
-void LyricsSaver::saveLyrics(const Lyrics& lyrics, const Track& track)
+bool LyricsSaver::saveLyrics(const Lyrics& lyrics, const Track& track)
 {
-    if(m_autosaveTimer) {
-        m_autosaveTimer->stop();
-        m_autosaveTimer->deleteLater();
-    }
+    clearAutoSaveTimer();
 
     if(track.isInArchive()) {
-        return;
+        return false;
     }
 
-    const auto saveMethod = static_cast<SaveMethod>(m_settings->value<Settings::Lyrics::SaveMethod>());
+    return saveToConfiguredMethod(lyrics, track);
+}
+
+Lyrics LyricsSaver::savedLyrics(const Lyrics& lyrics, const Track& track)
+{
+    Lyrics savedLyrics{lyrics};
+    savedLyrics.isLocal = true;
+
+    const auto saveMethod = static_cast<SaveMethod>(
+        m_settings->fileValue(Settings::SaveMethod, static_cast<int>(SaveMethod::Directory)).toInt());
+
     switch(saveMethod) {
-        case(SaveMethod::Tag):
-            saveLyricsToTag(lyrics, track);
+        case SaveMethod::Tag:
+            savedLyrics.source   = u"Metadata Tags"_s;
+            savedLyrics.tag      = configuredLyricsTag(lyrics);
+            savedLyrics.filepath = QString{};
             break;
-        case(SaveMethod::Directory):
-            saveLyricsToFile(lyrics, track);
+        case SaveMethod::Directory:
+            savedLyrics.source   = u"Local Files"_s;
+            savedLyrics.tag      = QString{};
+            savedLyrics.filepath = configuredLyricsFilepath(track);
             break;
     }
+
+    return savedLyrics;
 }
 
-void LyricsSaver::saveLyricsToFile(const Lyrics& lyrics, const Track& track)
+WriteRequest LyricsSaver::writeLyricsToTags(const TrackList& tracks)
 {
-    if(track.isInArchive()) {
-        return;
+    if(tracks.empty()) {
+        return {};
     }
 
-    const QString dir      = m_settings->value<Settings::Lyrics::SaveDir>();
-    const QString filename = m_settings->value<Settings::Lyrics::SaveFilename>() + ".lrc"_L1;
+    return m_library->writeTrackMetadata(tracks);
+}
 
-    const QString filepath = QDir::cleanPath(m_parser.evaluate(dir + "/"_L1 + filename, track));
+bool LyricsSaver::saveLyricsToFile(const Lyrics& lyrics, const Track& track)
+{
+    if(track.isInArchive()) {
+        return false;
+    }
+
+    const QString filepath = configuredLyricsFilepath(track);
+
+    const bool changedFile = !lyrics.filepath.isEmpty() && filepath != lyrics.filepath;
+
+    const auto removeFile = [&track](const QString& file) {
+        qCInfo(LYRICS) << "Removing file" << file << "for" << track.prettyFilepath();
+        QFile{file}.moveToTrash();
+    };
+
+    if(lyrics.isEmpty()) {
+        if(QFile::exists(filepath)) {
+            QFile{filepath}.moveToTrash();
+        }
+        if(changedFile) {
+            removeFile(lyrics.filepath);
+        }
+        return true;
+    }
 
     QFile file{filepath};
     if(!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qCInfo(LYRICS) << "Unable open file" << filepath << "to save lyrics";
-        return;
+        return false;
     }
 
-    lyricsToLrc(lyrics, &file, static_cast<SaveOptions>(m_settings->value<Settings::Lyrics::SaveOptions>()));
+    lyricsToLrc(lyrics, &file, static_cast<SaveOptions>(m_settings->fileValue(Settings::SaveOptions, 0).toInt()));
     file.close();
+
+    if(changedFile) {
+        removeFile(lyrics.filepath);
+    }
+
+    return true;
 }
 
-void LyricsSaver::saveLyricsToTag(const Lyrics& lyrics, const Track& track)
+std::optional<Track> LyricsSaver::writeLyricsToTag(const Lyrics& lyrics, const Track& track)
 {
-    if(track.isInArchive()) {
-        return;
+    const auto updatedTrack = updateLyricsTag(lyrics, track);
+    if(!updatedTrack) {
+        return {};
     }
 
-    const QString tag = lyrics.type == Lyrics::Type::Unsynced ? m_settings->value<Settings::Lyrics::SaveUnsyncedTag>()
-                                                              : m_settings->value<Settings::Lyrics::SaveSyncedTag>();
+    m_library->writeTrackMetadata({*updatedTrack});
+    return updatedTrack;
+}
+
+std::optional<Track> LyricsSaver::updateLyricsTag(const Lyrics& lyrics, const Track& track) const
+{
+    if(track.isInArchive()) {
+        return {};
+    }
+
+    const QString tag     = configuredLyricsTag(lyrics);
+    const bool changedTag = tag != lyrics.tag;
+
     if(tag.isEmpty()) {
         qCInfo(LYRICS) << "Unable to save lyrics to an empty tag";
-        return;
+        return {};
     }
 
     const QString lrc
-        = lyricsToLrc(lyrics, static_cast<SaveOptions>(m_settings->value<Settings::Lyrics::SaveOptions>()));
+        = lyricsToLrc(lyrics, static_cast<SaveOptions>(m_settings->fileValue(Settings::SaveOptions, 0).toInt()));
 
     Track updatedTrack{track};
+
+    if(changedTag && !lyrics.tag.isEmpty()) {
+        qCInfo(LYRICS) << "Removing original lyrics tag" << lyrics.tag << "from" << track.prettyFilepath();
+        updatedTrack.removeExtraTag(lyrics.tag);
+    }
+
     updatedTrack.replaceExtraTag(tag, lrc);
-    m_library->writeTrackMetadata({updatedTrack});
+    return updatedTrack;
+}
+
+Track LyricsSaver::restoreLyricsTags(const Track& originalTrack, const Track& track) const
+{
+    Track restoredTrack{track};
+
+    QStringList tags;
+    tags.append(m_settings->fileValue(Settings::SaveSyncedTag, u"LYRICS"_s).toString());
+    tags.append(m_settings->fileValue(Settings::SaveUnsyncedTag, u"UNSYNCED LYRICS"_s).toString());
+    tags.removeAll(QString{});
+    tags.removeDuplicates();
+
+    for(const QString& tag : std::as_const(tags)) {
+        if(originalTrack.hasExtraTag(tag)) {
+            restoredTrack.replaceExtraTag(tag, originalTrack.extraTag(tag));
+        }
+        else {
+            restoredTrack.removeExtraTag(tag);
+        }
+    }
+
+    return restoredTrack;
 }
 
 QString LyricsSaver::lyricsToLrc(const Lyrics& lyrics, const SaveOptions& options)
@@ -270,5 +337,126 @@ QString LyricsSaver::lyricsToLrc(const Lyrics& lyrics, const SaveOptions& option
 void LyricsSaver::lyricsToLrc(const Lyrics& lyrics, QIODevice* device, const SaveOptions& options)
 {
     toLrc(lyrics, device, formatTimestamp, options);
+}
+
+void LyricsSaver::timerEvent(QTimerEvent* event)
+{
+    if(event->timerId() != m_autosaveTimer.timerId()) {
+        QObject::timerEvent(event);
+        return;
+    }
+
+    if(!m_hasPendingAutoSave) {
+        m_autosaveTimer.stop();
+        return;
+    }
+
+    const Lyrics lyrics{m_pendingAutoSaveLyrics};
+    const Track track{m_pendingAutoSaveTrack};
+    clearAutoSaveTimer();
+
+    saveToConfiguredMethod(lyrics, track);
+}
+
+void LyricsSaver::clearAutoSaveTimer()
+{
+    m_autosaveTimer.stop();
+    m_pendingAutoSaveLyrics = {};
+    m_pendingAutoSaveTrack  = {};
+    m_hasPendingAutoSave    = false;
+}
+
+QString LyricsSaver::configuredLyricsFilepath(const Track& track)
+{
+    const QString dir      = m_settings->fileValue(Settings::SaveDir, u"%path%"_s).toString();
+    const QString filename = m_settings->fileValue(Settings::SaveFilename, u"%filename%"_s).toString() + ".lrc"_L1;
+    return QDir::cleanPath(m_parser.evaluate(dir + "/"_L1 + filename, track));
+}
+
+QString LyricsSaver::configuredLyricsTag(const Lyrics& lyrics) const
+{
+    QString tag = lyrics.type == Lyrics::Type::Unsynced
+                    ? m_settings->fileValue(Settings::SaveUnsyncedTag, u"UNSYNCED LYRICS"_s).toString()
+                    : m_settings->fileValue(Settings::SaveSyncedTag, u"LYRICS"_s).toString();
+
+    if(tag.isEmpty()) {
+        tag = lyrics.tag;
+    }
+
+    return tag;
+}
+
+bool LyricsSaver::saveToConfiguredMethod(const Lyrics& lyrics, const Track& track)
+{
+    const auto saveMethod = static_cast<SaveMethod>(
+        m_settings->fileValue(Settings::SaveMethod, static_cast<int>(SaveMethod::Directory)).toInt());
+    const auto conflictPolicy = static_cast<SaveConflictPolicy>(
+        m_settings->fileValue(Settings::SaveConflict, static_cast<int>(SaveConflictPolicy::KeepOriginal)).toInt());
+    const bool removeOriginal = (conflictPolicy == SaveConflictPolicy::RemoveOriginal);
+
+    switch(saveMethod) {
+        case SaveMethod::Tag: {
+            const auto updatedTrack = writeLyricsToTag(lyrics, track);
+            if(!updatedTrack.has_value()) {
+                return false;
+            }
+
+            if(removeOriginal) {
+                QStringList filesToRemove;
+                filesToRemove.append(configuredLyricsFilepath(track));
+                if(!lyrics.filepath.isEmpty()) {
+                    filesToRemove.append(lyrics.filepath);
+                }
+                filesToRemove.removeAll(QString{});
+                filesToRemove.removeDuplicates();
+
+                for(const QString& filepath : std::as_const(filesToRemove)) {
+                    if(QFile::exists(filepath)) {
+                        qCInfo(LYRICS) << "Removing original lyrics file" << filepath << "for"
+                                       << track.prettyFilepath();
+                        QFile{filepath}.moveToTrash();
+                    }
+                }
+            }
+
+            Q_EMIT lyricsSaved(*updatedTrack, savedLyrics(lyrics, *updatedTrack));
+            break;
+        }
+        case SaveMethod::Directory: {
+            if(!saveLyricsToFile(lyrics, track)) {
+                return false;
+            }
+
+            Track updatedTrack{track};
+            bool tagsChanged = false;
+
+            if(removeOriginal) {
+                QStringList tagsToRemove;
+                tagsToRemove.append(configuredLyricsTag(lyrics));
+                if(!lyrics.tag.isEmpty()) {
+                    tagsToRemove.append(lyrics.tag);
+                }
+                tagsToRemove.removeAll(QString{});
+                tagsToRemove.removeDuplicates();
+
+                for(const QString& tag : std::as_const(tagsToRemove)) {
+                    if(updatedTrack.hasExtraTag(tag)) {
+                        qCInfo(LYRICS) << "Removing original lyrics tag" << tag << "for" << track.prettyFilepath();
+                        updatedTrack.removeExtraTag(tag);
+                        tagsChanged = true;
+                    }
+                }
+            }
+
+            if(tagsChanged) {
+                m_library->writeTrackMetadata({updatedTrack});
+            }
+
+            Q_EMIT lyricsSaved(updatedTrack, savedLyrics(lyrics, updatedTrack));
+            break;
+        }
+    }
+
+    return true;
 }
 } // namespace Fooyin::Lyrics

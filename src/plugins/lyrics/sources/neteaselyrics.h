@@ -1,6 +1,6 @@
 /*
  * Fooyin
- * Copyright © 2024, Luke Taylor <LukeT1@proton.me>
+ * Copyright © 2024, Luke Taylor <luket@pm.me>
  *
  * Fooyin is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,6 +38,6 @@ private:
     void handleLyricReply();
 
     std::vector<LyricData> m_data;
-    int m_currentIndex;
+    int m_currentIndex{-1};
 };
 } // namespace Fooyin::Lyrics
